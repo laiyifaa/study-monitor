@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    container_name: study-monitor-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DT_APP_KEY=${DT_APP_KEY}
+      - DT_APP_SECRET=${DT_APP_SECRET}
+      - DT_CORP_ID=${DT_CORP_ID}
+      - DT_ROBOT_WEBHOOK=${DT_ROBOT_WEBHOOK}
+      - DT_ROBOT_SECRET=${DT_ROBOT_SECRET}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=study_monitor
+      - MYSQL_PASSWORD=${DB_PASSWORD:-study_monitor_2026}
+      - MYSQL_DATABASE=study_monitor
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=${JWT_SECRET:-Please_change_this_to_random_string}
+      - DEBUG=false
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  frontend:
+    build: ./frontend
+    container_name: study-monitor-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  mysql:
+    image: mysql:8.0
+    container_name: study-monitor-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_change_me}
+      MYSQL_DATABASE: study_monitor
+      MYSQL_USER: study_monitor
+      MYSQL_PASSWORD: ${DB_PASSWORD:-study_monitor_2026}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: study-monitor-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge

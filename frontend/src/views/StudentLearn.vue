@@ -147,7 +147,7 @@ const onPlayerLoad = () => {
 </script>
 
 <style scoped>
-.learn-page { min-height: 100vh; display: flex; flex-direction: column; }
+.learn-page { min-height: 100vh; }
 .status-bar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; background: #fff; border-bottom: 1px solid #eee;
@@ -162,9 +162,23 @@ const onPlayerLoad = () => {
 .progress-bar { height: 4px; background: #f0f0f0; }
 .progress-fill { height: 100%; background: linear-gradient(90deg, #1890ff, #52c41a); transition: width 0.5s; }
 .progress-text { text-align: center; font-size: 12px; color: #999; padding: 4px; }
-.video-container { flex: 1; min-height: 220px; background: #000; }
-.video-iframe { width: 100%; height: 100%; border: none; min-height: 220px; }
-.video-placeholder { display: flex; align-items: center; justify-content: center; height: 220px; color: #666; }
+.video-container {
+  position: relative;
+  width: 100%;
+  /* 16:9 比例容器 */
+  aspect-ratio: 16 / 9;
+  background: #000;
+  overflow: hidden;
+}
+.video-iframe {
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%; border: none;
+}
+.video-placeholder {
+  display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  color: #666;
+}
 .controls-hint { padding: 16px; font-size: 13px; color: #999; line-height: 2; }
 .verify-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;

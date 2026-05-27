@@ -25,16 +25,32 @@
       {{ effectiveMinutes }} / {{ requireMinutes }} 分钟
     </div>
 
-    <!-- 视频播放区域：iframe 嵌入悟空播放器 -->
+    <!-- 视频播放区域：根据 video_type 切换播放方式 -->
     <div class="video-container">
+      <!-- 外部链接：iframe 嵌入 -->
       <iframe
-        v-if="courseWukongUrl"
-        :src="courseWukongUrl"
+        v-if="videoType === 'url' && videoUrl"
+        :src="videoUrl"
         class="video-iframe"
         allow="autoplay; fullscreen; encrypted-media"
         allowfullscreen
         @load="onPlayerLoad"
       ></iframe>
+      <!-- 本地上传：HTML5 video 播放器 -->
+      <video
+        v-else-if="videoType === 'local' && videoUrl"
+        ref="videoPlayer"
+        class="video-player"
+        controls
+        autoplay
+        playsinline
+        @play="onVideoPlay"
+        @pause="onVideoPause"
+        @timeupdate="onVideoTimeUpdate"
+      >
+        <source :src="`/api/courses/video-file/${videoUrl}`" type="video/mp4" />
+        您的浏览器不支持视频播放
+      </video>
       <div v-else class="video-placeholder">
         <p>课程视频加载中...</p>
       </div>
@@ -67,7 +83,9 @@ import api from '../utils/api'
 
 const route = useRoute()
 const courseId = parseInt(route.params.courseId)
-const courseWukongUrl = ref('')
+const videoType = ref('url')  // url 或 local
+const videoUrl = ref('')
+const videoPlayer = ref(null)  // video 元素 ref
 
 const {
   isPlaying, isEffective, effectiveMinutes, videoProgress,
@@ -81,7 +99,8 @@ onMounted(async () => {
     const res = await api.get(`/courses/${courseId}`)
     if (res.data.code === 0) {
       const course = res.data.data
-      courseWukongUrl.value = course.wukong_url
+      videoType.value = course.video_type || 'url'
+      videoUrl.value = course.video_url || ''
       requireMinutes.value = course.require_minutes
       setTitle(course.title)
       document.title = course.title
@@ -144,6 +163,21 @@ const onPlayerLoad = () => {
   // 标记开始播放（降级模式：无 postMessage 响应时仍开启计时）
   setPlaying(true)
 }
+
+// HTML5 video 播放器事件
+const onVideoPlay = () => {
+  setPlaying(true)
+}
+
+const onVideoPause = () => {
+  setPlaying(false)
+}
+
+const onVideoTimeUpdate = () => {
+  if (videoPlayer.value) {
+    setVideoTime(videoPlayer.value.currentTime)
+  }
+}
 </script>
 
 <style scoped>
@@ -173,6 +207,11 @@ const onPlayerLoad = () => {
 .video-iframe {
   position: absolute; top: 0; left: 0;
   width: 100%; height: 100%; border: none;
+}
+.video-player {
+  width: 100%; height: 100%;
+  position: absolute; top: 0; left: 0;
+  background: #000;
 }
 .video-placeholder {
   display: flex; align-items: center; justify-content: center;

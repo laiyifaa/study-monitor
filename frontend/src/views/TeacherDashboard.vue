@@ -2,6 +2,11 @@
   <div class="dashboard">
     <h2 class="page-title">学习统计看板</h2>
 
+    <!-- 新建课程按钮 -->
+    <div class="top-actions">
+      <router-link to="/course-edit/0" class="btn primary">+ 新建课程</router-link>
+    </div>
+
     <!-- 课程选择 -->
     <div class="selector">
       <select v-model="selectedCourseId" @change="loadData">
@@ -255,6 +260,8 @@ tr.incomplete { background: #fff7e6; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .empty { text-align: center; padding: 40px; color: #999; }
+.top-actions { margin-bottom: 16px; }
+.top-actions .btn { text-decoration: none; display: inline-block; }
 
 @media (max-width: 600px) {
   .overview-cards { grid-template-columns: repeat(2, 1fr); }

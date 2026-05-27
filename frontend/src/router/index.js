@@ -26,6 +26,12 @@ const routes = [
     meta: { title: '学习统计', role: 'teacher' },
   },
   {
+    path: '/course-edit/:courseId?',
+    name: 'CourseEdit',
+    component: () => import('../views/CourseEdit.vue'),
+    meta: { title: '编辑课程', role: 'teacher' },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/CourseList.vue'),

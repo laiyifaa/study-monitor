@@ -23,7 +23,10 @@ class Course(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     title = Column(String(200), nullable=False)
     description = Column(String(1000), default="")
-    wukong_url = Column(String(500), default="", comment="悟空播放器URL")
+    # 视频源：url=外部链接(如B站/腾讯视频)，local=本地上传
+    video_type = Column(Enum("url", "local"), default="url", nullable=False)
+    video_url = Column(String(500), default="", comment="视频地址：外部链接或本地路径")
+    wukong_url = Column(String(500), default="", comment="悟空播放器URL(已废弃，兼容保留)")
     duration_seconds = Column(Integer, default=0, comment="课程总时长(秒)")
     teacher_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     require_minutes = Column(Integer, default=60, comment="要求学习时长(分钟)")

@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '0e71cc9d-ed99-412d-874c-3797dbac87fd'
-  PropagateID: '0e71cc9d-ed99-412d-874c-3797dbac87fd'
-  ReservedCode1: '15c29776-5c43-4cd7-b022-cbc70dcd888a'
-  ReservedCode2: '15c29776-5c43-4cd7-b022-cbc70dcd888a'
+  ProduceID: '9623b379-583f-4a9b-b707-1877d089d463'
+  PropagateID: '9623b379-583f-4a9b-b707-1877d089d463'
+  ReservedCode1: 'c007c84c-1bf9-4351-a12c-efdaa8023ffc'
+  ReservedCode2: 'c007c84c-1bf9-4351-a12c-efdaa8023ffc'
 ---
 
 # 22中暑假网课学习进度监督系统

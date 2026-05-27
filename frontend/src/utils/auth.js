@@ -1,4 +1,3 @@
-import { defineStore } from 'vue-router'
 import { ref, computed } from 'vue'
 import * as dd from 'dingtalk-jsapi'
 import api from './api'

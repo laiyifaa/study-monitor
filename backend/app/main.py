@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import auth, heartbeat
+from app.routers import auth, heartbeat, course, stats, notify
 
 settings = get_settings()
 
@@ -35,6 +35,9 @@ app.add_middleware(
 # 注册路由
 app.include_router(auth.router)
 app.include_router(heartbeat.router)
+app.include_router(course.router)
+app.include_router(stats.router)
+app.include_router(notify.router)
 
 
 @app.get("/api/health")

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.models.models import User
-from app.utils.jwt_helper import create_token
+from app.utils.jwt_helper import create_token, get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 settings = get_settings()
@@ -107,7 +107,3 @@ async def get_me(user: User = Depends(get_current_user)):
         "avatar": user.avatar,
         "class_name": user.class_name,
     }
-
-
-# 延迟导入避免循环
-from app.utils.jwt_helper import get_current_user

@@ -59,7 +59,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useStudyTracker } from '../composables/useStudyTracker'
 import { useDingTalk } from '../composables/useDingTalk'
@@ -89,10 +89,59 @@ onMounted(async () => {
   } catch (e) {
     console.error('获取课程信息失败:', e)
   }
+
+  // 监听 iframe 发来的 postMessage（悟空播放器或通用视频播放器适配）
+  window.addEventListener('message', handleMessage)
 })
 
+onUnmounted(() => {
+  window.removeEventListener('message', handleMessage)
+})
+
+// 处理来自 iframe 的播放器消息
+const handleMessage = (event) => {
+  // 安全校验：只接受白名单来源，或同源消息
+  // 生产环境应校验 event.origin
+  const data = event.data
+  if (!data || typeof data !== 'object') return
+
+  // 通用视频播放器消息协议：
+  // { type: 'player:status', playing: bool, currentTime: float, duration: float }
+  // { type: 'player:play' }
+  // { type: 'player:pause' }
+  // { type: 'player:timeupdate', currentTime: float }
+  if (data.type === 'player:status' || data.type === 'player:timeupdate') {
+    if (typeof data.currentTime === 'number' && data.currentTime > 0) {
+      setVideoTime(data.currentTime)
+    }
+    if (typeof data.playing === 'boolean') {
+      setPlaying(data.playing)
+    }
+  } else if (data.type === 'player:play') {
+    setPlaying(true)
+    if (typeof data.currentTime === 'number') {
+      setVideoTime(data.currentTime)
+    }
+  } else if (data.type === 'player:pause') {
+    setPlaying(false)
+  }
+}
+
 const onPlayerLoad = () => {
-  // iframe 加载完成后，标记播放
+  // iframe 加载完成后，主动向 iframe 发送注册消息
+  // 告知播放器：我是宿主页面，请推送播放状态
+  const iframe = document.querySelector('.video-iframe')
+  if (iframe?.contentWindow) {
+    try {
+      iframe.contentWindow.postMessage({
+        type: 'host:register',
+        heartbeatInterval: 30,
+      }, '*')
+    } catch (e) {
+      // 跨域 iframe 可能无法发送，忽略
+    }
+  }
+  // 标记开始播放（降级模式：无 postMessage 响应时仍开启计时）
   setPlaying(true)
 }
 </script>

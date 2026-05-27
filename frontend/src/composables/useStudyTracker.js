@@ -176,6 +176,8 @@ export function useStudyTracker(courseId) {
     verifyPass: () => {
       showVerify.value = false
       recordAction()
+      // 上报验证通过事件，留存审计记录
+      sendAction('verify')
     },
     endSession,
   }

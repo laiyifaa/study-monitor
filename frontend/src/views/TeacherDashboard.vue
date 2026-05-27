@@ -195,8 +195,24 @@ async function sendDailyReport() {
   }
 }
 
-function exportExcel() {
-  window.open(`/api/notify/export?course_id=${selectedCourseId.value}`, '_blank')
+async function exportExcel() {
+  try {
+    const res = await api.get('/notify/export', {
+      params: { course_id: selectedCourseId.value },
+      responseType: 'blob',
+    })
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `study_report_${selectedCourseId.value}.xlsx`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    alert('导出失败: ' + (e.response?.statusText || e.message))
+  }
 }
 </script>
 

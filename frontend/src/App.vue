@@ -10,7 +10,7 @@ const auth = useAuthStore()
 
 onMounted(async () => {
   // 如果没有 token，尝试钉钉免登
-  if (!auth.token) {
+  if (!auth.isLoggedIn.value) {
     await auth.tryDingTalkLogin()
   }
 })

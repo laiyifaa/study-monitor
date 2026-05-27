@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.config import get_settings
 from app.database import init_db
+from app.database_redis import close_redis
 from app.routers import auth, heartbeat, course, stats, notify
 
 settings = get_settings()
@@ -14,6 +15,8 @@ async def lifespan(app: FastAPI):
     # 启动：初始化数据库表
     await init_db()
     yield
+    # 关闭：释放 Redis 连接
+    await close_redis()
 
 
 app = FastAPI(

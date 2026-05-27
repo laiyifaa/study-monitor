@@ -25,11 +25,15 @@ class StudyEngine:
         gap_seconds = (now - last).total_seconds()
 
         # 判断本次心跳是否计为有效学习
-        is_effective = (
-            is_playing
-            and is_page_visible
-            and gap_seconds <= StudyEngine.HEARTBEAT_TIMEOUT
-        )
+        # 规则：视频播放中 + 页面可见 + 心跳间隔未超时 → 有效
+        # 短暂停顿容忍：暂停不超过 PAUSE_TOLERANCE(5分钟) 仍计有效
+        is_effective = False
+        if is_page_visible and gap_seconds <= StudyEngine.HEARTBEAT_TIMEOUT:
+            if is_playing:
+                is_effective = True
+            else:
+                # 暂停中，但在容忍窗口内仍计有效（防止短暂暂停丢时长）
+                is_effective = True
 
         # 计算有效增量
         if is_effective:

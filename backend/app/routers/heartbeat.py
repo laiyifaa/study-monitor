@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.database_redis import get_redis
 from app.models.models import StudySession, User
 from app.services.study_engine import StudyEngine
 from app.utils.jwt_helper import get_current_user
@@ -49,7 +50,16 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
 
 @router.post("/beat")
 async def heartbeat(req: BeatRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """心跳上报：每30秒调用"""
+    """心跳上报：每30秒调用，Redis 限流防刷"""
+    # Redis 限流：每人每分钟最多5次心跳
+    redis = await get_redis()
+    rate_key = f"heartbeat:rate:{user.id}:{req.course_id}"
+    count = await redis.incr(rate_key)
+    if count == 1:
+        await redis.expire(rate_key, 60)
+    if count > 5:
+        raise HTTPException(status_code=429, detail="心跳上报过于频繁，请稍后再试")
+
     session = await StudyEngine.get_active_session(db, user.id, req.course_id)
     if not session:
         raise HTTPException(status_code=404, detail="没有活跃的学习会话，请先开始学习")

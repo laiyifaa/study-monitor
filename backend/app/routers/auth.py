@@ -7,30 +7,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
+from app.database_redis import get_redis
 from app.models.models import User
 from app.utils.jwt_helper import create_token, get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 settings = get_settings()
 
-# --- 缓存 access_token ---
-_access_token_cache = {"token": "", "expires": 0}
-
 
 async def get_access_token() -> str:
+    """获取钉钉 access_token，优先从 Redis 缓存读取"""
     import time
-    now = time.time()
-    if _access_token_cache["token"] and now < _access_token_cache["expires"]:
-        return _access_token_cache["token"]
+    redis = await get_redis()
 
+    # 从 Redis 读取缓存
+    cached = await redis.get("dingtalk:access_token")
+    if cached:
+        return cached
+
+    # 缓存未命中，请求钉钉
     url = "https://oapi.dingtalk.com/gettoken"
     params = {"appkey": settings.DT_APP_KEY, "appsecret": settings.DT_APP_SECRET}
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params=params)
         data = resp.json()
         token = data["access_token"]
-        _access_token_cache["token"] = token
-        _access_token_cache["expires"] = now + data.get("expires_in", 7200) - 60
+        expires_in = data.get("expires_in", 7200)
+        # 提前60秒过期，写入 Redis
+        await redis.setex("dingtalk:access_token", expires_in - 60, token)
         return token
 
 

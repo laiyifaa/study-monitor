@@ -25,6 +25,12 @@ const routes = [
     component: () => import('../views/TeacherDashboard.vue'),
     meta: { title: '学习统计', role: 'teacher' },
   },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: () => import('../views/CourseList.vue'),
+    meta: { title: '课程列表' },
+  },
 ]
 
 const router = createRouter({
@@ -34,6 +40,32 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   document.title = to.meta.title || '学习进度监督'
+
+  // 角色权限守卫
+  const requiredRole = to.meta.role
+  if (requiredRole) {
+    const userStr = localStorage.getItem('user')
+    if (!userStr) {
+      // 未登录，回首页
+      return next('/')
+    }
+    try {
+      const user = JSON.parse(userStr)
+      // admin 放行所有页面，teacher/student 按角色匹配
+      if (user.role === 'admin') {
+        return next()
+      }
+      if (requiredRole === 'teacher' && user.role !== 'teacher') {
+        return next('/')
+      }
+      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher') {
+        return next('/')
+      }
+    } catch {
+      return next('/')
+    }
+  }
+
   next()
 })
 

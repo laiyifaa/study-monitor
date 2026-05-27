@@ -8,6 +8,6 @@ RUN npm run build
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY ../nginx/default.conf /etc/nginx/conf.d/default.conf
+# nginx配置在docker-compose中通过volume挂载，或构建时从context复制
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

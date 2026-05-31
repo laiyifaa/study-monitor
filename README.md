@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '9623b379-583f-4a9b-b707-1877d089d463'
-  PropagateID: '9623b379-583f-4a9b-b707-1877d089d463'
-  ReservedCode1: 'c007c84c-1bf9-4351-a12c-efdaa8023ffc'
-  ReservedCode2: 'c007c84c-1bf9-4351-a12c-efdaa8023ffc'
+  ProduceID: '0be8dbbc-cf45-4425-a121-8418ce427c0f'
+  PropagateID: '0be8dbbc-cf45-4425-a121-8418ce427c0f'
+  ReservedCode1: 'f3e65f71-c048-43f7-ae7f-bf5cee0c9d3a'
+  ReservedCode2: 'f3e65f71-c048-43f7-ae7f-bf5cee0c9d3a'
 ---
 
 # 22中暑假网课学习进度监督系统
@@ -145,6 +145,74 @@ study-monitor/
 6. 设置可见范围（全校师生部门）
 7. 添加接口权限（通讯录只读、消息通知等）
 
+## 数据存储与迁移
+
+### 数据存放位置
+
+项目的数据分布在三个地方：
+
+| 数据类型 | 存储位置 | 说明 |
+|---------|---------|------|
+| 用户账号、课程、学习记录、心跳日志 | **MySQL 数据库** `study_monitor` | 4张表：`users`、`courses`、`study_sessions`、`heartbeat_logs` |
+| 上传的视频文件 | **本地磁盘** `backend/uploads/videos/` | 课程中 `video_type=local` 的视频文件 |
+| 钉钉 access_token 缓存 | **Redis** | 临时缓存（2小时过期），丢失无影响，会自动重新获取 |
+
+### MySQL 核心表说明
+
+| 表名 | 内容 | 关键字段 |
+|------|------|---------|
+| `users` | 教师学生账号、角色、密码哈希、钉钉ID、班级 | `dingtalk_user_id`、`role`、`password_hash`、`class_name` |
+| `courses` | 课程标题、视频地址、要求学习时长、截止日期 | `video_type`、`video_url`、`require_minutes`、`end_date` |
+| `study_sessions` | 每次学习的起止时间、有效秒数、播放进度 | `effective_seconds`、`video_progress`、`is_active` |
+| `heartbeat_logs` | 每30秒一次的心跳快照（防刷课依据） | `is_playing`、`is_page_visible`、`action` |
+
+### 服务器迁移步骤
+
+换服务器部署时，**仅部署代码会创建空数据库，所有旧数据丢失**。需按以下步骤迁移：
+
+```bash
+# ====== 旧服务器操作 ======
+
+# 1. 导出 MySQL 全量数据
+mysqldump -u root study_monitor > study_monitor_backup.sql
+
+# 2. 打包上传的视频文件
+tar czf uploads_backup.tar.gz backend/uploads/
+
+# 3. 备份 .env 配置（含钉钉密钥、JWT密钥等）
+cp backend/.env env_backup.txt
+
+
+# ====== 新服务器操作 ======
+
+# 4. 克隆项目代码
+git clone https://github.com/Sumutan/study-monitor.git && cd study-monitor
+
+# 5. 先启动一次让 MySQL/Docker 初始化数据库
+docker-compose up -d
+
+# 6. 导入 MySQL 数据（覆盖空表）
+#    Docker 部署时 MySQL 映射在 3306 端口，密码见 docker-compose.yml
+mysql -h 127.0.0.1 -u root -p<密码> study_monitor < study_monitor_backup.sql
+
+# 7. 还原视频文件
+tar xzf uploads_backup.tar.gz
+
+# 8. 还原 .env 配置（保持 JWT_SECRET 一致，否则旧 Token 全部失效）
+cp env_backup.txt backend/.env
+
+# 9. 重启服务
+docker-compose restart
+```
+
+### 迁移注意事项
+
+- **JWT_SECRET 必须保持一致**：新旧服务器的 `JWT_SECRET` 必须相同，否则已登录用户的 Token 全部失效，需要重新登录
+- **钉钉平台更新首页地址**：如果新服务器的 IP/域名变了，需要到钉钉开放平台更新应用的移动端/PC端首页地址
+- **视频文件路径**：课程表中 `video_url` 存的是文件名（如 `1_ea2096d5.mp4`），后端通过 `backend/uploads/videos/` 目录提供文件，确保视频文件放在正确目录即可
+- **Redis 无需迁移**：只缓存临时 token，丢了会自动重新获取，不影响任何业务数据
+- **验证迁移结果**：启动后检查教师端统计看板数据是否完整、学生视频能否正常播放
+
 ## 版本记录
 
 - v0.1.0 - 项目脚手架
@@ -154,3 +222,7 @@ study-monitor/
 - v0.5.0 - 前端补全（老师看板+导出）
 - v0.6.0 - 部署配置（Docker+Nginx）
 - v1.0.0 - 正式发布
+- v2.0.0 - 浏览器登录 + 401跳转登录页
+- v2.1.0 - 管理后台 + 自助改密 + 返回导航
+- v2.1.1 - Bug修复：保存反馈/文件选择/视频进度显示
+- v2.1.2 - Vite allowedHosts 支持 ngrok 穿透

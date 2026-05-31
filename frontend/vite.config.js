@@ -46,5 +46,10 @@ export default defineConfig({
                                              // 本身就是 /api/* 前缀，无需路径重写
       },
     },
+
+    // 允许通过 ngrok 等外网穿透域名访问 Vite 开发服务器
+    // Vite 默认只允许 localhost 访问，ngrok 等工具的域名会被拒绝（403）
+    // 配置为 true 允许所有域名访问，适合开发调试；生产环境不涉及此配置
+    allowedHosts: true,
   },
 })

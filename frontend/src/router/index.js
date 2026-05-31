@@ -1,37 +1,97 @@
+/**
+ * ============================================================================
+ * 模块：路由配置与权限守卫 (router/index.js)
+ * ============================================================================
+ * 功能：
+ *   1. 定义所有页面路由（路径、组件、元信息）
+ *   2. 通过 beforeEach 导航守卫实现角色权限控制
+ *   3. 动态设置页面标题
+ *
+ * 在系统中的角色：
+ *   - 前端路由是单页应用的核心，决定了 URL 与页面组件的映射关系
+ *   - 权限守卫是安全防线，阻止未授权用户访问 teacher/student 专属页面
+ *   - 与 auth.js 配合：守卫从 localStorage 读取 user 角色信息判断权限
+ *
+ * 路由设计说明：
+ *   - '/' 课程列表：公开页面，未登录也可查看（降低使用门槛）
+ *   - '/learn/:courseId' 学习页：仅 student 角色可访问，teacher 也能听课所以放行
+ *   - '/my-progress' 我的进度：仅 student 角色可访问
+ *   - '/teacher' 统计看板：仅 teacher/admin 可访问
+ *   - '/course-edit/:courseId?' 编辑课程：仅 teacher/admin 可访问，courseId 可选（新建/编辑）
+ *   - '/:pathMatch(.*)*' 404兜底：跳转课程列表而非空白页
+ *
+ * 使用 Hash 模式（createWebHashHistory）的原因：
+ *   - 钉钉 H5 微应用在钉钉客户端内打开，不支持服务端配置 SPA fallback
+ *   - Hash 模式（URL 中带 #）不需要后端配合，所有路由由前端处理
+ *   - 如果用 History 模式，刷新页面会 404（后端没有对应的路由处理）
+ *
+ * 与其他模块的交互关系：
+ *   - auth.js：守卫读取 localStorage 中 user 字段判断角色（不直接 import auth.js，
+ *     是因为守卫在应用初始化阶段就可能执行，直接读 localStorage 更安全）
+ *   - App.vue：App.vue 的 tryDingTalkLogin 要先于守卫执行完成（onMounted → 路由跳转）
+ *   - api.js：api.js 的 401 处理会将用户重定向到首页（window.location.hash = '#/'），
+ *     与本文件的守卫形成闭环：api.js 清除登录态 + 守卫拦截越权访问
+ * ============================================================================
+ */
+
 import { createRouter, createWebHashHistory } from 'vue-router'
 
+/**
+ * 路由表定义
+ * - component 使用 () => import() 动态导入，实现路由懒加载
+ *   首屏只加载 CourseList，其他页面按需加载，减少首屏体积
+ * - meta 字段用于存储路由级元信息：
+ *   - title：页面标题，在 beforeEach 中设置 document.title
+ *   - role：允许访问的最低角色，在 beforeEach 中做权限校验
+ */
 const routes = [
   {
     path: '/',
     name: 'CourseList',
     component: () => import('../views/CourseList.vue'),
-    meta: { title: '课程列表' },
+    meta: { title: '课程列表' },  // 无 role 限制，公开页面
   },
   {
-    path: '/learn/:courseId',
+    // 浏览器登录页：非钉钉环境下手动输入用户名+密码登录
+    path: '/login',
+    name: 'Login',
+    component: () => import('../views/Login.vue'),
+    meta: { title: '登录' },  // 无 role 限制，登录页本身不需要认证
+  },
+  {
+    path: '/learn/:courseId',      // :courseId 为动态参数，对应课程 ID
     name: 'StudentLearn',
     component: () => import('../views/StudentLearn.vue'),
-    meta: { title: '在线学习', role: 'student' },
+    meta: { title: '在线学习', role: 'student' },  // 仅学生角色
   },
   {
     path: '/my-progress',
     name: 'MyProgress',
     component: () => import('../views/StudentProgress.vue'),
-    meta: { title: '我的进度', role: 'student' },
+    meta: { title: '我的进度', role: 'student' },  // 仅学生角色
   },
   {
     path: '/teacher',
     name: 'TeacherDashboard',
     component: () => import('../views/TeacherDashboard.vue'),
-    meta: { title: '学习统计', role: 'teacher' },
+    meta: { title: '学习统计', role: 'teacher' },  // 仅教师/管理员
   },
   {
-    path: '/course-edit/:courseId?',
+    path: '/course-edit/:courseId?',  // courseId 可选：无参=新建课程，有参=编辑课程
     name: 'CourseEdit',
     component: () => import('../views/CourseEdit.vue'),
-    meta: { title: '编辑课程', role: 'teacher' },
+    meta: { title: '编辑课程', role: 'teacher' },  // 仅教师/管理员
   },
   {
+    // 管理后台：用户管理+班级管理，仅管理员/教师可访问
+    path: '/admin',
+    name: 'AdminPanel',
+    component: () => import('../views/AdminPanel.vue'),
+    meta: { title: '管理后台', role: 'teacher' },  // 仅教师/管理员
+  },
+  {
+    // 404 兜底路由：匹配所有未定义的路径
+    // 不用专门的 404 页面，而是重定向到课程列表，对用户更友好
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/CourseList.vue'),
@@ -39,39 +99,67 @@ const routes = [
   },
 ]
 
+// 创建路由实例
+// createWebHashHistory() 使用 hash 模式（URL 中带 #），适合钉钉 H5 微应用
 const router = createRouter({
   history: createWebHashHistory(),
   routes,
 })
 
+/**
+ * 全局前置守卫 (beforeEach)
+ *
+ * 每次路由跳转前执行，负责两件事：
+ * 1. 设置页面标题（document.title）
+ * 2. 角色权限校验（基于 meta.role 和 localStorage 中的用户角色）
+ *
+ * 权限逻辑：
+ *   - 无 meta.role 的路由（如课程列表）：所有人可访问
+ *   - meta.role='student'：admin 和 teacher 也能访问（教师也需要能看学习页面）
+ *   - meta.role='teacher'：仅 admin 和 teacher 可访问
+ *   - 未登录用户访问受限路由：重定向到首页 '/'
+ *
+ * 为什么在此直接读 localStorage 而不用 auth.js？
+ *   - 守卫可能在 auth.js 初始化之前执行（路由初始化先于组件挂载）
+ *   - 直接读 localStorage 更可靠，不依赖 Vue 响应式系统的初始化顺序
+ */
 router.beforeEach((to, from, next) => {
+  // 动态设置页面标题，用于浏览器标签页和钉钉标题栏显示
   document.title = to.meta.title || '学习进度监督'
 
-  // 角色权限守卫
+  // 检查目标路由是否需要特定角色
   const requiredRole = to.meta.role
   if (requiredRole) {
+    // 从 localStorage 读取用户信息（JSON 格式）
     const userStr = localStorage.getItem('user')
     if (!userStr) {
-      // 未登录，回首页
-      return next('/')
+      // 未登录（localStorage 无 user 记录），跳转到登录页
+      // 携带原始目标路径，登录成功后可自动跳回
+      return next({ path: '/login', query: { redirect: to.fullPath } })
     }
     try {
       const user = JSON.parse(userStr)
-      // admin 放行所有页面，teacher/student 按角色匹配
+      // admin 拥有最高权限，放行所有页面
       if (user.role === 'admin') {
         return next()
       }
+      // teacher 专属页面：非 teacher 角色拒绝访问
       if (requiredRole === 'teacher' && user.role !== 'teacher') {
         return next('/')
       }
+      // student 专属页面：teacher 也能访问学生页面
+      // 原因：教师可能需要预览学生视角、查看学习内容
+      // 只有非 student 且非 teacher 的角色才被拒绝
       if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher') {
         return next('/')
       }
     } catch {
-      return next('/')
+      // JSON 解析失败（localStorage 数据被篡改或损坏），跳转登录页
+      return next('/login')
     }
   }
 
+  // 无需角色校验的页面，直接放行
   next()
 })
 

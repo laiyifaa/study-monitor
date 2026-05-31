@@ -38,10 +38,10 @@
         <span class="label">有效时长</span>
         <span class="value">{{ effectiveMinutes }} 分钟</span>
       </div>
-      <!-- 视频播放进度百分比 -->
+      <!-- 视频播放进度（秒数转为 分:秒 格式） -->
       <div class="status-item">
-        <span class="label">进度</span>
-        <span class="value">{{ videoProgress }}%</span>
+        <span class="label">播放进度</span>
+        <span class="value">{{ formatTime(videoProgress) }}</span>
       </div>
       <!-- 快捷跳转到"我的进度"页 -->
       <router-link to="/my-progress" class="link">我的进度</router-link>
@@ -150,6 +150,21 @@ const {
 
 /** 钉钉 API 封装，用于设置 H5 微应用的页面标题 */
 const { setTitle } = useDingTalk()
+
+/**
+ * 将秒数格式化为 分:秒 显示
+ * video_progress 后端存的是视频播放到的秒数（如 135.3 秒）
+ * 格式化后显示为 "2:15" 而非 "135.3%"（后者会超过 100%，误导用户）
+ *
+ * @param {number} seconds - 视频播放到的秒数
+ * @returns {string} 格式化后的时间字符串
+ */
+function formatTime(seconds) {
+  if (!seconds || seconds <= 0) return '0:00'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
 
 /**
  * 组件挂载：获取课程信息并初始化视频播放

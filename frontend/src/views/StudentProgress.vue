@@ -47,7 +47,7 @@
         <!-- 详细信息行：有效时长 / 视频进度 -->
         <div class="info-row">
           <span>有效时长：{{ c.effective_minutes }} / {{ c.require_minutes }} 分钟</span>
-          <span>视频进度：{{ c.video_progress }}%</span>
+          <span>播放进度：{{ formatProgress(c.video_progress) }}</span>
         </div>
 
         <!-- 截止日期：仅当课程设置了截止日期时显示，使用红色警告色 -->
@@ -73,6 +73,18 @@ const courses = ref([])
 
 /** 加载状态标识 */
 const loading = ref(true)
+
+/**
+ * 格式化视频进度（秒数 → 分:秒）
+ * 后端 video_progress 存的是视频播放到的秒数位置（如 135.3 秒），
+ * 不是百分比。直接加 % 显示会超过 100%，改为时间格式更准确。
+ */
+function formatProgress(seconds) {
+  if (!seconds || seconds <= 0) return '0:00'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
 
 /**
  * 组件挂载时获取当前学生的进度数据

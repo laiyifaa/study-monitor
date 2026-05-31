@@ -81,29 +81,32 @@
             </div>
             <span>{{ uploadProgress }}%</span>
           </div>
-          <!-- 编辑模式下已有视频：显示文件名和"重新上传"按钮 -->
-          <div v-else-if="form.video_url && isEdit" class="current-video">
+          <!-- 编辑模式下已有本地视频：显示文件名和"重新上传"按钮 -->
+          <!-- 条件：video_url 非空 + 编辑模式 + video_url 看起来是本地文件（非 http 开头） -->
+          <div v-else-if="form.video_url && isEdit && isLocalVideo" class="current-video">
             <span>已上传: {{ form.video_url }}</span>
             <!-- 点击重新上传：清空 video_url 触发显示上传区域 -->
             <button class="btn-text" @click="form.video_url = ''">重新上传</button>
           </div>
           <!-- 无视频/新建模式：显示上传区域 -->
-          <label v-else class="upload-area">
-            <!-- 文件选择输入框，限制视频格式，隐藏原生控件 -->
-            <input type="file" accept="video/mp4,video/webm,video/ogg,video/quicktime" @change="onFileSelect" hidden />
+          <!-- 用 div + ref 触发文件选择，避免 label+hidden 在部分浏览器不弹出文件对话框 -->
+          <div v-else class="upload-area" @click="triggerFileSelect">
+            <input ref="fileInput" type="file" accept="video/mp4,video/webm,video/ogg,video/quicktime" @change="onFileSelect" style="display:none" />
             <span class="upload-icon">+</span>
             <span>点击选择视频文件</span>
             <span class="hint">支持 MP4/WebM/OGG/MOV，最大 500MB</span>
-          </label>
+          </div>
         </div>
       </div>
 
       <!-- ==================== 表单操作按钮 ==================== -->
       <div class="form-actions">
         <!-- 保存按钮：保存中时禁用防止重复提交 -->
-        <button class="btn primary" @click="onSave" :disabled="saving">
+        <button class="btn primary" @click="onSave()" :disabled="saving">
           {{ saving ? '保存中...' : '保存' }}
         </button>
+        <!-- 保存成功/失败的即时反馈 -->
+        <span v-if="saveMsg" class="save-msg" :class="saveMsgType">{{ saveMsg }}</span>
         <!-- 取消按钮：返回上一页 -->
         <button class="btn" @click="$router.back()">取消</button>
       </div>
@@ -127,6 +130,15 @@ const courseId = computed(() => parseInt(route.params.courseId) || 0)
 /** 是否为编辑模式：courseId > 0 即为编辑已有课程 */
 const isEdit = computed(() => courseId.value > 0)
 
+/**
+ * 当前的 video_url 是否是本地视频文件（而非外部链接）
+ * 判断依据：本地文件名不以 http 开头（如 "3_a1b2c3d4.mp4"）
+ * 外部链接以 http/https 开头（如 "https://www.bilibili.com/..."）
+ */
+const isLocalVideo = computed(() => {
+  return form.value.video_url && !form.value.video_url.startsWith('http')
+})
+
 /** 表单数据对象，包含课程的所有可编辑字段 */
 const form = ref({
   title: '',
@@ -146,6 +158,14 @@ const uploading = ref(false)
 
 /** 视频上传进度百分比（0-100） */
 const uploadProgress = ref(0)
+
+/** 文件输入框的模板引用，用于 ref 方式触发文件选择对话框 */
+const fileInput = ref(null)
+
+/** 保存反馈消息 */
+const saveMsg = ref('')
+/** 反馈消息类型：success / error */
+const saveMsgType = ref('success')
 
 /**
  * 组件挂载：编辑模式下回填课程数据
@@ -174,6 +194,16 @@ onMounted(async () => {
 })
 
 /**
+ * 通过 ref 触发文件选择对话框
+ * 替代 <label> + hidden <input> 方案：
+ * - hidden 属性在部分浏览器（尤其是移动端 WebView）会阻止文件对话框弹出
+ * - 使用 ref + click() 方式在所有浏览器中表现一致
+ */
+function triggerFileSelect() {
+  fileInput.value?.click()
+}
+
+/**
  * 视频文件选择处理
  * 流程：
  *   1. 校验文件大小（不超过500MB）
@@ -184,12 +214,14 @@ onMounted(async () => {
  * @param {Event} event - 文件选择事件
  */
 const onFileSelect = async (event) => {
-  const file = event.target.files[0]
+  const file = event.target.files?.[0]
   if (!file) return
 
   // 检查文件大小上限 500MB
   if (file.size > 500 * 1024 * 1024) {
     alert('视频文件不能超过500MB')
+    // 清空 input 值，允许重新选择同一文件
+    event.target.value = ''
     return
   }
 
@@ -224,6 +256,8 @@ const onFileSelect = async (event) => {
   } finally {
     uploading.value = false
     uploadProgress.value = 0
+    // 清空 input 值，允许用户再次选择同一文件
+    if (fileInput.value) fileInput.value.value = ''
   }
 }
 
@@ -244,6 +278,7 @@ const onSave = async (silent = false) => {
   }
 
   saving.value = true
+  saveMsg.value = ''
   try {
     const payload = {
       title: form.value.title,
@@ -256,24 +291,37 @@ const onSave = async (silent = false) => {
 
     if (isEdit.value) {
       // 编辑模式：PUT 更新已有课程
-      await api.put(`/courses/${courseId.value}`, payload)
+      const res = await api.put(`/courses/${courseId.value}`, payload)
+      if (res.data.code === 0) {
+        if (!silent) {
+          // 内联成功提示，3秒后自动消失，不跳走（用户可能还要继续编辑）
+          saveMsg.value = '保存成功'
+          saveMsgType.value = 'success'
+          setTimeout(() => { saveMsg.value = '' }, 3000)
+        }
+      } else {
+        if (!silent) {
+          saveMsg.value = res.data.msg || '保存失败'
+          saveMsgType.value = 'error'
+        }
+      }
     } else {
       // 新建模式：POST 创建课程
       const res = await api.post('/courses', payload)
-      if (res.data.code === 0 && !isEdit.value) {
+      if (res.data.code === 0) {
         // 新建成功后跳转到编辑页，方便上传视频
         router.replace(`/course-edit/${res.data.data.id}`)
         return
+      } else {
+        saveMsg.value = res.data.msg || '创建失败'
+        saveMsgType.value = 'error'
       }
     }
-
-    // 非静默模式：弹出保存成功提示并返回上一页
-    if (!silent) {
-      alert('保存成功')
-      router.back()
-    }
   } catch (e) {
-    alert('保存失败: ' + (e.response?.data?.detail || e.message))
+    if (!silent) {
+      saveMsg.value = '保存失败: ' + (e.response?.data?.detail || e.message)
+      saveMsgType.value = 'error'
+    }
   } finally {
     saving.value = false
   }
@@ -334,7 +382,13 @@ const onSave = async (silent = false) => {
 .btn-text { background: none; border: none; color: #1890ff; font-size: 13px; cursor: pointer; text-decoration: underline; }
 
 /* 表单操作按钮区域 */
-.form-actions { display: flex; gap: 10px; margin-top: 20px; }
+.form-actions { display: flex; gap: 10px; margin-top: 20px; align-items: center; }
+
+/* 保存反馈消息 */
+.save-msg { font-size: 13px; animation: fadeIn 0.3s; }
+.save-msg.success { color: #52c41a; }
+.save-msg.error { color: #ff4d4f; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* 通用按钮样式 */
 .btn {

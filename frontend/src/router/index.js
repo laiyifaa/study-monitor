@@ -125,7 +125,7 @@ const router = createRouter({
  */
 router.beforeEach((to, from, next) => {
   // 动态设置页面标题，用于浏览器标签页和钉钉标题栏显示
-  document.title = to.meta.title || '学习进度监督'
+  document.title = to.meta.title || '在线学习平台'
 
   // 检查目标路由是否需要特定角色
   const requiredRole = to.meta.role

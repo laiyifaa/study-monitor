@@ -16,8 +16,8 @@
     <div class="login-card">
       <!-- 系统标题和说明 -->
       <div class="login-header">
-        <h1>学习进度监督系统</h1>
-        <p class="subtitle">22中暑假网课学习平台</p>
+        <h1>在线学习平台</h1>
+        <p class="subtitle">欢迎登录</p>
       </div>
 
       <!-- 登录表单 -->

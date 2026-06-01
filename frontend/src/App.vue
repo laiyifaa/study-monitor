@@ -31,7 +31,7 @@
   <!-- 全局顶栏：显示用户信息和退出按钮，登录页不显示 -->
   <header v-if="showHeader" class="app-header">
     <div class="header-left">
-      <span class="app-title">学习进度监督</span>
+      <span class="app-title">在线学习平台</span>
     </div>
     <div v-if="auth.isLoggedIn.value" class="header-right">
       <!-- 用户角色标签 -->

@@ -183,22 +183,35 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
 
     # 第三步：在本地数据库查找已有用户，不存在则自动创建
     # ——采用"首次登录自动注册"策略，降低使用门槛
+    # ——每次免登都从钉钉同步最新用户信息（姓名、头像），
+    #   这样用户在钉钉改名/换头像后，系统会自动更新，无需手动修改
     result = await db.execute(select(User).where(User.dingtalk_user_id == userid))
     user = result.scalar_one_or_none()
+
+    # 从钉钉API响应中提取最新用户信息
+    dt_name = user_info.get("name", "")
+    dt_avatar = user_info.get("avatar", "")
+
     if not user:
         user = User(
             dingtalk_user_id=userid,
-            name=user_info.get("name", "未知"),
+            name=dt_name or "未知",
             role="student",  # 默认角色为学生，管理员角色需后续手动配置
-            avatar=user_info.get("avatar", ""),
+            avatar=dt_avatar or "",
         )
         db.add(user)
         await db.flush()       # 获取自增ID，但不提交事务
         await db.refresh(user) # 刷新对象以获取数据库生成的字段
+    else:
+        # 已有用户：同步钉钉最新姓名和头像（不覆盖角色，角色由管理员管理）
+        if dt_name and user.name != dt_name:
+            user.name = dt_name
+        if dt_avatar and user.avatar != dt_avatar:
+            user.avatar = dt_avatar
 
     # 第四步：签发 JWT Token（包含用户ID和角色，用于后续接口鉴权）
     jwt_token = create_token(user.id, user.role)
-    await db.commit()  # 用户创建和token签发原子提交
+    await db.commit()  # 用户创建/更新和token签发原子提交
 
     return {
         "code": 0,

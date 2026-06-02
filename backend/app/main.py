@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.database import init_db
 from app.database_redis import close_redis
 from app.routers import auth, heartbeat, course, stats, notify, admin
+from app.services.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
 
@@ -33,14 +34,17 @@ async def lifespan(app: FastAPI):
     参数：
         app: FastAPI 应用实例（由框架自动注入）
 
-    核心逻辑：
-        1. 启动阶段：调用 init_db() 创建所有数据库表（若表不存在）
-        2. yield 暂停，应用进入正常运行状态，开始接收请求
-        3. 关闭阶段：调用 close_redis() 优雅关闭 Redis 连接池，
-           避免连接泄漏导致 Redis 端出现大量 CLOSE_WAIT 连接
+    启动阶段：
+        1. 调用 init_db() 创建所有数据库表（若表不存在）
+        2. 启动 APScheduler 定时任务调度器（心跳日志清理等）
+    关闭阶段：
+        1. 停止 APScheduler 调度器
+        2. 调用 close_redis() 优雅关闭 Redis 连接池
     """
     await init_db()
+    start_scheduler()
     yield
+    stop_scheduler()
     await close_redis()
 
 

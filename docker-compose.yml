@@ -22,6 +22,12 @@ services:
     build: ./backend                          # 使用 backend/ 目录下的 Dockerfile 构建镜像
     container_name: study-monitor-backend      # 固定容器名，方便日志查看和运维管理
     restart: unless-stopped                   # 容器异常退出时自动重启（手动 stop 后不重启）
+    logging:
+      driver: json-file                       # 使用 json-file 日志驱动（Docker 默认）
+      options:
+        max-size: "10m"                       # 单个日志文件最大 10MB，超出自动轮转
+        max-file: "3"                         # 最多保留 3 个日志文件，总计最多 30MB
+                                               # 防止长期运行日志无限增长占满磁盘
     ports:
       - "8000:8000"                           # 暴露 FastAPI 端口；生产中仅 Nginx 容器内部访问，
                                               # 此端口映射主要用于调试，如不需要可移除以减少攻击面
@@ -70,6 +76,11 @@ services:
     build: ./frontend                         # 使用 frontend/ 目录下的 Dockerfile 构建镜像
     container_name: study-monitor-frontend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "80:80"                               # 对外暴露 HTTP 80 端口，用户访问入口
     volumes:
@@ -91,6 +102,11 @@ services:
     image: mysql:8.0                          # 官方 MySQL 8.0 镜像
     container_name: study-monitor-mysql
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_change_me}  # root 密码，生产务必替换
       MYSQL_DATABASE: study_monitor           # 容器首次启动时自动创建此数据库
@@ -118,6 +134,11 @@ services:
     image: redis:7-alpine                     # Alpine 版本，体积小、启动快，适合无磁盘IO的缓存场景
     container_name: study-monitor-redis
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"                        # Redis 日志较少，5MB 足够
+        max-file: "2"
     healthcheck:
       # redis-cli ping 返回 PONG 即表示服务正常
       test: ["CMD", "redis-cli", "ping"]

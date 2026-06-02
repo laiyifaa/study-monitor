@@ -54,13 +54,13 @@
               <td>{{ u.id }}</td>
               <td>{{ u.name }}</td>
               <td>
-                <!-- 管理员可修改角色 -->
-                <select v-if="isAdmin" :value="u.role" @change="changeRole(u.id, $event.target.value)" class="role-select">
+                <!-- 管理员和教师均可修改角色 -->
+                <select v-if="isAdmin || isTeacher" :value="u.role" @change="changeRole(u.id, $event.target.value)" class="role-select">
                   <option value="student">学生</option>
                   <option value="teacher">教师</option>
-                  <option value="admin">管理员</option>
+                  <option value="admin" v-if="isAdmin">管理员</option>
                 </select>
-                <!-- 教师只能查看 -->
+                <!-- 其他角色只能查看 -->
                 <span v-else class="role-tag" :class="u.role">{{ roleLabel(u.role) }}</span>
               </td>
               <td>{{ u.class_name || '-' }}</td>
@@ -196,6 +196,7 @@ import api from '../utils/api'
 
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user.value?.role === 'admin')
+const isTeacher = computed(() => auth.user.value?.role === 'teacher')
 
 /** 标签页切换 */
 const activeTab = ref('users')

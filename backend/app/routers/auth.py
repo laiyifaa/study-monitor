@@ -38,7 +38,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.database_redis import get_redis
 from app.models.models import User
-from app.utils.jwt_helper import create_token, get_current_user
+from app.utils.jwt_helper import create_token, get_current_user, require_role
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 settings = get_settings()
@@ -415,3 +415,65 @@ async def change_password(
     await db.commit()
 
     return {"code": 0, "msg": "密码修改成功"}
+
+
+# ============================================================
+# API Key 管理 —— 供智能体/外部程序调用系统接口
+# ============================================================
+
+@router.post("/generate-api-key")
+async def generate_api_key(
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    生成 API Key —— 为当前用户创建一个长期有效的调用密钥
+
+    用途：
+        教师/管理员生成后，可将此 Key 配置给智能体（如 TeleClaw）或外部程序，
+        智能体携带 X-API-Key 请求头即可代替 JWT 访问系统所有 API，
+        例如查看统计、发送提醒、导出报表等。
+
+    权限要求：teacher 或 admin
+
+    返回格式：
+        code=0 成功，返回 api_key 字符串
+        code=1 失败
+
+    安全说明：
+        - API Key 以 "sk_" 开头，后接 32 字节随机十六进制，共 67 字符
+        - 每次调用会重新生成，旧 Key 立即失效
+        - 生成后仅返回一次完整值，请妥善保存
+    """
+    # 生成 API Key: sk_ + 32字节随机十六进制
+    new_key = f"sk_{secrets.token_hex(32)}"
+    current_user.api_key = new_key
+    await db.commit()
+
+    return {"code": 0, "data": {"api_key": new_key}}
+
+
+@router.get("/api-key")
+async def get_api_key_status(
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    查看 API Key 状态 —— 检查当前用户是否已生成 API Key
+
+    用途：
+        前端管理界面展示 API Key 状态（是否已生成、部分掩码值）
+
+    权限要求：teacher 或 admin
+
+    安全说明：
+        不返回完整 Key 值，仅返回掩码形式（如 sk_a3f2****8b1c）
+        完整 Key 仅在生成时返回一次
+    """
+    if not current_user.api_key:
+        return {"code": 0, "data": {"has_key": False, "masked": ""}}
+
+    # 掩码处理：保留前6位和后4位
+    key = current_user.api_key
+    masked = f"{key[:6]}****{key[-4:]}" if len(key) > 10 else "sk_****"
+    return {"code": 0, "data": {"has_key": True, "masked": masked}}

@@ -132,46 +132,39 @@ def decode_token(token: str) -> dict:
 
 async def get_current_user(
     authorization: str = Header(None, alias="Authorization"),
+    x_api_key: str = Header(None, alias="X-API-Key"),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """从请求头中提取 Token 并获取当前用户 —— FastAPI 依赖注入
+    """从请求头中提取 Token 或 API Key 并获取当前用户 —— FastAPI 依赖注入
 
     【调用方】
       所有需要鉴权的 API 路由，通过 FastAPI 的 Depends() 机制自动调用。
-      例如：
-        @router.get("/my-progress")
-        async def get_progress(user: User = Depends(get_current_user)):
-            ...
 
     【工作机制】
-      1. 从 HTTP 请求头的 Authorization 字段中提取 Token
-      2. 去掉 "Bearer " 前缀，得到纯 Token 字符串
-      3. 调用 decode_token() 解码并验证 Token
-      4. 从 Payload 中提取 user_id
-      5. 查询数据库获取完整的 User 对象并返回
+      支持两种认证方式（优先级从高到低）：
+      1. X-API-Key 请求头：智能体/外部程序使用，长期有效，无需续期
+      2. Authorization: Bearer <token>：浏览器/钉钉客户端使用，有过期时间
 
     【参数】
       authorization: FastAPI 自动从请求头 "Authorization" 注入
-      db:            FastAPI 自动注入数据库会话（通过 get_db 依赖）
-
-    【返回值】
-      User 对象（数据库模型），包含 id, name, role, dingtalk_userid 等字段
-      路由处理函数可直接使用此对象获取当前用户信息
+      x_api_key:     FastAPI 自动从请求头 "X-API-Key" 注入
+      db:            FastAPI 自动注入数据库会话
 
     【异常】
-      - 缺少 Authorization 头 → 401 "缺少认证令牌"
-      - 格式不以 "Bearer " 开头 → 401 "缺少认证令牌"
-      - Token 无效/过期 → 401 "无效的认证令牌"（来自 decode_token）
+      - 两种认证方式都未提供 → 401 "缺少认证令牌"
+      - Token 无效/过期 → 401 "无效的认证令牌"
+      - API Key 无效 → 401 "无效的API Key"
       - 用户不存在 → 404 "用户不存在"
-
-    【为什么每次都查数据库？】
-      虽然 Token 中已包含 user_id 和 role，但仍然查库获取完整 User 对象，
-      原因：
-      1. 确保 Token 签发后用户未被删除或禁用
-      2. 获取最新的用户信息（如角色可能被管理员修改）
-      3. 路由处理函数需要完整的 User 对象，而不仅仅是 ID 和角色
     """
-    # 检查 Authorization 头是否存在且格式正确
+    # 优先检查 API Key 认证（智能体调用场景）
+    if x_api_key:
+        result = await db.execute(select(User).where(User.api_key == x_api_key))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=401, detail="无效的API Key")
+        return user
+
+    # 其次检查 JWT Token 认证（浏览器/钉钉客户端场景）
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="缺少认证令牌")
 
@@ -182,7 +175,6 @@ async def get_current_user(
     payload = decode_token(token)
 
     # 从 Payload 中提取用户ID
-    # 注意：Token 的 sub 字段存的是字符串，需转为 int
     user_id = int(payload.get("sub", 0))
 
     # 查询数据库获取完整用户对象
@@ -190,8 +182,6 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if not user:
-        # Token 中的 user_id 在数据库中找不到对应记录
-        # 可能原因：用户已被删除，或 Token 是伪造的
         raise HTTPException(status_code=404, detail="用户不存在")
 
     return user

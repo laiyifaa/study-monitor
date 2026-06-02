@@ -113,7 +113,7 @@ class RoleUpdateRequest(BaseModel):
 async def update_user_role(
     user_id: int,
     req: RoleUpdateRequest,
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("admin", "teacher")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -123,15 +123,21 @@ async def update_user_role(
         path.user_id (int):    目标用户ID
         body.role (str):       新角色（student/teacher/admin）
 
-    权限要求：【仅 admin】
+    权限要求：【admin 或 teacher】
 
     安全说明：
-        - 管理员不能降低自己的角色（防止误操作把自己变成学生后无法恢复）
+        - admin 可设置任意角色（含 admin）
+        - teacher 只能设置 student 或 teacher（不能设置 admin）
+        - 不能降低自己的角色（防止误操作把自己变成学生后无法恢复）
         - 只允许设置合法的角色值
     """
     # 合法角色校验
     if req.role not in ("student", "teacher", "admin"):
         return {"code": 1, "msg": "无效的角色"}
+
+    # 教师不能设置管理员角色
+    if current_user.role == "teacher" and req.role == "admin":
+        return {"code": 1, "msg": "教师不能设置管理员角色"}
 
     # 查找目标用户
     result = await db.execute(select(User).where(User.id == user_id))
@@ -140,8 +146,8 @@ async def update_user_role(
         raise HTTPException(status_code=404, detail="用户不存在")
 
     # 防止管理员降低自身权限
-    if user.id == current_user.id and req.role != "admin":
-        return {"code": 1, "msg": "不能降低自己的管理员权限"}
+    if user.id == current_user.id and req.role != current_user.role:
+        return {"code": 1, "msg": "不能修改自己的角色"}
 
     user.role = req.role
     await db.commit()

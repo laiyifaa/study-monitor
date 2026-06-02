@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '0be8dbbc-cf45-4425-a121-8418ce427c0f'
-  PropagateID: '0be8dbbc-cf45-4425-a121-8418ce427c0f'
-  ReservedCode1: 'f3e65f71-c048-43f7-ae7f-bf5cee0c9d3a'
-  ReservedCode2: 'f3e65f71-c048-43f7-ae7f-bf5cee0c9d3a'
+  ProduceID: '949008bf-278a-470e-a492-70a38fc84831'
+  PropagateID: '949008bf-278a-470e-a492-70a38fc84831'
+  ReservedCode1: '3c637b11-0a96-4a79-af8a-d49ccd966e48'
+  ReservedCode2: '3c637b11-0a96-4a79-af8a-d49ccd966e48'
 ---
 
 # 22中暑假网课学习进度监督系统
@@ -147,24 +147,38 @@ study-monitor/
 
 ## 数据存储与迁移
 
-### 数据存放位置
+### 全部运行时产物
 
-项目的数据分布在三个地方：
-
-| 数据类型 | 存储位置 | 说明 |
-|---------|---------|------|
-| 用户账号、课程、学习记录、心跳日志 | **MySQL 数据库** `study_monitor` | 4张表：`users`、`courses`、`study_sessions`、`heartbeat_logs` |
-| 上传的视频文件 | **本地磁盘** `backend/uploads/videos/` | 课程中 `video_type=local` 的视频文件 |
-| 钉钉 access_token 缓存 | **Redis** | 临时缓存（2小时过期），丢失无影响，会自动重新获取 |
+| 序号 | 产物类型 | 本地开发路径 | Docker 部署路径 | 是否持久化 | 清理机制 |
+|------|---------|-------------|----------------|----------|---------|
+| 1 | 上传视频 | `backend/uploads/videos/` | `/app/uploads/videos/` | **否（未挂载卷）** | 删课程时同步删；重上传时删旧 |
+| 2 | MySQL 数据 | 本地 MySQL `study_monitor` 库 | 命名卷 `mysql_data` → `/var/lib/mysql` | 是 | **无自动清理** |
+| 3 | Redis 缓存 | 本地 Redis 6379 | 命名卷 `redis_data` → `/data` | 是 | Key 自动过期（TTL） |
+| 4 | .env 配置 | `backend/.env`、`frontend/.env` | 环境变量注入容器 | 宿主机文件 | 手动管理 |
+| 5 | Excel 导出 | 不落盘（内存流直返） | 同左 | - | 不产生残留 |
+| 6 | Nginx 日志 | 本地不用 Nginx | `/var/log/nginx/` | **否（未挂载）** | 容器重启丢失 |
+| 7 | Docker 容器日志 | Docker 内部 | Docker 内部 | 是 | **无大小限制** |
 
 ### MySQL 核心表说明
 
-| 表名 | 内容 | 关键字段 |
-|------|------|---------|
-| `users` | 教师学生账号、角色、密码哈希、钉钉ID、班级 | `dingtalk_user_id`、`role`、`password_hash`、`class_name` |
-| `courses` | 课程标题、视频地址、要求学习时长、截止日期 | `video_type`、`video_url`、`require_minutes`、`end_date` |
-| `study_sessions` | 每次学习的起止时间、有效秒数、播放进度 | `effective_seconds`、`video_progress`、`is_active` |
-| `heartbeat_logs` | 每30秒一次的心跳快照（防刷课依据） | `is_playing`、`is_page_visible`、`action` |
+| 表名 | 内容 | 增长速度 | 清理建议 |
+|------|------|---------|---------|
+| `users` | 教师学生账号、角色、密码哈希、钉钉ID、API Key、班级 | 极慢（按用户数） | 无需清理 |
+| `courses` | 课程标题、视频地址、要求学习时长、截止日期 | 极慢（按课程数） | 无需清理 |
+| `study_sessions` | 每次学习的起止时间、有效秒数、播放进度 | 中等（每人每天1-5条） | 可清理1年前记录 |
+| `heartbeat_logs` | 每30秒一次的心跳快照（防刷课依据） | **快（每学生每30秒1条）** | **必须定期清理，建议保留30天** |
+
+> **heartbeat_logs 增长估算**：100人同时学1小时 = 12,000条；1天8小时 = 约96,000条。长期运行必须加定时清理。
+
+### 备份清单（换服务器前必须备份的文件）
+
+| 优先级 | 备份项 | 路径 | 命令 |
+|--------|-------|------|------|
+| **必须** | MySQL 全量数据 | 数据库 `study_monitor` | `mysqldump -u root study_monitor > backup.sql` |
+| **必须** | 上传的视频文件 | `backend/uploads/` | `tar czf uploads.tar.gz backend/uploads/` |
+| **必须** | 后端 .env 配置 | `backend/.env` | `cp backend/.env env_backup.txt` |
+| **必须** | 前端 .env 配置 | `frontend/.env` | `cp frontend/.env frontend_env_backup.txt` |
+| 可选 | Redis 持久化文件 | Redis RDB/AOF | Docker 卷 `redis_data` 自动持久化 |
 
 ### 服务器迁移步骤
 
@@ -179,8 +193,9 @@ mysqldump -u root study_monitor > study_monitor_backup.sql
 # 2. 打包上传的视频文件
 tar czf uploads_backup.tar.gz backend/uploads/
 
-# 3. 备份 .env 配置（含钉钉密钥、JWT密钥等）
-cp backend/.env env_backup.txt
+# 3. 备份 .env 配置（含钉钉密钥、JWT密钥等，丢失无法恢复）
+cp backend/.env backend_env_backup.txt
+cp frontend/.env frontend_env_backup.txt
 
 
 # ====== 新服务器操作 ======
@@ -188,30 +203,65 @@ cp backend/.env env_backup.txt
 # 4. 克隆项目代码
 git clone https://github.com/Sumutan/study-monitor.git && cd study-monitor
 
-# 5. 先启动一次让 MySQL/Docker 初始化数据库
+# 5. 还原 .env 配置（必须在启动前还原，否则 JWT_SECRET 不一致导致旧 Token 失效）
+cp backend_env_backup.txt backend/.env
+cp frontend_env_backup.txt frontend/.env
+
+# 6. 启动服务（Docker 会自动创建空数据库）
 docker-compose up -d
 
-# 6. 导入 MySQL 数据（覆盖空表）
-#    Docker 部署时 MySQL 映射在 3306 端口，密码见 docker-compose.yml
+# 7. 导入 MySQL 数据（覆盖空表）
+#    Docker 部署时 MySQL 映射在 3306 端口，密码见 backend/.env
 mysql -h 127.0.0.1 -u root -p<密码> study_monitor < study_monitor_backup.sql
 
-# 7. 还原视频文件
+# 8. 还原视频文件
 tar xzf uploads_backup.tar.gz
-
-# 8. 还原 .env 配置（保持 JWT_SECRET 一致，否则旧 Token 全部失效）
-cp env_backup.txt backend/.env
 
 # 9. 重启服务
 docker-compose restart
+
+# 10. 验证迁移结果
+#     - 访问教师端统计看板检查数据是否完整
+#     - 播放一门本地视频课程确认视频可访问
+#     - 用旧 API Key 测试智能体接口是否可用
 ```
 
 ### 迁移注意事项
 
 - **JWT_SECRET 必须保持一致**：新旧服务器的 `JWT_SECRET` 必须相同，否则已登录用户的 Token 全部失效，需要重新登录
+- **API Key 保持有效**：API Key 存在 MySQL `users.api_key` 字段中，随数据库一起迁移，迁移后智能体无需重新配置
 - **钉钉平台更新首页地址**：如果新服务器的 IP/域名变了，需要到钉钉开放平台更新应用的移动端/PC端首页地址
 - **视频文件路径**：课程表中 `video_url` 存的是文件名（如 `1_ea2096d5.mp4`），后端通过 `backend/uploads/videos/` 目录提供文件，确保视频文件放在正确目录即可
-- **Redis 无需迁移**：只缓存临时 token，丢了会自动重新获取，不影响任何业务数据
-- **验证迁移结果**：启动后检查教师端统计看板数据是否完整、学生视频能否正常播放
+- **Redis 无需迁移**：只缓存临时 token 和限流计数器，丢了会自动重建，不影响任何业务数据
+- **验证迁移结果**：检查教师端统计看板数据、学生视频播放、API Key 接口调用是否正常
+
+### Docker 部署注意事项
+
+**上传视频持久化**：当前 `docker-compose.yml` 未将 `backend/uploads/` 挂载到宿主机，容器重建后上传的视频会丢失。生产环境必须添加卷挂载：
+
+```yaml
+# docker-compose.yml → backend 服务
+backend:
+  volumes:
+    - ./uploads:/app/uploads
+```
+
+**容器日志限制**：Docker 默认日志无大小限制，长期运行可能占满磁盘。建议为每个服务添加：
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+**心跳日志清理**：`heartbeat_logs` 表是增长最快的表，建议添加定时任务清理30天前的记录：
+
+```sql
+-- 手动清理（可加入 crontab 每天执行）
+DELETE FROM heartbeat_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY);
+```
 
 ## 版本记录
 

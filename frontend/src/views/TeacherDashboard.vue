@@ -24,9 +24,27 @@
   <div class="dashboard">
     <h2 class="page-title">学习统计看板</h2>
 
+    <!-- API Key 区域：供智能体调用系统接口 -->
+    <div class="api-key-section" v-if="isTeacherOrAdmin">
+      <div class="api-key-header">
+        <span class="api-key-label">智能体接入密钥</span>
+        <button class="btn-sm" @click="generateApiKey" :disabled="generatingKey">
+          {{ generatingKey ? '生成中...' : (apiKeyInfo.has_key ? '重新生成' : '生成密钥') }}
+        </button>
+      </div>
+      <div class="api-key-hint" v-if="!apiKeyInfo.has_key">生成 API Key 后，可委托智能体（如 TeleClaw）自动查看统计、发送提醒等</div>
+      <div class="api-key-display" v-else>
+        <code v-if="apiKeyNewlyGenerated">{{ apiKeyFull }}</code>
+        <code v-else>{{ apiKeyInfo.masked }}</code>
+        <button class="btn-sm" @click="copyApiKey" v-if="apiKeyNewlyGenerated">复制</button>
+        <span class="api-key-note" v-if="apiKeyNewlyGenerated">请立即复制保存，关闭页面后将无法查看完整密钥</span>
+      </div>
+    </div>
+
     <!-- 新建课程按钮 + 管理后台入口 + 编辑/删除课程 -->
     <div class="top-actions">
       <router-link to="/course-edit/0" class="btn primary">+ 新建课程</router-link>
+      <router-link to="/" class="btn" target="_blank">预览课程</router-link>
       <router-link to="/admin" class="btn">管理后台</router-link>
       <template v-if="selectedCourseId">
         <router-link :to="`/course-edit/${selectedCourseId}`" class="btn">编辑课程</router-link>
@@ -182,6 +200,13 @@ import { useAuthStore } from '../utils/auth'
 const router = useRouter()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user.value?.role === 'admin')
+const isTeacherOrAdmin = computed(() => auth.user.value?.role === 'teacher' || auth.user.value?.role === 'admin')
+
+/** API Key 状态 */
+const apiKeyInfo = ref({ has_key: false, masked: '' })
+const apiKeyFull = ref('')       // 仅在新生成时临时保存完整值
+const apiKeyNewlyGenerated = ref(false)
+const generatingKey = ref(false)
 
 /** 课程列表 */
 const courses = ref([])
@@ -245,6 +270,8 @@ onMounted(async () => {
       await loadData()
     }
   }
+  // 加载 API Key 状态
+  if (isTeacherOrAdmin.value) loadApiKeyStatus()
 })
 
 watch(selectedCourseId, () => loadData())
@@ -399,6 +426,58 @@ async function exportExcel() {
     alert('导出失败: ' + (e.response?.statusText || e.message))
   }
 }
+
+/** 加载 API Key 状态（是否已生成、掩码值）
+ *  keepNewlyGenerated: 设为 true 时不清除 apiKeyNewlyGenerated 标记，
+ *  避免刚生成完整 Key 后被 loadApiKeyStatus 立即覆盖为掩码
+ */
+async function loadApiKeyStatus(keepNewlyGenerated = false) {
+  try {
+    const res = await api.get('/auth/api-key')
+    if (res.data.code === 0) {
+      apiKeyInfo.value = res.data.data
+      if (!keepNewlyGenerated) {
+        apiKeyNewlyGenerated.value = false
+      }
+    }
+  } catch { /* 忽略 */ }
+}
+
+/** 生成/重新生成 API Key */
+async function generateApiKey() {
+  if (apiKeyInfo.value.has_key) {
+    if (!confirm('重新生成会使旧密钥立即失效，确定继续？')) return
+  }
+  generatingKey.value = true
+  try {
+    const res = await api.post('/auth/generate-api-key')
+    if (res.data.code === 0) {
+      apiKeyFull.value = res.data.data.api_key
+      apiKeyNewlyGenerated.value = true
+      await loadApiKeyStatus(true)
+    }
+  } catch (e) {
+    alert('生成失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    generatingKey.value = false
+  }
+}
+
+/** 复制 API Key 到剪贴板 */
+function copyApiKey() {
+  navigator.clipboard.writeText(apiKeyFull.value).then(() => {
+    alert('已复制到剪贴板')
+  }).catch(() => {
+    // fallback
+    const input = document.createElement('input')
+    input.value = apiKeyFull.value
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    alert('已复制到剪贴板')
+  })
+}
 </script>
 
 <style scoped>
@@ -496,4 +575,25 @@ tr.not-started { background: #fafafa; }
 @media (max-width: 600px) {
   .overview-cards { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* API Key 区域 */
+.api-key-section {
+  background: #fffbe6; border: 1px solid #ffe58f; border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 16px;
+}
+.api-key-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.api-key-label { font-size: 14px; font-weight: 600; color: #8c6d1f; }
+.api-key-hint { font-size: 12px; color: #a08040; }
+.api-key-display { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.api-key-display code {
+  background: #fff; border: 1px solid #d9d9d9; border-radius: 4px;
+  padding: 4px 10px; font-size: 13px; color: #333; word-break: break-all;
+}
+.api-key-note { font-size: 12px; color: #ff4d4f; }
+.btn-sm {
+  padding: 4px 12px; border: 1px solid #d9d9d9; border-radius: 4px;
+  background: #fff; font-size: 12px; cursor: pointer;
+}
+.btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
+.btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

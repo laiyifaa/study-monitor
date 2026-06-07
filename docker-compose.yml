@@ -58,6 +58,11 @@ services:
       - JWT_SECRET=${JWT_SECRET:-Please_change_this_to_random_string}  # JWT 签名密钥，生产务必替换
       - DEBUG=false                           # 生产环境关闭调试模式，避免泄露堆栈信息
 
+      # --- CDN 加速 ---
+      # 天翼云 CDN 加速域名，启用后本地视频通过 CDN 分发，降低源站带宽压力
+      # 格式：https://cdn.your-domain.com，为空表示不使用 CDN（向后兼容）
+      - CDN_DOMAIN=${CDN_DOMAIN:-}
+
     depends_on:
       mysql:
         condition: service_healthy            # 等待 MySQL 健康检查通过后再启动，避免连接失败

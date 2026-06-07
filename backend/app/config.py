@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"         # 对称加密算法，适用于单服务场景
     JWT_EXPIRE_HOURS: int = 72           # 令牌有效期72小时，覆盖一个长周末不断登录
 
+    # ── CDN 配置 ──
+    # 天翼云 CDN 加速域名，启用后视频文件通过 CDN 分发，降低源站带宽压力
+    # 格式示例：https://cdn.example.com（带协议前缀）
+    # 为空时表示不使用 CDN，视频直接从 Nginx 服务器分发（向后兼容）
+    CDN_DOMAIN: str = ""
+
     # ── 服务运行参数 ──
     API_HOST: str = "0.0.0.0"            # 监听所有网卡，Docker 部署时必须
     API_PORT: int = 8000

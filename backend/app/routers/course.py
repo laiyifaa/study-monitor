@@ -38,6 +38,7 @@ from fastapi.responses import FileResponse
 from app.database import get_db
 from app.models.models import Course, User
 from app.utils.jwt_helper import get_current_user, require_role
+from app.config import get_settings
 
 router = APIRouter(prefix="/api/courses", tags=["课程管理"])
 
@@ -87,14 +88,30 @@ def _course_to_dict(c):
     兼容性说明：
         旧版数据使用 wukong_url 字段存储视频链接，新版统一使用 video_url。
         这里优先取 video_url，fallback 到 wukong_url，确保旧数据不会丢失。
+
+    CDN 支持：
+        当后端配置了 CDN_DOMAIN 时，本地视频（video_type=local）会额外返回
+        video_cdn_url 字段，值为 CDN 域名 + /uploads/videos/ + 文件名。
+        前端播放时优先使用 video_cdn_url（CDN 加速），降级到原始路径。
     """
+    settings = get_settings()
+    video_url_val = c.video_url or c.wukong_url or ""
+
+    # 计算 CDN 地址：仅 local 类型 + CDN 已配置时才生成
+    video_cdn_url = ""
+    if (c.video_type or "url") == "local" and video_url_val and settings.CDN_DOMAIN:
+        cdn_base = settings.CDN_DOMAIN.rstrip("/")
+        video_cdn_url = f"{cdn_base}/uploads/videos/{video_url_val}"
+
     return {
         "id": c.id,
         "title": c.title,
         "description": c.description,
         "video_type": c.video_type or "url",
         # 兼容旧数据：优先取 video_url，回退到 wukong_url
-        "video_url": c.video_url or c.wukong_url or "",
+        "video_url": video_url_val,
+        # CDN 加速地址：为空时前端应使用原始 video_url 路径
+        "video_cdn_url": video_cdn_url,
         "duration_seconds": c.duration_seconds,
         "require_minutes": c.require_minutes,
         "start_date": str(c.start_date) if c.start_date else None,

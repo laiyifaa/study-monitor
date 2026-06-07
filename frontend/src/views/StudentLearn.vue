@@ -80,7 +80,7 @@
         @pause="onVideoPause"
         @timeupdate="onVideoTimeUpdate"
       >
-        <source :src="`/api/courses/video-file/${videoUrl}`" type="video/mp4" />
+        <source :src="videoSourceUrl" type="video/mp4" />
         您的浏览器不支持视频播放
       </video>
       <!-- 视频未加载时的占位提示 -->
@@ -110,7 +110,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useStudyTracker } from '../composables/useStudyTracker'
 import { useDingTalk } from '../composables/useDingTalk'
@@ -125,11 +125,24 @@ const courseId = parseInt(route.params.courseId)
 /** 视频类型：'url'（外部链接iframe）或 'local'（本地上传HTML5 video） */
 const videoType = ref('url')
 
-/** 视频地址：url 模式为完整链接，local 模式为服务器文件路径 */
+/** 视频地址：url 模式为完整链接，local 模式为服务器文件名 */
 const videoUrl = ref('')
+
+/** CDN 加速地址：后端开启 CDN 时返回，优先使用；为空时降级到原始路径 */
+const videoCdnUrl = ref('')
 
 /** HTML5 video 元素的模板引用，用于读取 currentTime */
 const videoPlayer = ref(null)
+
+/**
+ * 计算本地视频的播放源地址：
+ * 优先使用 CDN 地址（video_cdn_url），降级到原始 API 路径
+ * 这样 CDN 开启时视频流量走 CDN，CDN 未配置时走 Nginx 直连
+ */
+const videoSourceUrl = computed(() => {
+  if (videoCdnUrl.value) return videoCdnUrl.value
+  return `/api/courses/video-file/${videoUrl.value}`
+})
 
 /**
  * 从 useStudyTracker 组合式函数解构出学习计时相关状态和方法：
@@ -180,6 +193,7 @@ onMounted(async () => {
       const course = res.data.data
       videoType.value = course.video_type || 'url'
       videoUrl.value = course.video_url || ''
+      videoCdnUrl.value = course.video_cdn_url || ''
       requireMinutes.value = course.require_minutes
       setTitle(course.title)
       document.title = course.title

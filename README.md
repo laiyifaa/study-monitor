@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '949008bf-278a-470e-a492-70a38fc84831'
-  PropagateID: '949008bf-278a-470e-a492-70a38fc84831'
-  ReservedCode1: '3c637b11-0a96-4a79-af8a-d49ccd966e48'
-  ReservedCode2: '3c637b11-0a96-4a79-af8a-d49ccd966e48'
+  ProduceID: '25853bf8-8766-4d1c-b118-1ae95ce89bec'
+  PropagateID: '25853bf8-8766-4d1c-b118-1ae95ce89bec'
+  ReservedCode1: '60098701-6ca8-4a10-94c2-d58a34ffb5a6'
+  ReservedCode2: '60098701-6ca8-4a10-94c2-d58a34ffb5a6'
 ---
 
 # 22中暑假网课学习进度监督系统
@@ -263,6 +263,80 @@ logging:
 DELETE FROM heartbeat_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY);
 ```
 
+## 天翼云 CDN 部署方案
+
+### 方案概述
+
+| 方案 | 源站 | CDN | 适用场景 | 月成本 |
+|------|------|-----|---------|--------|
+| **A（推荐）** | 本地服务器 115.223.38.172 | 天翼云 CDN（IP源站） | 有物理服务器、短期间歇性使用 | ~750-1000元（5TB流量） |
+| **B** | 天翼云主机（4C8G） | 天翼云 CDN（IP源站） | 无物理服务器、需要稳定运行 | CDN + 云主机 |
+
+### CDN 工作原理
+
+```
+学生浏览器 → CDN 边缘节点（就近加速） → 回源到源站 Nginx → 视频文件
+                  ↑                              ↑
+              缓存命中直接返回              首次请求/缓存过期时回源
+```
+
+### 启用 CDN 的步骤
+
+1. **天翼云控制台创建 CDN 加速域名**：
+   - 业务类型：网页/小文件
+   - 源站类型：IP 源站
+   - 源站地址：`115.223.38.172`（方案A）或云主机公网IP（方案B）
+   - 回源端口：80（HTTP回源）或 443（HTTPS回源）
+   - 加速区域：国内
+
+2. **配置域名 CNAME**：在域名 DNS 解析中，将加速域名 CNAME 到天翼云分配的 CNAME 地址
+
+3. **后端配置 CDN 域名**：在 `backend/.env` 或 `docker-compose.yml` 的 environment 中添加：
+   ```
+   CDN_DOMAIN=https://cdn.your-domain.com
+   ```
+
+4. **（可选）配置 HTTPS**：
+   - CDN 控制台上传证书或申请免费证书
+   - 如需 HTTPS 回源，参考 `nginx/https.conf` 配置源站 HTTPS
+
+5. **重启服务**：
+   ```bash
+   docker compose restart backend
+   ```
+
+### CDN 关键配置项
+
+| 配置项 | 推荐值 | 说明 |
+|--------|--------|------|
+| 缓存过期时间 | 7天 | 视频文件不变，可长缓存 |
+| 回源协议 | HTTP | 降低源站 SSL 开销 |
+| Range 回源 | 开启 | 支持视频拖动进度条 |
+| 过滤参数 | 不忽略 | 视频伪流式需要保留 ?start 参数 |
+| 防盗链 | 按需 | 可设 Referer 白名单防外部盗用 |
+
+### 无 CDN 降级
+
+CDN_DOMAIN 为空时，系统自动降级到 Nginx 直连模式（视频请求直接到源站），无需任何代码修改。
+
+## 远程更新部署
+
+服务器上一键拉取最新代码并重启：
+
+```bash
+# SSH 登录服务器后
+cd /data/study-monitor
+bash scripts/remote-update.sh
+```
+
+或从开发机远程触发：
+
+```bash
+ssh root@115.223.38.172 -p 1000 "cd /data/study-monitor && bash scripts/remote-update.sh"
+```
+
+脚本会自动：检测代码变更 → 构建镜像 → 重启容器 → 健康检查
+
 ## 版本记录
 
 - v0.1.0 - 项目脚手架
@@ -276,3 +350,6 @@ DELETE FROM heartbeat_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY);
 - v2.1.0 - 管理后台 + 自助改密 + 返回导航
 - v2.1.1 - Bug修复：保存反馈/文件选择/视频进度显示
 - v2.1.2 - Vite allowedHosts 支持 ngrok 穿透
+- v2.2.1 - 钉盘集成开发后回退（权限模型不可行）
+- v2.2.2 - 天翼云CDN资源需求估算文档
+- v2.3.0 - CDN集成代码预备：CDN_DOMAIN配置、Nginx CORS头、HTTPS模板、远程更新脚本

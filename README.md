@@ -1,13 +1,4 @@
----
-AIGC:
-  ContentProducer: '001191110102MAD55U9H0F10002'
-  ContentPropagator: '001191110102MAD55U9H0F10002'
-  Label: '1'
-  ProduceID: 'cd8fa0c0-b737-4d4d-9c48-beb86f7ed52c'
-  PropagateID: 'cd8fa0c0-b737-4d4d-9c48-beb86f7ed52c'
-  ReservedCode1: 'ef804a7a-353f-494c-8326-ccf17e9b92a4'
-  ReservedCode2: 'ef804a7a-353f-494c-8326-ccf17e9b92a4'
----
+
 
 # 暑期在线学习平台
 

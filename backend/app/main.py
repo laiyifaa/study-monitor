@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from app.config import get_settings
 from app.database import init_db
 from app.database_redis import close_redis
-from app.routers import auth, heartbeat, course, stats, notify, admin
+from app.routers import auth, heartbeat, course, stats, notify, admin, homework
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -72,12 +72,14 @@ app.add_middleware(
 # stats    — 教师统计看板数据聚合
 # notify   — 钉钉消息推送（学习提醒、每日报告）
 # admin    — 管理后台（用户管理、班级管理）
+# homework — 作业管理（发布、提交、批改）
 app.include_router(auth.router)
 app.include_router(heartbeat.router)
 app.include_router(course.router)
 app.include_router(stats.router)
 app.include_router(notify.router)
 app.include_router(admin.router)
+app.include_router(homework.router)
 
 
 @app.get("/api/health")

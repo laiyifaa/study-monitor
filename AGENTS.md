@@ -34,13 +34,29 @@ bash scripts/remote-update.sh  # git pull → rebuild → restart → health che
 ## Architecture
 
 - **Backend entry**: `backend/app/main.py` — FastAPI app with lifespan (init_db → start_scheduler → yield → stop_scheduler → close_redis)
-- **6 routers**: auth, heartbeat, course, stats, notify, admin — all mounted at `/api/*`
+- **7 routers**: auth, heartbeat, course, stats, notify, admin, homework — all mounted at `/api/*`
 - **Core logic**: `services/study_engine.py` — anti-cheat effective-study-time engine (heartbeat validation, pause tolerance, page visibility, multi-tab prevention)
 - **Scheduled jobs**: `services/scheduler.py` — APScheduler cleans `heartbeat_logs` older than 30 days daily at 03:00
-- **Models**: single file `backend/app/models/models.py` — User, Course, StudySession, HeartbeatLog
+- **Models**: single file `backend/app/models/models.py` — User, Course, StudySession, HeartbeatLog, Assignment, Submission, GradingReport
 - **Frontend entry**: `frontend/src/main.js` — Vue3 SPA with hash-mode router (`createWebHashHistory`, not history mode — required for DingTalk H5)
 - **Key composables**: `useStudyTracker.js` (heartbeat sender), `useDingTalk.js` (DingTalk JSAPI wrapper)
 - **Video serving**: Nginx serves videos directly from `/uploads/videos/` (not FastAPI) for performance — mounted read-only into frontend container
+
+## Homework Management
+
+- **Feature**: Teachers can publish assignments for courses, students can submit homework images, AI agents can grade and generate reports
+- **Relationship**: One course = one assignment (1:1, enforced by `Assignment.course_id` unique constraint)
+- **Models**: `Assignment` (作业), `Submission` (提交), `GradingReport` (批改报告)
+- **Router**: `backend/app/routers/homework.py`
+- **Key APIs**:
+  - `GET/POST/PUT /api/homework/assignments/{course_id}` — CRUD for course assignment
+  - `POST /api/homework/upload` — upload homework images
+  - `POST /api/homework/submissions` — student submit homework
+  - `POST /api/homework/grading-callback` — AI agent callback (requires API Key auth)
+  - `GET /api/homework/reports/{submission_id}` — view grading report
+- **Frontend pages**: `HomeworkManage.vue` (teacher), `StudentHomework.vue` (student)
+- **Navigation**: CourseList card → "作业" button; TeacherDashboard → "作业管理" button
+- **AI agent integration**: Agent calls `/api/homework/grading-callback` with `X-API-Key` header, payload includes `submission_id`, `score`, `feedback`, `detail`
 
 ## Important conventions & gotchas
 

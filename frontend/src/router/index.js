@@ -90,6 +90,20 @@ const routes = [
     meta: { title: '管理后台', role: 'teacher' },  // 仅教师/管理员
   },
   {
+    // 教师端作业管理：发布作业、查看提交、批改报告
+    path: '/homework/:courseId',
+    name: 'HomeworkManage',
+    component: () => import('../views/HomeworkManage.vue'),
+    meta: { title: '作业管理', role: 'teacher' },
+  },
+  {
+    // 学生端作业列表：查看作业、上传图片、查看批改报告
+    path: '/student-homework/:courseId',
+    name: 'StudentHomework',
+    component: () => import('../views/StudentHomework.vue'),
+    meta: { title: '课程作业', role: 'student' },
+  },
+  {
     // 404 兜底路由：匹配所有未定义的路径
     // 不用专门的 404 页面，而是重定向到课程列表，对用户更友好
     path: '/:pathMatch(.*)*',

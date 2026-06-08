@@ -43,7 +43,10 @@
             <span class="mini-text">{{ c.progress.effective_minutes }}/{{ c.require_minutes }}分钟</span>
           </div>
         </div>
-        <div class="card-action">{{ c.progress?.is_completed ? '再看看' : '去学习' }}</div>
+        <div class="card-actions">
+          <span class="action-btn" @click.stop="goLearn(c)">{{ c.progress?.is_completed ? '再看看' : '去学习' }}</span>
+          <span class="action-btn homework" @click.stop="goHomework(c)">作业</span>
+        </div>
       </div>
     </div>
 
@@ -117,6 +120,10 @@ function statusText(p) {
 const goLearn = (course) => {
   router.push(`/learn/${course.id}`)
 }
+
+const goHomework = (course) => {
+  router.push(`/student-homework/${course.id}`)
+}
 </script>
 
 <style scoped>
@@ -154,9 +161,25 @@ const goLearn = (course) => {
 .mini-fill { height: 100%; background: #1890ff; border-radius: 2px; transition: width 0.3s; }
 .mini-text { font-size: 11px; color: #999; white-space: nowrap; }
 
-.card-action {
-  padding: 16px 18px; color: #1890ff; font-weight: 500; font-size: 14px;
-  border-left: 1px solid #f0f0f0; display: flex; align-items: center;
+.card-actions {
+  padding: 16px 18px;
+  border-left: 1px solid #f0f0f0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.action-btn {
+  color: #1890ff;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.action-btn.homework {
+  color: #52c41a;
+  font-size: 13px;
 }
 
 .bottom-nav {

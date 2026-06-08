@@ -48,6 +48,7 @@
       <router-link to="/admin" class="btn">管理后台</router-link>
       <template v-if="selectedCourseId">
         <router-link :to="`/course-edit/${selectedCourseId}`" class="btn">编辑课程</router-link>
+        <router-link :to="`/homework/${selectedCourseId}`" class="btn success">作业管理</router-link>
         <button v-if="isAdmin" class="btn danger" @click="deleteCourse">删除课程</button>
       </template>
     </div>
@@ -537,6 +538,7 @@ tr.incomplete { background: #fff7e6; }
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
+.btn.success { background: #52c41a; color: #fff; border-color: #52c41a; }
 .btn.danger { color: #ff4d4f; border-color: #ffccc7; }
 .btn.danger:hover { background: #fff1f0; }
 

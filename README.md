@@ -1,6 +1,15 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: 'cd8fa0c0-b737-4d4d-9c48-beb86f7ed52c'
+  PropagateID: 'cd8fa0c0-b737-4d4d-9c48-beb86f7ed52c'
+  ReservedCode1: 'ef804a7a-353f-494c-8326-ccf17e9b92a4'
+  ReservedCode2: 'ef804a7a-353f-494c-8326-ccf17e9b92a4'
+---
 
-
-# 22中暑假网课学习进度监督系统
+# 暑期在线学习平台
 
 基于钉钉 H5 微应用的学生学习进度监督系统，支持有效学习时长精确采集、统计与提醒。
 

@@ -1,13 +1,4 @@
----
-AIGC:
-  ContentProducer: '001191110102MAD55U9H0F10002'
-  ContentPropagator: '001191110102MAD55U9H0F10002'
-  Label: '1'
-  ProduceID: '25853bf8-8766-4d1c-b118-1ae95ce89bec'
-  PropagateID: '25853bf8-8766-4d1c-b118-1ae95ce89bec'
-  ReservedCode1: '60098701-6ca8-4a10-94c2-d58a34ffb5a6'
-  ReservedCode2: '60098701-6ca8-4a10-94c2-d58a34ffb5a6'
----
+
 
 # 22中暑假网课学习进度监督系统
 
@@ -24,11 +15,11 @@ AIGC:
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
+| 层级 | 技术                                 |
+| ---- | ------------------------------------ |
 | 后端 | Python FastAPI + MySQL 8.0 + Redis 7 |
-| 前端 | Vue3 + Vite + ECharts + 钉钉 JSAPI |
-| 部署 | Docker Compose + Nginx |
+| 前端 | Vue3 + Vite + ECharts + 钉钉 JSAPI   |
+| 部署 | Docker Compose + Nginx               |
 
 ## 快速启动
 
@@ -106,34 +97,34 @@ study-monitor/
 
 ## API 接口一览
 
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|------|
-| POST | /api/auth/dingtalk | 钉钉免登 | 公开 |
-| GET | /api/auth/me | 当前用户 | 登录 |
-| GET | /api/courses | 课程列表 | 登录 |
-| POST | /api/courses | 创建课程 | 老师 |
-| POST | /api/heartbeat/start | 开始学习 | 学生 |
-| POST | /api/heartbeat/beat | 心跳上报 | 学生 |
-| POST | /api/heartbeat/end | 结束学习 | 学生 |
-| GET | /api/stats/class-overview | 班级概览 | 老师 |
-| GET | /api/stats/my-progress | 我的进度 | 学生 |
-| GET | /api/stats/daily-summary | 每日统计 | 老师 |
-| GET | /api/stats/incomplete-students | 未完成学生 | 老师 |
-| POST | /api/notify/study-reminder | 发送学习提醒 | 老师 |
-| POST | /api/notify/daily-report | 发送每日报告 | 老师 |
-| GET | /api/notify/export | 导出 Excel | 老师 |
+| 方法 | 路径                           | 说明         | 权限 |
+| ---- | ------------------------------ | ------------ | ---- |
+| POST | /api/auth/dingtalk             | 钉钉免登     | 公开 |
+| GET  | /api/auth/me                   | 当前用户     | 登录 |
+| GET  | /api/courses                   | 课程列表     | 登录 |
+| POST | /api/courses                   | 创建课程     | 老师 |
+| POST | /api/heartbeat/start           | 开始学习     | 学生 |
+| POST | /api/heartbeat/beat            | 心跳上报     | 学生 |
+| POST | /api/heartbeat/end             | 结束学习     | 学生 |
+| GET  | /api/stats/class-overview      | 班级概览     | 老师 |
+| GET  | /api/stats/my-progress         | 我的进度     | 学生 |
+| GET  | /api/stats/daily-summary       | 每日统计     | 老师 |
+| GET  | /api/stats/incomplete-students | 未完成学生   | 老师 |
+| POST | /api/notify/study-reminder     | 发送学习提醒 | 老师 |
+| POST | /api/notify/daily-report       | 发送每日报告 | 老师 |
+| GET  | /api/notify/export             | 导出 Excel   | 老师 |
 
 ## 有效学习时长判定规则
 
-| 场景 | 计时 | 技术实现 |
-|------|------|----------|
-| 视频播放中 + 页面在前台 | 正常计时 | is_playing=true & is_page_visible=true |
-| 视频暂停 <= 5分钟 | 正常计时 | 暂停时间 < PAUSE_TOLERANCE |
-| 视频暂停 > 5分钟 | 暂停计时 | 暂停时间 >= PAUSE_TOLERANCE |
-| 页面切到后台 | 立即暂停 | document.hidden=true |
-| 心跳超时（>90秒） | 暂停计时 | gap > HEARTBEAT_TIMEOUT |
-| 5分钟无交互 | 暂停 + 弹窗验证 | idle > IDLE_THRESHOLD |
-| 随机验证弹窗未通过 | 暂停计时 | showVerify=true |
+| 场景                    | 计时            | 技术实现                               |
+| ----------------------- | --------------- | -------------------------------------- |
+| 视频播放中 + 页面在前台 | 正常计时        | is_playing=true & is_page_visible=true |
+| 视频暂停 <= 5分钟       | 正常计时        | 暂停时间 < PAUSE_TOLERANCE             |
+| 视频暂停 > 5分钟        | 暂停计时        | 暂停时间 >= PAUSE_TOLERANCE            |
+| 页面切到后台            | 立即暂停        | document.hidden=true                   |
+| 心跳超时（>90秒）       | 暂停计时        | gap > HEARTBEAT_TIMEOUT                |
+| 5分钟无交互             | 暂停 + 弹窗验证 | idle > IDLE_THRESHOLD                  |
+| 随机验证弹窗未通过      | 暂停计时        | showVerify=true                        |
 
 ## 钉钉应用配置
 
@@ -149,36 +140,36 @@ study-monitor/
 
 ### 全部运行时产物
 
-| 序号 | 产物类型 | 本地开发路径 | Docker 部署路径 | 是否持久化 | 清理机制 |
-|------|---------|-------------|----------------|----------|---------|
-| 1 | 上传视频 | `backend/uploads/videos/` | `/app/uploads/videos/` | **否（未挂载卷）** | 删课程时同步删；重上传时删旧 |
-| 2 | MySQL 数据 | 本地 MySQL `study_monitor` 库 | 命名卷 `mysql_data` → `/var/lib/mysql` | 是 | **无自动清理** |
-| 3 | Redis 缓存 | 本地 Redis 6379 | 命名卷 `redis_data` → `/data` | 是 | Key 自动过期（TTL） |
-| 4 | .env 配置 | `backend/.env`、`frontend/.env` | 环境变量注入容器 | 宿主机文件 | 手动管理 |
-| 5 | Excel 导出 | 不落盘（内存流直返） | 同左 | - | 不产生残留 |
-| 6 | Nginx 日志 | 本地不用 Nginx | `/var/log/nginx/` | **否（未挂载）** | 容器重启丢失 |
-| 7 | Docker 容器日志 | Docker 内部 | Docker 内部 | 是 | **无大小限制** |
+| 序号 | 产物类型        | 本地开发路径                        | Docker 部署路径                             | 是否持久化               | 清理机制                     |
+| ---- | --------------- | ----------------------------------- | ------------------------------------------- | ------------------------ | ---------------------------- |
+| 1    | 上传视频        | `backend/uploads/videos/`         | `/app/uploads/videos/`                    | **否（未挂载卷）** | 删课程时同步删；重上传时删旧 |
+| 2    | MySQL 数据      | 本地 MySQL `study_monitor` 库     | 命名卷 `mysql_data` → `/var/lib/mysql` | 是                       | **无自动清理**         |
+| 3    | Redis 缓存      | 本地 Redis 6379                     | 命名卷 `redis_data` → `/data`          | 是                       | Key 自动过期（TTL）          |
+| 4    | .env 配置       | `backend/.env`、`frontend/.env` | 环境变量注入容器                            | 宿主机文件               | 手动管理                     |
+| 5    | Excel 导出      | 不落盘（内存流直返）                | 同左                                        | -                        | 不产生残留                   |
+| 6    | Nginx 日志      | 本地不用 Nginx                      | `/var/log/nginx/`                         | **否（未挂载）**   | 容器重启丢失                 |
+| 7    | Docker 容器日志 | Docker 内部                         | Docker 内部                                 | 是                       | **无大小限制**         |
 
 ### MySQL 核心表说明
 
-| 表名 | 内容 | 增长速度 | 清理建议 |
-|------|------|---------|---------|
-| `users` | 教师学生账号、角色、密码哈希、钉钉ID、API Key、班级 | 极慢（按用户数） | 无需清理 |
-| `courses` | 课程标题、视频地址、要求学习时长、截止日期 | 极慢（按课程数） | 无需清理 |
-| `study_sessions` | 每次学习的起止时间、有效秒数、播放进度 | 中等（每人每天1-5条） | 可清理1年前记录 |
-| `heartbeat_logs` | 每30秒一次的心跳快照（防刷课依据） | **快（每学生每30秒1条）** | **必须定期清理，建议保留30天** |
+| 表名               | 内容                                                | 增长速度                        | 清理建议                             |
+| ------------------ | --------------------------------------------------- | ------------------------------- | ------------------------------------ |
+| `users`          | 教师学生账号、角色、密码哈希、钉钉ID、API Key、班级 | 极慢（按用户数）                | 无需清理                             |
+| `courses`        | 课程标题、视频地址、要求学习时长、截止日期          | 极慢（按课程数）                | 无需清理                             |
+| `study_sessions` | 每次学习的起止时间、有效秒数、播放进度              | 中等（每人每天1-5条）           | 可清理1年前记录                      |
+| `heartbeat_logs` | 每30秒一次的心跳快照（防刷课依据）                  | **快（每学生每30秒1条）** | **必须定期清理，建议保留30天** |
 
 > **heartbeat_logs 增长估算**：100人同时学1小时 = 12,000条；1天8小时 = 约96,000条。长期运行必须加定时清理。
 
 ### 备份清单（换服务器前必须备份的文件）
 
-| 优先级 | 备份项 | 路径 | 命令 |
-|--------|-------|------|------|
-| **必须** | MySQL 全量数据 | 数据库 `study_monitor` | `mysqldump -u root study_monitor > backup.sql` |
-| **必须** | 上传的视频文件 | `backend/uploads/` | `tar czf uploads.tar.gz backend/uploads/` |
-| **必须** | 后端 .env 配置 | `backend/.env` | `cp backend/.env env_backup.txt` |
-| **必须** | 前端 .env 配置 | `frontend/.env` | `cp frontend/.env frontend_env_backup.txt` |
-| 可选 | Redis 持久化文件 | Redis RDB/AOF | Docker 卷 `redis_data` 自动持久化 |
+| 优先级         | 备份项           | 路径                     | 命令                                             |
+| -------------- | ---------------- | ------------------------ | ------------------------------------------------ |
+| **必须** | MySQL 全量数据   | 数据库 `study_monitor` | `mysqldump -u root study_monitor > backup.sql` |
+| **必须** | 上传的视频文件   | `backend/uploads/`     | `tar czf uploads.tar.gz backend/uploads/`      |
+| **必须** | 后端 .env 配置   | `backend/.env`         | `cp backend/.env env_backup.txt`               |
+| **必须** | 前端 .env 配置   | `frontend/.env`        | `cp frontend/.env frontend_env_backup.txt`     |
+| 可选           | Redis 持久化文件 | Redis RDB/AOF            | Docker 卷 `redis_data` 自动持久化              |
 
 ### 服务器迁移步骤
 
@@ -267,10 +258,10 @@ DELETE FROM heartbeat_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY);
 
 ### 方案概述
 
-| 方案 | 源站 | CDN | 适用场景 | 月成本 |
-|------|------|-----|---------|--------|
+| 方案                | 源站                      | CDN                  | 适用场景                     | 月成本                 |
+| ------------------- | ------------------------- | -------------------- | ---------------------------- | ---------------------- |
 | **A（推荐）** | 本地服务器 115.223.38.172 | 天翼云 CDN（IP源站） | 有物理服务器、短期间歇性使用 | ~750-1000元（5TB流量） |
-| **B** | 天翼云主机（4C8G） | 天翼云 CDN（IP源站） | 无物理服务器、需要稳定运行 | CDN + 云主机 |
+| **B**         | 天翼云主机（4C8G）        | 天翼云 CDN（IP源站） | 无物理服务器、需要稳定运行   | CDN + 云主机           |
 
 ### CDN 工作原理
 
@@ -283,37 +274,37 @@ DELETE FROM heartbeat_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY);
 ### 启用 CDN 的步骤
 
 1. **天翼云控制台创建 CDN 加速域名**：
+
    - 业务类型：网页/小文件
    - 源站类型：IP 源站
    - 源站地址：`115.223.38.172`（方案A）或云主机公网IP（方案B）
    - 回源端口：80（HTTP回源）或 443（HTTPS回源）
    - 加速区域：国内
-
 2. **配置域名 CNAME**：在域名 DNS 解析中，将加速域名 CNAME 到天翼云分配的 CNAME 地址
-
 3. **后端配置 CDN 域名**：在 `backend/.env` 或 `docker-compose.yml` 的 environment 中添加：
+
    ```
    CDN_DOMAIN=https://cdn.your-domain.com
    ```
-
 4. **（可选）配置 HTTPS**：
+
    - CDN 控制台上传证书或申请免费证书
    - 如需 HTTPS 回源，参考 `nginx/https.conf` 配置源站 HTTPS
-
 5. **重启服务**：
+
    ```bash
    docker compose restart backend
    ```
 
 ### CDN 关键配置项
 
-| 配置项 | 推荐值 | 说明 |
-|--------|--------|------|
-| 缓存过期时间 | 7天 | 视频文件不变，可长缓存 |
-| 回源协议 | HTTP | 降低源站 SSL 开销 |
-| Range 回源 | 开启 | 支持视频拖动进度条 |
-| 过滤参数 | 不忽略 | 视频伪流式需要保留 ?start 参数 |
-| 防盗链 | 按需 | 可设 Referer 白名单防外部盗用 |
+| 配置项       | 推荐值 | 说明                           |
+| ------------ | ------ | ------------------------------ |
+| 缓存过期时间 | 7天    | 视频文件不变，可长缓存         |
+| 回源协议     | HTTP   | 降低源站 SSL 开销              |
+| Range 回源   | 开启   | 支持视频拖动进度条             |
+| 过滤参数     | 不忽略 | 视频伪流式需要保留 ?start 参数 |
+| 防盗链       | 按需   | 可设 Referer 白名单防外部盗用  |
 
 ### 无 CDN 降级
 

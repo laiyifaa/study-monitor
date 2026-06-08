@@ -23,7 +23,7 @@
   这确保了学生不能通过最小化窗口或暂停视频来刷时长
 """
 
-from sqlalchemy import Column, BigInteger, String, Enum, DateTime, ForeignKey, Boolean, Integer, DECIMAL
+from sqlalchemy import Column, BigInteger, String, Enum, DateTime, ForeignKey, Boolean, Integer, DECIMAL, Text
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -199,3 +199,83 @@ class HeartbeatLog(Base):
     video_current_time = Column(DECIMAL(12, 2), default=0, comment="当前播放秒数")
     # action 字段区分心跳类型，便于后续统计分析和异常检测
     action = Column(String(20), default="heartbeat", comment="heartbeat/play/pause/seek/verify/end")
+
+
+class Assignment(Base):
+    """
+    作业模型
+
+    用途：教师发布的作业，绑定到课程，包含题目描述和评分标准。
+
+    字段说明：
+        id              — 自增主键
+        course_id       — 所属课程 ID，外键关联 courses 表
+        title           — 作业标题
+        description     — 题目描述/要求（Markdown 或纯文本）
+        grading_prompt  — 评分标准/批改提示词（传递给智能体）
+        deadline        — 截止时间
+        status          — 作业状态：draft=草稿/published=已发布/closed=已关闭
+        created_at      — 创建时间
+        updated_at      — 最后修改时间
+    """
+    __tablename__ = "assignments"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    course_id = Column(BigInteger, ForeignKey("courses.id"), unique=True, nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, default="")
+    grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
+    deadline = Column(DateTime, nullable=True)
+    status = Column(Enum("draft", "published", "closed"), default="draft", nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class Submission(Base):
+    """
+    作业提交模型
+
+    用途：学生提交的作业，包含上传的图片列表。
+
+    字段说明：
+        id              — 自增主键
+        assignment_id   — 所属作业 ID，外键关联 assignments 表
+        user_id         — 提交的学生 ID，外键关联 users 表
+        images          — 图片 URL 数组（JSON 格式）
+        status          — 提交状态：pending=待批改/graded=已批改
+        submitted_at    — 提交时间
+    """
+    __tablename__ = "submissions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    assignment_id = Column(BigInteger, ForeignKey("assignments.id"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    images = Column(Text, default="[]", comment="图片URL数组(JSON)")
+    status = Column(Enum("pending", "graded"), default="pending", nullable=False)
+    submitted_at = Column(DateTime, server_default=func.now())
+
+
+class GradingReport(Base):
+    """
+    批改报告模型
+
+    用途：智能体生成的批改报告，一对一关联到提交。
+
+    字段说明：
+        id              — 自增主键
+        submission_id   — 关联的提交 ID，外键唯一约束
+        score           — 分数（0-100）
+        feedback        — 总评（Markdown 或纯文本）
+        detail          — 各题详细批改（JSON 格式）
+        generated_by    — 智能体标识（如 "wukong", "gpt-4o", "custom"）
+        created_at      — 生成时间
+    """
+    __tablename__ = "grading_reports"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    submission_id = Column(BigInteger, ForeignKey("submissions.id"), unique=True, nullable=False, index=True)
+    score = Column(Integer, default=0, comment="分数0-100")
+    feedback = Column(Text, default="")
+    detail = Column(Text, default="{}", comment="各题详细批改(JSON)")
+    generated_by = Column(String(50), default="", comment="智能体标识")
+    created_at = Column(DateTime, server_default=func.now())

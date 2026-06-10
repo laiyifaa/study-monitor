@@ -80,6 +80,11 @@ class GradingCallbackRequest(BaseModel):
     generated_by: str = "unknown"
 
 
+class ManualGradeRequest(BaseModel):
+    score: int
+    feedback: str = ""
+
+
 @router.post("/upload")
 async def upload_homework_image(
     file: UploadFile = File(...),
@@ -375,6 +380,44 @@ async def list_my_submissions(
         })
 
     return {"code": 0, "data": data}
+
+
+@router.post("/manual-grade/{submission_id}")
+async def manual_grade(
+    submission_id: int,
+    req: ManualGradeRequest,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Submission).where(Submission.id == submission_id))
+    submission = result.scalar_one_or_none()
+    if not submission:
+        raise HTTPException(status_code=404, detail="提交不存在")
+
+    existing_report = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id == submission_id)
+    )
+    if existing_report.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="该提交已有批改报告，不可重复批改")
+
+    if req.score < 0 or req.score > 100:
+        raise HTTPException(status_code=400, detail="分数必须在 0-100 之间")
+
+    report = GradingReport(
+        submission_id=submission_id,
+        score=req.score,
+        feedback=req.feedback,
+        detail="{}",
+        generated_by="teacher",
+    )
+    db.add(report)
+
+    submission.status = "graded"
+
+    await db.commit()
+    await db.refresh(report)
+
+    return {"code": 0, "data": {"report_id": report.id}}
 
 
 @router.post("/grading-callback")

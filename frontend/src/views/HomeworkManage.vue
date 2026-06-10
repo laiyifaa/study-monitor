@@ -73,11 +73,33 @@
               <div class="score">分数：{{ s.report.score }}</div>
               <div class="feedback">{{ s.report.feedback }}</div>
             </div>
+            <div class="submission-actions">
+              <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
+            </div>
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
           </div>
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="showSubmissionsModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showGradeModal" class="modal-overlay" @click.self="showGradeModal = false">
+      <div class="modal">
+        <h3>手动批改 — {{ gradingSubmission?.user?.name }}</h3>
+        <div class="form-group">
+          <label>分数（0-100）</label>
+          <input v-model.number="gradeForm.score" type="number" min="0" max="100" placeholder="请输入分数" />
+        </div>
+        <div class="form-group">
+          <label>评语</label>
+          <textarea v-model="gradeForm.feedback" placeholder="请输入评语"></textarea>
+        </div>
+        <div v-if="gradeSubmitting" class="loading">提交中...</div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showGradeModal = false">取消</button>
+          <button class="btn-primary" :disabled="gradeSubmitting" @click="submitGrade">确认批改</button>
         </div>
       </div>
     </div>
@@ -98,6 +120,10 @@ const submissions = ref([])
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showSubmissionsModal = ref(false)
+const showGradeModal = ref(false)
+const gradingSubmission = ref(null)
+const gradeForm = ref({ score: '', feedback: '' })
+const gradeSubmitting = ref(false)
 
 const form = ref({
   title: '',
@@ -187,6 +213,32 @@ function formatDate(dateStr) {
 
 function previewImage(url) {
   window.open(url, '_blank')
+}
+
+function openGradeModal(submission) {
+  gradingSubmission.value = submission
+  gradeForm.value = { score: '', feedback: '' }
+  showGradeModal.value = true
+}
+
+async function submitGrade() {
+  if (gradeForm.value.score === '' || gradeForm.value.score < 0 || gradeForm.value.score > 100) {
+    alert('请输入 0-100 的分数')
+    return
+  }
+  gradeSubmitting.value = true
+  try {
+    await api.post(`/homework/manual-grade/${gradingSubmission.value.id}`, {
+      score: gradeForm.value.score,
+      feedback: gradeForm.value.feedback,
+    })
+    showGradeModal.value = false
+    loadSubmissions()
+  } catch (e) {
+    alert('批改失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    gradeSubmitting.value = false
+  }
 }
 </script>
 
@@ -386,9 +438,14 @@ function previewImage(url) {
   font-size: 13px;
 }
 
+.submission-actions {
+  margin-top: 8px;
+}
+
 .submission-time {
   font-size: 12px;
   color: #999;
+  margin-top: 4px;
 }
 
 .loading, .empty {

@@ -451,7 +451,10 @@ async def business_stats(
 # ============================================================
 
 @router.get("/storage")
-async def storage_stats(user: User = Depends(require_role("ops", "admin"))):
+async def storage_stats(
+    user: User = Depends(require_role("ops", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
     """
     存储信息 — 视频文件大小、磁盘剩余、MySQL 数据库大小
 
@@ -480,6 +483,20 @@ async def storage_stats(user: User = Depends(require_role("ops", "admin"))):
                 video_total_size += os.path.getsize(fp)
                 video_count += 1
 
+    # --- MySQL 数据库大小 ---
+    mysql_size = 0
+    mysql_size_human = "-"
+    try:
+        db_size_result = await db.execute(
+            text("SELECT SUM(data_length + index_length) FROM information_schema.tables "
+                 "WHERE table_schema = :schema"),
+            {"schema": settings.MYSQL_DATABASE},
+        )
+        mysql_size = db_size_result.scalar() or 0
+        mysql_size_human = _human_size(mysql_size)
+    except Exception:
+        pass
+
     # --- 磁盘使用情况 ---
     disk = psutil.disk_usage("/data" if os.path.exists("/data") else "/")
 
@@ -499,6 +516,8 @@ async def storage_stats(user: User = Depends(require_role("ops", "admin"))):
             "video_total_size": video_total_size,
             "video_total_human": _human_size(video_total_size),
             "video_count": video_count,
+            "mysql_size": mysql_size,
+            "mysql_size_human": mysql_size_human,
             "disk_total": disk.total,
             "disk_total_human": _human_size(disk.total),
             "disk_used": disk.used,
@@ -534,7 +553,7 @@ async def overview(
     container_data = await container_stats(user)
     service_data = await service_health(user, db)
     business_data = await business_stats(user, db)
-    storage_data = await storage_stats(user)
+    storage_data = await storage_stats(user, db)
 
     # 合并所有告警
     all_alerts = []

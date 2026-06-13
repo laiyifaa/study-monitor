@@ -165,10 +165,10 @@ async def container_stats(user: User = Depends(require_role("ops", "admin"))):
     Docker 容器状态 — 仅查询 study-monitor 相关容器
 
     实现方式：
-        通过 Docker SDK (Python docker 包) 连接宿主机 Docker daemon，
+        通过 httpx 直接访问 Docker daemon 的 Unix socket REST API，
         查询名称以 "study-monitor" 开头的容器状态。
-        相比 subprocess 调用 docker CLI，SDK 方式更轻量、更可靠，
-        不需要在容器内安装 docker 命令行工具。
+        不依赖 docker-py SDK（7.x 版本与 requests 2.34+ 存在 http+docker URL
+        scheme 兼容问题），改用已有的 httpx + Unix socket 方式更轻量稳定。
 
     返回格式：
         containers: [{ name, status, state, image, created, ports, health }]
@@ -176,48 +176,57 @@ async def container_stats(user: User = Depends(require_role("ops", "admin"))):
     """
     containers = []
     try:
-        import docker
-        # 连接 Docker daemon（通过挂载的 /var/run/docker.sock）
-        # 注意：docker.from_env() 在 7.x 版本下存在 http+docker URL scheme 兼容问题，
-        # 改用低级 APIClient 直接指定 Unix socket，更稳定可靠
-        client = docker.APIClient(base_url="unix:///var/run/docker.sock")
-        # 仅查询 study-monitor 相关容器
-        all_containers = client.containers(all=True, filters={"name": "study-monitor"})
-        for c in all_containers:
-            # 从容器属性中提取信息
-            names = c.get("Names", [])
-            name = names[0].lstrip("/") if names else ""
-            
-            # 端口映射
-            ports_list = []
-            for port_binding in c.get("Ports", []):
-                ip = port_binding.get("IP", "")
-                public_port = port_binding.get("PublicPort", "")
-                private_port = port_binding.get("PrivatePort", "")
-                if public_port:
-                    ports_list.append(f"{ip}:{public_port}->{private_port}")
+        import httpx
+        # 通过 Unix socket 连接 Docker daemon API
+        # Docker daemon 默认监听 /var/run/docker.sock，提供 HTTP REST API
+        socket_path = "/var/run/docker.sock"
+        if not os.path.exists(socket_path):
+            containers = [{"error": f"Docker socket 不存在: {socket_path}，请检查卷挂载"}]
+        else:
+            transport = httpx.HTTPTransport(uds=socket_path)
+            with httpx.Client(transport=transport, timeout=10) as client:
+                # 查询所有 study-monitor 相关容器（含已停止的）
+                filters = json.dumps({"name": ["study-monitor"]})
+                resp = client.get(f"http://localhost/containers/json?all=true&filters={filters}")
+                resp.raise_for_status()
+                for c in resp.json():
+                    # 容器名称（Docker 返回的 Names 带前导 "/"）
+                    names = c.get("Names", [])
+                    name = names[0].lstrip("/") if names else ""
                     
-            # 健康状态
-            health = ""
-            state = c.get("State", "")
-            status = c.get("Status", "")
-            if c.get("Health"):
-                health = c["Health"].get("Status", "")
+                    # 端口映射
+                    ports_list = []
+                    for port_binding in c.get("Ports", []):
+                        ip = port_binding.get("IP", "")
+                        public_port = port_binding.get("PublicPort", "")
+                        private_port = port_binding.get("PrivatePort", "")
+                        if public_port:
+                            ports_list.append(f"{ip}:{public_port}->{private_port}")
 
-            containers.append({
-                "name": name,
-                "status": status,  # "Up 2 hours" 等
-                "state": state,     # "running", "exited" 等
-                "image": c.get("Image", ""),
-                "created": c.get("Created", ""),
-                "ports": ", ".join(ports_list) if ports_list else "",
-                "health": health,
-            })
-        client.close()
+                    # 健康状态
+                    health = ""
+                    state_obj = c.get("State", "")
+                    if isinstance(state_obj, dict) and state_obj.get("Health"):
+                        health = state_obj["Health"].get("Status", "")
+
+                    # state 可能是字符串或 dict
+                    if isinstance(state_obj, dict):
+                        state = state_obj.get("Status", "")
+                    else:
+                        state = str(state_obj)
+
+                    containers.append({
+                        "name": name,
+                        "status": c.get("Status", ""),  # "Up 2 hours" 等人类可读
+                        "state": state,                  # "running", "exited" 等机器可读
+                        "image": c.get("Image", ""),
+                        "created": c.get("Created", ""),
+                        "ports": ", ".join(ports_list) if ports_list else "",
+                        "health": health,
+                    })
     except ImportError:
-        containers = [{"error": "Docker SDK 未安装，请在 requirements.txt 中添加 docker 包"}]
+        containers = [{"error": "httpx 未安装，无法连接 Docker API"}]
     except Exception as e:
-        # Docker daemon 不可达时（如 socket 未挂载）
         containers = [{"error": f"Docker 连接失败: {str(e)}"}]
 
     # 告警判定：任何容器非 running

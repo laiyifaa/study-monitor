@@ -14,15 +14,14 @@
     <!-- ====== 顶部状态栏 ====== -->
     <div class="ops-header">
       <div class="oh-left">
-        <button class="oh-back" @click="$router.back()">&larr;</button>
-        <span class="oh-title">运维监控</span>
+        <button class="oh-back" @click="$router.back()">&larr; 返回</button>
         <span class="oh-badge" :class="alerts.length > 0 ? 'badge-err' : 'badge-ok'">
-          {{ alerts.length > 0 ? alerts.length + ' 告警' : '正常' }}
+          {{ alerts.length > 0 ? alerts.length + ' 告警' : '全部正常' }}
         </span>
       </div>
       <div class="oh-right">
         <span class="oh-time">{{ currentTime }}</span>
-        <button class="oh-refresh" @click="manualRefresh" :class="{ spinning: refreshing }">&#8635;</button>
+        <button class="oh-refresh" @click="manualRefresh" :class="{ spinning: refreshing }" title="手动刷新">&#8635;</button>
       </div>
     </div>
 
@@ -353,17 +352,24 @@ onUnmounted(() => {
   display: flex; justify-content: space-around; gap: 8px; margin-bottom: 14px;
 }
 .ring-wrap { text-align: center; flex: 1; }
-.ring-box { position: relative; width: 80px; height: 80px; margin: 0 auto 4px; }
-.ring-svg { width: 80px; height: 80px; }
+.ring-box { position: relative; width: 68px; height: 68px; margin: 0 auto 4px; }
+.ring-svg { width: 68px; height: 68px; }
 .ring-arc { transition: stroke-dashoffset 0.8s ease; }
 .ring-inner {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
   text-align: center;
 }
-.ring-pct { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ring-pct { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .ring-label { font-size: 13px; color: #666; font-weight: 500; }
 .ring-info { font-size: 11px; color: #999; margin-top: 2px; }
 .ring-alert { font-size: 11px; color: #ff4d4f; margin-top: 2px; font-weight: 500; }
+
+/* PC 宽屏下环形图再缩小 */
+@media (min-width: 768px) {
+  .ring-box { width: 54px; height: 54px; }
+  .ring-svg { width: 54px; height: 54px; }
+  .ring-pct { font-size: 13px; }
+}
 
 /* ====== 迷你卡片行 ====== */
 .mini-card-row {

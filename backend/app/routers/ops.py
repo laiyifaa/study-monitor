@@ -178,30 +178,38 @@ async def container_stats(user: User = Depends(require_role("ops", "admin"))):
     try:
         import docker
         # 连接 Docker daemon（通过挂载的 /var/run/docker.sock）
-        client = docker.from_env()
+        # 注意：docker.from_env() 在 7.x 版本下存在 http+docker URL scheme 兼容问题，
+        # 改用低级 APIClient 直接指定 Unix socket，更稳定可靠
+        client = docker.APIClient(base_url="unix:///var/run/docker.sock")
         # 仅查询 study-monitor 相关容器
-        all_containers = client.containers.list(all=True, filters={"name": "study-monitor"})
+        all_containers = client.containers(all=True, filters={"name": "study-monitor"})
         for c in all_containers:
             # 从容器属性中提取信息
+            names = c.get("Names", [])
+            name = names[0].lstrip("/") if names else ""
+            
+            # 端口映射
             ports_list = []
-            for port_binding in c.ports.values():
-                if port_binding and isinstance(port_binding, list):
-                    for pb in port_binding:
-                        ports_list.append(f"{pb.get('HostIp', '')}:{pb.get('HostPort', '')}")
-                elif port_binding and isinstance(port_binding, dict):
-                    ports_list.append(f"{port_binding.get('HostIp', '')}:{port_binding.get('HostPort', '')}")
-
-            # 健康状态（如果有配置 healthcheck）
+            for port_binding in c.get("Ports", []):
+                ip = port_binding.get("IP", "")
+                public_port = port_binding.get("PublicPort", "")
+                private_port = port_binding.get("PrivatePort", "")
+                if public_port:
+                    ports_list.append(f"{ip}:{public_port}->{private_port}")
+                    
+            # 健康状态
             health = ""
-            if c.attrs.get("State", {}).get("Health"):
-                health = c.attrs["State"]["Health"].get("Status", "")
+            state = c.get("State", "")
+            status = c.get("Status", "")
+            if c.get("Health"):
+                health = c["Health"].get("Status", "")
 
             containers.append({
-                "name": c.name,
-                "status": c.status,  # "running", "exited", "restarting" 等
-                "state": c.status,
-                "image": c.attrs.get("Config", {}).get("Image", ""),
-                "created": c.attrs.get("Created", ""),
+                "name": name,
+                "status": status,  # "Up 2 hours" 等
+                "state": state,     # "running", "exited" 等
+                "image": c.get("Image", ""),
+                "created": c.get("Created", ""),
                 "ports": ", ".join(ports_list) if ports_list else "",
                 "health": health,
             })

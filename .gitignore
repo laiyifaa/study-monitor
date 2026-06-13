@@ -40,3 +40,4 @@ logs/
 
 # Docker
 docker-compose.override.yml
+backend/uploads/videos/

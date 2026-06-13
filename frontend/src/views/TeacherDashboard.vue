@@ -46,6 +46,7 @@
       <router-link to="/course-edit/0" class="btn primary">+ 新建课程</router-link>
       <router-link to="/" class="btn" target="_blank">预览课程</router-link>
       <router-link to="/admin" class="btn">管理后台</router-link>
+      <router-link v-if="isOpsOrAdmin" to="/ops" class="btn info">运维面板</router-link>
       <template v-if="selectedCourseId">
         <router-link :to="`/course-edit/${selectedCourseId}`" class="btn">编辑课程</router-link>
         <router-link :to="`/homework/${selectedCourseId}`" class="btn success">作业管理</router-link>
@@ -201,7 +202,8 @@ import { useAuthStore } from '../utils/auth'
 const router = useRouter()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user.value?.role === 'admin')
-const isTeacherOrAdmin = computed(() => auth.user.value?.role === 'teacher' || auth.user.value?.role === 'admin')
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin', 'ops'].includes(auth.user.value?.role))
+const isOpsOrAdmin = computed(() => auth.user.value?.role === 'ops' || auth.user.value?.role === 'admin')
 
 /** API Key 状态 */
 const apiKeyInfo = ref({ has_key: false, masked: '' })

@@ -208,7 +208,9 @@ const MiniCard = {
         ]),
         h('div', { class: 'mc-body' }, [
           h('span', { class: 'mc-val', style: { color: valColor } }, numVal.toFixed(2)),
-          h('span', { class: 'mc-unit' }, props.unit),
+          h('span', { class: 'mc-slash' }, '/'),
+          h('span', { class: 'mc-max' }, props.max),
+          h('span', { class: 'mc-unit' }, ' ' + props.unit),
         ]),
         hasMax
           ? h('div', { class: 'mc-bar-track' }, [
@@ -417,6 +419,8 @@ onUnmounted(() => {
   display: flex; align-items: baseline; gap: 2px; margin-bottom: 5px;
 }
 .mc-val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mc-slash { font-size: 12px; color: #bbb; margin: 0 1px; }
+.mc-max { font-size: 12px; color: #999; font-weight: 500; font-variant-numeric: tabular-nums; }
 .mc-unit { font-size: 11px; color: #999; }
 .mc-bar-track {
   height: 4px; background: #f0f0f0; border-radius: 2px; overflow: hidden;

@@ -104,6 +104,13 @@ const routes = [
     meta: { title: '课程作业', role: 'student' },
   },
   {
+    // 运维监控面板：服务器资源、容器状态、业务数据、存储信息
+    path: '/ops',
+    name: 'OpsPanel',
+    component: () => import('../views/OpsPanel.vue'),
+    meta: { title: '运维监控', role: 'ops' },  // 仅运维/管理员
+  },
+  {
     // 404 兜底路由：匹配所有未定义的路径
     // 不用专门的 404 页面，而是重定向到课程列表，对用户更友好
     path: '/:pathMatch(.*)*',
@@ -157,14 +164,17 @@ router.beforeEach((to, from, next) => {
       if (user.role === 'admin') {
         return next()
       }
-      // teacher 专属页面：非 teacher 角色拒绝访问
-      if (requiredRole === 'teacher' && user.role !== 'teacher') {
+      // ops 专属页面：仅 ops 角色可访问
+      if (requiredRole === 'ops' && user.role !== 'ops') {
         return next('/')
       }
-      // student 专属页面：teacher 也能访问学生页面
-      // 原因：教师可能需要预览学生视角、查看学习内容
-      // 只有非 student 且非 teacher 的角色才被拒绝
-      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher') {
+      // teacher 专属页面：ops 也能访问教师页面
+      if (requiredRole === 'teacher' && user.role !== 'teacher' && user.role !== 'ops') {
+        return next('/')
+      }
+      // student 专属页面：teacher 和 ops 也能访问学生页面
+      // 原因：教师/运维可能需要预览学生视角、查看学习内容
+      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher' && user.role !== 'ops') {
         return next('/')
       }
     } catch {

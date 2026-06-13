@@ -165,6 +165,7 @@
             <option value="student">学生</option>
             <option value="teacher">教师</option>
             <option value="admin">管理员</option>
+            <option value="ops">运维</option>
           </select>
         </div>
         <div class="form-item">
@@ -267,7 +268,7 @@ async function loadClasses() {
  * 角色中文名
  */
 function roleLabel(role) {
-  return { student: '学生', teacher: '教师', admin: '管理员' }[role] || role
+  return { student: '学生', teacher: '教师', admin: '管理员', ops: '运维' }[role] || role
 }
 
 /**
@@ -485,6 +486,7 @@ td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; }
 .role-tag.student { background: #e6f7ff; color: #1890ff; }
 .role-tag.teacher { background: #f6ffed; color: #52c41a; }
 .role-tag.admin { background: #fff7e6; color: #fa8c16; }
+.role-tag.ops { background: #e6fffb; color: #13c2c2; }
 
 /* 角色下拉 */
 .role-select {

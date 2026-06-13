@@ -111,6 +111,7 @@ const roleLabel = computed(() => {
   const role = auth.user.value?.role
   if (role === 'teacher') return '教师'
   if (role === 'admin') return '管理员'
+  if (role === 'ops') return '运维'
   return '学生'
 })
 
@@ -221,6 +222,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .role-tag.student { background: #e6f7ff; color: #1890ff; }
 .role-tag.teacher { background: #f6ffed; color: #52c41a; }
 .role-tag.admin { background: #fff7e6; color: #fa8c16; }
+.role-tag.ops { background: #e6fffb; color: #13c2c2; }
 
 /* 用户姓名 */
 .user-name {

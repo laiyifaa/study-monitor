@@ -29,7 +29,6 @@ API 列表：
 
 import os
 import time
-import subprocess
 import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
@@ -165,63 +164,53 @@ async def container_stats(user: User = Depends(require_role("ops", "admin"))):
     """
     Docker 容器状态 — 仅查询 study-monitor 相关容器
 
+    实现方式：
+        通过 Docker SDK (Python docker 包) 连接宿主机 Docker daemon，
+        查询名称以 "study-monitor" 开头的容器状态。
+        相比 subprocess 调用 docker CLI，SDK 方式更轻量、更可靠，
+        不需要在容器内安装 docker 命令行工具。
+
     返回格式：
-        containers: [{ name, status, state, restarts, image, created, ports }]
+        containers: [{ name, status, state, image, created, ports, health }]
         alerts — 任何容器非 running 时触发告警
     """
+    containers = []
     try:
-        # 使用 docker compose ps 获取项目容器信息
-        result = subprocess.run(
-            ["docker", "compose", "ps", "--format", "json"],
-            capture_output=True, text=True, timeout=10,
-            cwd="/data/study-monitor" if os.path.exists("/data/study-monitor") else ".",
-        )
-        if result.returncode != 0:
-            # 降级：尝试 docker ps
-            result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", "name=study-monitor", "--format",
-                 "{{.Names}}|{{.Status}}|{{.State}}|{{.Image}}|{{.Ports}}"],
-                capture_output=True, text=True, timeout=10,
-            )
-            containers = []
-            for line in result.stdout.strip().split("\n"):
-                if not line:
-                    continue
-                parts = line.split("|")
-                name = parts[0] if len(parts) > 0 else ""
-                status = parts[1] if len(parts) > 1 else ""
-                state = parts[2] if len(parts) > 2 else ""
-                image = parts[3] if len(parts) > 3 else ""
-                # 提取重启次数（从 Status 中解析 "Up 2 hours" 或 "Restarting"）
-                restarts = 0
-                containers.append({
-                    "name": name,
-                    "status": status,
-                    "state": state,
-                    "restarts": restarts,
-                    "image": image,
-                })
-        else:
-            # docker compose ps --format json 每行一个 JSON
-            containers = []
-            for line in result.stdout.strip().split("\n"):
-                if not line:
-                    continue
-                try:
-                    c = json.loads(line)
-                    containers.append({
-                        "name": c.get("Name", c.get("name", "")),
-                        "status": c.get("Status", c.get("status", "")),
-                        "state": c.get("State", c.get("state", "")),
-                        "restarts": 0,  # docker compose ps 不直接提供重启次数
-                        "image": c.get("Image", c.get("image", "")),
-                        "ports": c.get("Ports", c.get("ports", "")),
-                        "health": c.get("Health", c.get("health", "")),
-                    })
-                except json.JSONDecodeError:
-                    continue
+        import docker
+        # 连接 Docker daemon（通过挂载的 /var/run/docker.sock）
+        client = docker.from_env()
+        # 仅查询 study-monitor 相关容器
+        all_containers = client.containers.list(all=True, filters={"name": "study-monitor"})
+        for c in all_containers:
+            # 从容器属性中提取信息
+            ports_list = []
+            for port_binding in c.ports.values():
+                if port_binding and isinstance(port_binding, list):
+                    for pb in port_binding:
+                        ports_list.append(f"{pb.get('HostIp', '')}:{pb.get('HostPort', '')}")
+                elif port_binding and isinstance(port_binding, dict):
+                    ports_list.append(f"{port_binding.get('HostIp', '')}:{port_binding.get('HostPort', '')}")
+
+            # 健康状态（如果有配置 healthcheck）
+            health = ""
+            if c.attrs.get("State", {}).get("Health"):
+                health = c.attrs["State"]["Health"].get("Status", "")
+
+            containers.append({
+                "name": c.name,
+                "status": c.status,  # "running", "exited", "restarting" 等
+                "state": c.status,
+                "image": c.attrs.get("Config", {}).get("Image", ""),
+                "created": c.attrs.get("Created", ""),
+                "ports": ", ".join(ports_list) if ports_list else "",
+                "health": health,
+            })
+        client.close()
+    except ImportError:
+        containers = [{"error": "Docker SDK 未安装，请在 requirements.txt 中添加 docker 包"}]
     except Exception as e:
-        containers = [{"error": str(e)}]
+        # Docker daemon 不可达时（如 socket 未挂载）
+        containers = [{"error": f"Docker 连接失败: {str(e)}"}]
 
     # 告警判定：任何容器非 running
     alerts = []

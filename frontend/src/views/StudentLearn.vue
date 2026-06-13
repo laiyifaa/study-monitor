@@ -136,12 +136,17 @@ const videoPlayer = ref(null)
 
 /**
  * 计算本地视频的播放源地址：
- * 优先使用 CDN 地址（video_cdn_url），降级到原始 API 路径
- * 这样 CDN 开启时视频流量走 CDN，CDN 未配置时走 Nginx 直连
+ * 1. 优先使用 CDN 地址（video_cdn_url）—— 天翼云 CDN 加速
+ * 2. 降级到 Nginx 静态路径 /uploads/videos/ —— 走 sendfile 零拷贝，性能远超 FastAPI FileResponse
+ *
+ * 注意：不使用 /api/courses/video-file/ 路径，因为：
+ * - 视频文件只挂载到前端 Nginx 容器，后端容器内无视频文件（会导致 404）
+ * - 即使后端容器有文件，FastAPI FileResponse 也受 Python GIL 限制，并发能力远不如 Nginx sendfile
+ * - Nginx sendfile 直接在内核态完成磁盘→网卡的数据传输，不经过用户态
  */
 const videoSourceUrl = computed(() => {
   if (videoCdnUrl.value) return videoCdnUrl.value
-  return `/api/courses/video-file/${videoUrl.value}`
+  return `/uploads/videos/${videoUrl.value}`
 })
 
 /**

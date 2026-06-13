@@ -14,7 +14,8 @@
  *
  * 路由设计说明：
  *   - '/' 课程列表：公开页面，未登录也可查看（降低使用门槛）
- *   - '/learn/:courseId' 学习页：仅 student 角色可访问，teacher 也能听课所以放行
+ *   - '/course/:courseId' 课程详情：展示课程信息+小节列表
+ *   - '/learn/:courseId/:sectionId' 学习页：仅 student 角色可访问，teacher 也能听课所以放行
  *   - '/my-progress' 我的进度：仅 student 角色可访问
  *   - '/teacher' 统计看板：仅 teacher/admin 可访问
  *   - '/course-edit/:courseId?' 编辑课程：仅 teacher/admin 可访问，courseId 可选（新建/编辑）
@@ -59,7 +60,14 @@ const routes = [
     meta: { title: '登录' },  // 无 role 限制，登录页本身不需要认证
   },
   {
-    path: '/learn/:courseId',      // :courseId 为动态参数，对应课程 ID
+    // 课程详情页：展示课程信息+小节列表，学生点击小节进入学习
+    path: '/course/:courseId',
+    name: 'CourseDetail',
+    component: () => import('../views/CourseDetail.vue'),
+    meta: { title: '课程详情' },  // 无 role 限制，登录即可
+  },
+  {
+    path: '/learn/:courseId/:sectionId',  // :courseId 课程ID + :sectionId 小节ID
     name: 'StudentLearn',
     component: () => import('../views/StudentLearn.vue'),
     meta: { title: '在线学习', role: 'student' },  // 仅学生角色

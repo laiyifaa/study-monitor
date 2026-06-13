@@ -39,7 +39,8 @@ router = APIRouter(prefix="/api/heartbeat", tags=["心跳"])
 
 class StartRequest(BaseModel):
     """开始学习请求体"""
-    course_id: int  # 要学习的课程ID
+    course_id: int          # 要学习的课程ID
+    section_id: int | None = None  # 要学习的小节ID（v3.0新增，可选兼容旧数据）
 
 
 class BeatRequest(BaseModel):
@@ -53,6 +54,7 @@ class BeatRequest(BaseModel):
         action:           动作类型，默认 "heartbeat"，结束时传 "end"
     """
     course_id: int
+    section_id: int | None = None  # 小节ID（v3.0新增）
     is_playing: bool = True
     is_page_visible: bool = True
     video_current_time: float = 0
@@ -65,7 +67,8 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
     开始学习 — 创建一个新的学习会话
 
     请求参数：
-        body.course_id (int): 要学习的课程ID
+        body.course_id (int):    要学习的课程ID
+        body.section_id (int):   要学习的小节ID（可选）
 
     返回格式：
         code=0, data.session_id: 新创建的会话唯一标识
@@ -73,25 +76,22 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
     核心业务逻辑：
         1. 先结束该用户该课程的旧活跃会话（防止同一课程同时开多个会话刷时长）
         2. 生成唯一的 session_id（格式：用户ID_课程ID_时间戳）
-        3. 创建 StudySession 记录写入数据库
+        3. 创建 StudySession 记录写入数据库（含 section_id）
 
-    权限要求：已登录用户（通常是 student 角色）
-
-    安全说明：
-        - 防多开策略：即使前端漏调 end 接口，新的 start 也会自动清理旧会话
+    权限要求：已登录用户
     """
-    # 先结束已有的活跃会话（防多开）——防止用户打开多个标签页同时刷时长
+    # 先结束已有的活跃会话（防多开）
     await StudyEngine.end_active_sessions(db, user.id, req.course_id)
 
-    # session_id 由用户ID + 课程ID + 时间戳组成，确保唯一且可追溯
     session_id = f"{user.id}_{req.course_id}_{int(time.time())}"
     session = StudySession(
         user_id=user.id,
         course_id=req.course_id,
+        section_id=req.section_id,  # v3.0: 关联到小节
         session_id=session_id,
         start_time=datetime.now(),
         last_heartbeat=datetime.now(),
-        effective_seconds=0,  # 初始有效时长为0，由心跳逐步累积
+        effective_seconds=0,
         video_progress=0,
         is_active=True,
     )

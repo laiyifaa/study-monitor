@@ -131,7 +131,7 @@
     </div>
 
     <!-- 底部刷新提示 -->
-    <div class="ops-footer">每 10 秒自动刷新 &middot; 上次更新 {{ lastUpdateTime }}</div>
+    <div class="ops-footer">每 5 秒自动刷新 &middot; 上次更新 {{ lastUpdateTime }}</div>
   </div>
 </template>
 
@@ -307,7 +307,7 @@ function formatContainerName(name) {
 onMounted(() => {
   fetchData()
   updateTime()
-  timer = setInterval(fetchData, 10000)
+  timer = setInterval(fetchData, 5000)
   clockTimer = setInterval(updateTime, 1000)
 })
 

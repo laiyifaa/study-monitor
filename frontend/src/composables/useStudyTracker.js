@@ -55,7 +55,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import api from '../utils/api'
 
-export function useStudyTracker(courseId) {
+export function useStudyTracker(courseId, sectionId = null) {
   // ──────────────────────────────────────────────
   // 响应式状态定义
   // ──────────────────────────────────────────────
@@ -122,7 +122,7 @@ export function useStudyTracker(courseId) {
    */
   const startSession = async () => {
     try {
-      const res = await api.post('/heartbeat/start', { course_id: courseId })
+      const res = await api.post('/heartbeat/start', { course_id: courseId, section_id: sectionId })
       if (res.data.code === 0) {
         // 保存会话 ID，后续心跳和结束会话都需要携带
         sessionId.value = res.data.data.session_id
@@ -157,6 +157,7 @@ export function useStudyTracker(courseId) {
       try {
         const res = await api.post('/heartbeat/beat', {
           course_id: courseId,
+          section_id: sectionId,
           is_playing: isPlaying.value,
           is_page_visible: isPageVisible.value,
           video_current_time: videoCurrentTime.value,
@@ -285,6 +286,7 @@ export function useStudyTracker(courseId) {
     try {
       await api.post('/heartbeat/end', {
         course_id: courseId,
+        section_id: sectionId,
         is_playing: isPlaying.value,
         is_page_visible: isPageVisible.value,
         video_current_time: videoCurrentTime.value,
@@ -333,6 +335,7 @@ export function useStudyTracker(courseId) {
     try {
       const res = await api.post('/heartbeat/beat', {
         course_id: courseId,
+        section_id: sectionId,
         is_playing: isPlaying.value,
         is_page_visible: isPageVisible.value,
         video_current_time: videoCurrentTime.value,

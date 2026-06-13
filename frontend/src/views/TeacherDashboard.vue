@@ -68,7 +68,7 @@
 
     <!-- 已选择课程时显示统计内容 -->
     <template v-else>
-      <!-- ==================== 概览卡片：4格网格 ==================== -->
+      <!-- ==================== 概览卡片：5格网格 ==================== -->
       <div class="overview-cards">
         <div class="card">
           <div class="card-num">{{ overview.total_students }}</div>
@@ -88,6 +88,11 @@
           <!-- 完成率：蓝色主题色，保留1位小数 -->
           <div class="card-num primary">{{ (overview.completion_rate * 100).toFixed(1) }}%</div>
           <div class="card-label">完成率</div>
+        </div>
+        <div class="card">
+          <!-- 小节数量 -->
+          <div class="card-num">{{ overview.section_count || 0 }}</div>
+          <div class="card-label">课程小节</div>
         </div>
       </div>
 
@@ -216,7 +221,7 @@ const courses = ref([])
 const selectedCourseId = ref('')
 
 /** 班级概览数据 */
-const overview = ref({ total_students: 0, completed_students: 0, completion_rate: 0, require_minutes: 60 })
+const overview = ref({ total_students: 0, completed_students: 0, completion_rate: 0, require_minutes: 60, section_count: 0 })
 const students = ref([])
 const sending = ref(false)
 
@@ -495,8 +500,8 @@ function copyApiKey() {
   font-size: 14px; background: #fff;
 }
 
-/* 概览卡片：4列等宽网格 */
-.overview-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+/* 概览卡片：5列等宽网格 */
+.overview-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
 .card {
   background: #fff; border-radius: 8px; padding: 16px; text-align: center;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);

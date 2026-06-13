@@ -42,10 +42,10 @@
         <RingGauge label="交换分区" :percent="data.server.swap_percent" :alert="data.server.swap_percent > 90" :info="'Swap'" color="#fa8c16" />
       </div>
       <div class="mini-card-row">
-        <MiniCard emoji="&#8593;" label="上行" :value="data.server.net_upload_mbps" unit="Mbps" />
-        <MiniCard emoji="&#8595;" label="下行" :value="data.server.net_download_mbps" unit="Mbps" />
-        <MiniCard emoji="&#8592;" label="磁盘读" :value="data.server.disk_io_read_mbs" unit="MB/s" />
-        <MiniCard emoji="&#8594;" label="磁盘写" :value="data.server.disk_io_write_mbs" unit="MB/s" />
+        <MiniCard emoji="&#8593;" label="上行" :value="data.server.net_upload_mbps" unit="Mbps" :max="480" />
+        <MiniCard emoji="&#8595;" label="下行" :value="data.server.net_download_mbps" unit="Mbps" :max="400" />
+        <MiniCard emoji="&#8592;" label="磁盘读" :value="data.server.disk_io_read_mbs" unit="MB/s" :max="170" />
+        <MiniCard emoji="&#8594;" label="磁盘写" :value="data.server.disk_io_write_mbs" unit="MB/s" :max="70" />
       </div>
     </div>
 
@@ -178,18 +178,48 @@ const RingGauge = {
   }
 }
 
-/** 迷你数据卡片 */
+/** 迷你数据卡片 — 带彩色进度条（有 max 时启用） */
 const MiniCard = {
-  props: { emoji: String, label: String, value: [Number, String], unit: String },
+  props: {
+    emoji: String,
+    label: String,
+    value: [Number, String],
+    unit: String,
+    max: { type: Number, default: 0 },   // 0 = 无进度条
+  },
   setup(props) {
-    return () => h('div', { class: 'mini-card' }, [
-      h('div', { class: 'mc-emoji' }, props.emoji),
-      h('div', { class: 'mc-body' }, [
-        h('div', { class: 'mc-val' }, typeof props.value === 'number' ? props.value.toFixed(2) : props.value),
-        h('div', { class: 'mc-unit' }, props.unit),
-      ]),
-      h('div', { class: 'mc-label' }, props.label),
-    ])
+    return () => {
+      const numVal = typeof props.value === 'number' ? props.value : 0
+      // 有 max 时算比率与颜色
+      const hasMax = props.max > 0
+      const ratio = hasMax ? Math.min(numVal / props.max, 1.5) : 0   // 上限1.5避免溢出
+      const pct = Math.min(ratio * 100, 100)                          // 进度条宽度封顶100%
+      let barColor = '#52c41a'                                         // 绿色：正常
+      let valColor = '#333'
+      if (hasMax) {
+        if (numVal > props.max) { barColor = '#ff4d4f'; valColor = '#ff4d4f' }        // 红：超限
+        else if (numVal > props.max * 0.8) { barColor = '#faad14'; valColor = '#d48806' } // 黄：接近
+      }
+
+      return h('div', { class: 'mini-card' }, [
+        h('div', { class: 'mc-top' }, [
+          h('span', { class: 'mc-emoji' }, props.emoji),
+          h('span', { class: 'mc-label' }, props.label),
+        ]),
+        h('div', { class: 'mc-body' }, [
+          h('span', { class: 'mc-val', style: { color: valColor } }, numVal.toFixed(2)),
+          h('span', { class: 'mc-unit' }, props.unit),
+        ]),
+        hasMax
+          ? h('div', { class: 'mc-bar-track' }, [
+              h('div', {
+                class: 'mc-bar-fill',
+                style: { width: pct + '%', background: barColor },
+              }),
+            ])
+          : null,
+      ])
+    }
   }
 }
 
@@ -377,13 +407,24 @@ onUnmounted(() => {
 }
 .mini-card {
   background: #fafafa; border-radius: 8px; padding: 10px 8px;
-  text-align: center;
 }
-.mc-emoji { font-size: 18px; margin-bottom: 4px; }
-.mc-body { display: flex; align-items: baseline; justify-content: center; gap: 2px; }
-.mc-val { font-size: 16px; font-weight: 700; color: #333; font-variant-numeric: tabular-nums; }
+.mc-top {
+  display: flex; align-items: center; gap: 4px; margin-bottom: 4px;
+}
+.mc-emoji { font-size: 14px; }
+.mc-label { font-size: 11px; color: #999; }
+.mc-body {
+  display: flex; align-items: baseline; gap: 2px; margin-bottom: 5px;
+}
+.mc-val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .mc-unit { font-size: 11px; color: #999; }
-.mc-label { font-size: 11px; color: #999; margin-top: 2px; }
+.mc-bar-track {
+  height: 4px; background: #f0f0f0; border-radius: 2px; overflow: hidden;
+}
+.mc-bar-fill {
+  height: 100%; border-radius: 2px;
+  transition: width 0.8s ease, background 0.4s ease;
+}
 
 /* ====== 容器卡片 ====== */
 .container-grid {

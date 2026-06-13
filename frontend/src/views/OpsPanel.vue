@@ -8,153 +8,220 @@
     3. 告警项实时标红
   @依赖：
     - utils/api：封装了 axios 的请求工具
-    - utils/auth：获取当前用户角色
 -->
 <template>
   <div class="ops-panel">
-    <!-- 返回导航 -->
-    <div class="back-nav-bar">
-      <a href="javascript:void(0)" @click="$router.back()" class="back-link">&larr; 返回</a>
-      <span class="page-title">运维监控面板</span>
-      <span class="refresh-info">自动刷新: {{ countdown }}s</span>
+    <!-- ====== 顶部状态栏 ====== -->
+    <div class="ops-header">
+      <div class="oh-left">
+        <button class="oh-back" @click="$router.back()">&larr;</button>
+        <span class="oh-title">运维监控</span>
+        <span class="oh-badge" :class="alerts.length > 0 ? 'badge-err' : 'badge-ok'">
+          {{ alerts.length > 0 ? alerts.length + ' 告警' : '正常' }}
+        </span>
+      </div>
+      <div class="oh-right">
+        <span class="oh-time">{{ currentTime }}</span>
+        <button class="oh-refresh" @click="manualRefresh" :class="{ spinning: refreshing }">&#8635;</button>
+      </div>
     </div>
 
-    <!-- ==================== 告警横幅 ==================== -->
+    <!-- ====== 告警横幅 ====== -->
     <div v-if="alerts.length > 0" class="alert-banner">
-      <div class="alert-icon">!</div>
-      <div class="alert-content">
-        <div v-for="(a, i) in alerts" :key="i" class="alert-item">{{ a.message }}</div>
+      <div class="ab-icon">&#9888;</div>
+      <div class="ab-list">
+        <div v-for="(a, i) in alerts" :key="i" class="ab-item">{{ a.message }}</div>
       </div>
     </div>
 
-    <!-- ==================== 服务器资源 ==================== -->
-    <div class="section-title">服务器资源</div>
-    <div class="card-grid cols-4">
-      <MetricCard label="CPU" :value="data.server.cpu_percent + '%'" :sub="data.server.cpu_count + ' 核'" :alert="data.server.cpu_alert" icon="cpu" />
-      <MetricCard label="内存" :value="data.server.memory_percent + '%'" :sub="data.server.memory_used_human + ' / ' + data.server.memory_total_human" :alert="data.server.memory_alert" icon="mem" />
-      <MetricCard label="磁盘读" :value="data.server.disk_io_read_mbs + ' MB/s'" sub="实时速率" icon="disk" />
-      <MetricCard label="磁盘写" :value="data.server.disk_io_write_mbs + ' MB/s'" sub="实时速率" icon="disk" />
-    </div>
-    <div class="card-grid cols-4">
-      <MetricCard label="上行带宽" :value="data.server.net_upload_mbps + ' Mbps'" sub="服务器出口" icon="net" />
-      <MetricCard label="下行带宽" :value="data.server.net_download_mbps + ' Mbps'" sub="服务器入口" icon="net" />
-      <MetricCard label="交换分区" :value="data.server.swap_percent + '%'" sub="Swap 使用率" icon="mem" />
-      <div class="metric-card"><div class="mc-label">系统时间</div><div class="mc-value time">{{ currentTime }}</div></div>
+    <!-- ====== 服务器资源 — 环形进度条 ====== -->
+    <div class="section">
+      <div class="sec-head"><span class="sec-icon">&#9881;</span> 服务器资源</div>
+      <div class="ring-row">
+        <RingGauge label="CPU" :percent="data.server.cpu_percent" :alert="data.server.cpu_alert === 'warning'" :info="data.server.cpu_count + ' 核'" color="#1890ff" />
+        <RingGauge label="内存" :percent="data.server.memory_percent" :alert="data.server.memory_alert === 'warning'" :info="data.server.memory_used_human + ' / ' + data.server.memory_total_human" color="#722ed1" />
+        <RingGauge label="交换分区" :percent="data.server.swap_percent" :alert="data.server.swap_percent > 90" :info="'Swap'" color="#fa8c16" />
+      </div>
+      <div class="mini-card-row">
+        <MiniCard emoji="&#8593;" label="上行" :value="data.server.net_upload_mbps" unit="Mbps" />
+        <MiniCard emoji="&#8595;" label="下行" :value="data.server.net_download_mbps" unit="Mbps" />
+        <MiniCard emoji="&#8592;" label="磁盘读" :value="data.server.disk_io_read_mbs" unit="MB/s" />
+        <MiniCard emoji="&#8594;" label="磁盘写" :value="data.server.disk_io_write_mbs" unit="MB/s" />
+      </div>
     </div>
 
-    <!-- ==================== Docker 容器 ==================== -->
-    <div class="section-title">服务容器</div>
-    <div class="container-grid">
-      <div
-        v-for="c in data.containers.containers"
-        :key="c.name"
-        class="container-card"
-        :class="{ 'container-warning': c.state !== 'running' }"
-      >
-        <div class="cc-name">{{ formatContainerName(c.name) }}</div>
-        <div class="cc-status">
-          <span class="cc-dot" :class="c.state === 'running' ? 'dot-ok' : 'dot-err'"></span>
-          {{ c.state }}
+    <!-- ====== 服务容器 ====== -->
+    <div class="section">
+      <div class="sec-head"><span class="sec-icon">&#9783;</span> 服务容器</div>
+      <div class="container-grid">
+        <div
+          v-for="c in data.containers.containers"
+          :key="c.name"
+          class="ctr-card"
+          :class="{ 'ctr-ok': c.state === 'running', 'ctr-err': c.state !== 'running' }"
+        >
+          <div class="ctr-top">
+            <span class="ctr-dot" :class="c.state === 'running' ? 'dot-g' : 'dot-r'"></span>
+            <span class="ctr-name">{{ formatContainerName(c.name) }}</span>
+          </div>
+          <div class="ctr-status">{{ c.status }}</div>
+          <div class="ctr-img">{{ c.image }}</div>
+          <div v-if="c.ports" class="ctr-ports">&#127760; {{ c.ports }}</div>
         </div>
-        <div class="cc-image">{{ c.image }}</div>
-        <div v-if="c.health" class="cc-health">健康: {{ c.health }}</div>
       </div>
     </div>
 
-    <!-- ==================== 服务健康 ==================== -->
-    <div class="section-title">服务健康</div>
-    <div class="card-grid cols-3">
-      <ServiceCard name="FastAPI" :status="data.services.api.status" :detail="'v' + data.services.api.version" />
-      <ServiceCard name="Redis" :status="data.services.redis.status" :detail="data.services.redis.used_memory_human || ''" />
-      <ServiceCard name="MySQL" :status="data.services.mysql.status" :detail="data.services.mysql.version || ''" />
-    </div>
-    <div class="card-grid cols-3" v-if="data.services.mysql.connections || data.services.redis.connected_clients">
-      <MetricCard label="MySQL 连接数" :value="String(data.services.mysql.connections || 0)" icon="db" />
-      <MetricCard label="Redis 客户端" :value="String(data.services.redis.connected_clients || 0)" icon="db" />
-      <MetricCard label="MySQL 大小" :value="data.services.mysql.database_size_human || '0B'" icon="disk" />
-    </div>
-
-    <!-- ==================== 业务数据 ==================== -->
-    <div class="section-title">业务数据</div>
-    <div class="card-grid cols-4">
-      <MetricCard label="在线教师" :value="String(data.business.online_teachers)" sub="近2分钟活跃" icon="user" />
-      <MetricCard label="在线学生" :value="String(data.business.online_students)" sub="近2分钟活跃" icon="user" />
-      <MetricCard label="活跃会话" :value="String(data.business.active_sessions)" sub="正在学习中" icon="play" />
-      <MetricCard label="视频播放" :value="String(data.business.active_videos)" sub="正在播放视频" icon="video" />
-    </div>
-    <div class="card-grid cols-3">
-      <MetricCard label="心跳 QPS" :value="String(data.business.heartbeat_qps)" sub="每秒心跳数" icon="pulse" />
-      <MetricCard label="今日学习人次" :value="String(data.business.today_study_users)" icon="chart" />
-      <MetricCard label="今日有效时长" :value="data.business.today_effective_minutes + ' 分钟'" icon="clock" />
-    </div>
-
-    <!-- ==================== 存储信息 ==================== -->
-    <div class="section-title">存储信息</div>
-    <div class="card-grid cols-4">
-      <MetricCard label="视频文件" :value="data.storage.video_total_human" :sub="data.storage.video_count + ' 个文件'" icon="disk" />
-      <MetricCard label="磁盘已用" :value="data.storage.disk_used_human" :sub="data.storage.disk_percent + '%'" :alert="data.storage.disk_alert" icon="disk" />
-      <MetricCard label="磁盘剩余" :value="data.storage.disk_free_human" :sub="'总 ' + data.storage.disk_total_human" icon="disk" />
-      <MetricCard label="MySQL 大小" :value="data.storage.mysql_size_human || '-'" icon="db" />
-    </div>
-
-    <!-- 磁盘使用率进度条 -->
-    <div class="disk-bar">
-      <div class="disk-bar-label">磁盘使用率</div>
-      <div class="disk-bar-track">
-        <div class="disk-bar-fill" :class="{ 'bar-warning': data.storage.disk_percent > 90 }" :style="{ width: data.storage.disk_percent + '%' }"></div>
+    <!-- ====== 服务健康 ====== -->
+    <div class="section">
+      <div class="sec-head"><span class="sec-icon">&#9733;</span> 服务健康</div>
+      <div class="svc-row">
+        <SvcCard name="FastAPI" :ok="data.services.api.status === 'ok'" :detail="data.services.api.version ? 'v' + data.services.api.version : '-'" />
+        <SvcCard name="Redis" :ok="data.services.redis.status === 'ok'" :detail="data.services.redis.used_memory_human || '-'" />
+        <SvcCard name="MySQL" :ok="data.services.mysql.status === 'ok'" :detail="data.services.mysql.version || '-'" />
       </div>
-      <div class="disk-bar-text">{{ data.storage.disk_percent }}%</div>
+      <div class="svc-detail-row">
+        <div class="svc-detail">MySQL {{ data.services.mysql.connections || 0 }} 连接 &middot; {{ data.services.mysql.database_size_human || '0B' }}</div>
+        <div class="svc-detail">Redis {{ data.services.redis.connected_clients || 0 }} 客户端</div>
+      </div>
     </div>
+
+    <!-- ====== 业务数据 ====== -->
+    <div class="section">
+      <div class="sec-head"><span class="sec-icon">&#9782;</span> 业务数据</div>
+      <div class="biz-card-row">
+        <BizCard label="在线教师" :value="data.business.online_teachers" color="#52c41a" icon="&#128100;" />
+        <BizCard label="在线学生" :value="data.business.online_students" color="#1890ff" icon="&#128101;" />
+        <BizCard label="活跃会话" :value="data.business.active_sessions" color="#722ed1" icon="&#9654;" />
+        <BizCard label="视频播放" :value="data.business.active_videos" color="#fa8c16" icon="&#127909;" />
+      </div>
+      <div class="biz-card-row">
+        <BizCard label="心跳QPS" :value="data.business.heartbeat_qps" color="#13c2c2" icon="&#9829;" unit="/s" />
+        <BizCard label="今日学习人次" :value="data.business.today_study_users" color="#eb2f96" icon="&#128200;" />
+        <BizCard label="今日有效时长" :value="data.business.today_effective_minutes" color="#2f54eb" icon="&#9202;" unit="min" />
+      </div>
+    </div>
+
+    <!-- ====== 存储信息 ====== -->
+    <div class="section">
+      <div class="sec-head"><span class="sec-icon">&#128190;</span> 存储信息</div>
+      <div class="storage-row">
+        <div class="sto-card">
+          <div class="sto-label">视频文件</div>
+          <div class="sto-value">{{ data.storage.video_total_human }}</div>
+          <div class="sto-sub">{{ data.storage.video_count }} 个文件</div>
+        </div>
+        <div class="sto-card">
+          <div class="sto-label">MySQL</div>
+          <div class="sto-value">{{ data.storage.mysql_size_human || '-' }}</div>
+          <div class="sto-sub">数据库大小</div>
+        </div>
+      </div>
+      <!-- 磁盘使用率进度条 -->
+      <div class="disk-section">
+        <div class="disk-header">
+          <span>磁盘使用率</span>
+          <span class="disk-pct" :class="{ 'pct-warn': data.storage.disk_percent > 90 }">{{ data.storage.disk_percent }}%</span>
+        </div>
+        <div class="disk-track">
+          <div class="disk-fill" :class="{ 'fill-warn': data.storage.disk_percent > 90 }" :style="{ width: data.storage.disk_percent + '%' }"></div>
+        </div>
+        <div class="disk-info">
+          已用 {{ data.storage.disk_used_human }} / 总共 {{ data.storage.disk_total_human }} &middot; 剩余 {{ data.storage.disk_free_human }}
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部刷新提示 -->
+    <div class="ops-footer">每 10 秒自动刷新 &middot; 上次更新 {{ lastUpdateTime }}</div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, h } from 'vue'
 import api from '../utils/api'
-import { getAuth } from '../utils/auth'
 
 // ==================== 子组件 ====================
 
-/**
- * 指标卡片 — 显示单个数值指标
- * Props: label, value, sub, alert('ok'/'warning'), icon
- */
-const MetricCard = {
-  props: { label: String, value: String, sub: String, alert: String, icon: String },
+/** 环形进度条 — 用于 CPU/内存等百分比指标 */
+const RingGauge = {
+  props: {
+    label: String,
+    percent: Number,
+    alert: Boolean,
+    info: String,
+    color: { type: String, default: '#1890ff' }
+  },
   setup(props) {
-    return () => h('div', {
-      class: ['metric-card', props.alert === 'warning' ? 'card-warning' : '']
-    }, [
+    return () => {
+      const r = 36
+      const c = 2 * Math.PI * r
+      const offset = c - (Math.min(props.percent, 100) / 100) * c
+      const strokeColor = props.alert ? '#ff4d4f' : props.color
+      return h('div', { class: 'ring-wrap' }, [
+        h('div', { class: 'ring-box' }, [
+          h('svg', { viewBox: '0 0 80 80', class: 'ring-svg' }, [
+            h('circle', { cx: 40, cy: 40, r, fill: 'none', stroke: '#f0f0f0', 'stroke-width': 6 }),
+            h('circle', {
+              cx: 40, cy: 40, r, fill: 'none', stroke: strokeColor, 'stroke-width': 6,
+              'stroke-linecap': 'round', 'stroke-dasharray': c, 'stroke-dashoffset': offset,
+              transform: 'rotate(-90 40 40)', class: 'ring-arc'
+            })
+          ]),
+          h('div', { class: 'ring-inner' }, [
+            h('div', { class: 'ring-pct', style: { color: strokeColor } }, Math.round(props.percent) + '%'),
+          ])
+        ]),
+        h('div', { class: 'ring-label' }, props.label),
+        props.info ? h('div', { class: 'ring-info' }, props.info) : null,
+        props.alert ? h('div', { class: 'ring-alert' }, '⚠ 超阈值') : null,
+      ])
+    }
+  }
+}
+
+/** 迷你数据卡片 */
+const MiniCard = {
+  props: { emoji: String, label: String, value: [Number, String], unit: String },
+  setup(props) {
+    return () => h('div', { class: 'mini-card' }, [
+      h('div', { class: 'mc-emoji' }, props.emoji),
+      h('div', { class: 'mc-body' }, [
+        h('div', { class: 'mc-val' }, typeof props.value === 'number' ? props.value.toFixed(2) : props.value),
+        h('div', { class: 'mc-unit' }, props.unit),
+      ]),
       h('div', { class: 'mc-label' }, props.label),
-      h('div', { class: 'mc-value' }, props.value),
-      props.sub ? h('div', { class: 'mc-sub' }, props.sub) : null,
     ])
   }
 }
 
-/**
- * 服务状态卡片 — 显示服务健康检查结果
- * Props: name, status('ok'/'error'), detail
- */
-const ServiceCard = {
-  props: { name: String, status: String, detail: String },
+/** 服务健康卡片 */
+const SvcCard = {
+  props: { name: String, ok: Boolean, detail: String },
   setup(props) {
-    return () => h('div', {
-      class: ['metric-card', 'service-card', props.status !== 'ok' ? 'card-error' : '']
-    }, [
-      h('div', { class: 'mc-label' }, props.name),
-      h('div', { class: 'mc-row' }, [
-        h('span', { class: ['sc-dot', props.status === 'ok' ? 'dot-ok' : 'dot-err'] }),
-        h('span', { class: 'sc-status' }, props.status === 'ok' ? '正常' : '异常'),
+    return () => h('div', { class: ['svc-card', props.ok ? 'svc-ok' : 'svc-fail'] }, [
+      h('div', { class: 'svc-dot' }, props.ok ? '✓' : '✗'),
+      h('div', { class: 'svc-name' }, props.name),
+      h('div', { class: 'svc-detail' }, props.detail),
+    ])
+  }
+}
+
+/** 业务数据卡片 */
+const BizCard = {
+  props: { label: String, value: [Number, String], unit: String, color: String, icon: String },
+  setup(props) {
+    return () => h('div', { class: 'biz-card' }, [
+      h('div', { class: 'bc-icon', style: { background: props.color + '15', color: props.color } }, props.icon),
+      h('div', { class: 'bc-body' }, [
+        h('div', { class: 'bc-val', style: { color: props.color } }, props.value + (props.unit || '')),
+        h('div', { class: 'bc-label' }, props.label),
       ]),
-      props.detail ? h('div', { class: 'mc-sub' }, props.detail) : null,
     ])
   }
 }
 
 // ==================== 数据与状态 ====================
 
-// 全量数据默认值
 const defaultData = {
   server: { cpu_percent: 0, cpu_count: 0, memory_total: 0, memory_total_human: '-', memory_used: 0, memory_used_human: '-', memory_percent: 0, swap_percent: 0, disk_io_read_mbs: 0, disk_io_write_mbs: 0, net_upload_mbps: 0, net_download_mbps: 0, cpu_alert: 'ok', memory_alert: 'ok' },
   containers: { containers: [], alerts: [] },
@@ -167,12 +234,12 @@ const defaultData = {
 }
 
 const data = ref(defaultData)
-const countdown = ref(10)
 const currentTime = ref('')
+const lastUpdateTime = ref('-')
+const refreshing = ref(false)
 let timer = null
-let countdownTimer = null
+let clockTimer = null
 
-// 合并所有告警
 const alerts = computed(() => data.value.all_alerts || [])
 
 // ==================== 数据刷新 ====================
@@ -182,10 +249,18 @@ async function fetchData() {
     const res = await api.get('/ops/overview')
     if (res.data.code === 0) {
       data.value = res.data.data
+      lastUpdateTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     }
   } catch (e) {
     console.error('获取运维数据失败:', e)
   }
+}
+
+async function manualRefresh() {
+  if (refreshing.value) return
+  refreshing.value = true
+  await fetchData()
+  setTimeout(() => { refreshing.value = false }, 600)
 }
 
 function updateTime() {
@@ -193,7 +268,6 @@ function updateTime() {
 }
 
 function formatContainerName(name) {
-  // 去掉 "study-monitor-" 前缀，使显示更简洁
   return name.replace(/^study-monitor-/, '')
 }
 
@@ -202,114 +276,201 @@ function formatContainerName(name) {
 onMounted(() => {
   fetchData()
   updateTime()
-  // 每10秒刷新数据
-  timer = setInterval(() => {
-    fetchData()
-    countdown.value = 10
-  }, 10000)
-  // 倒计时 + 时钟
-  countdownTimer = setInterval(() => {
-    countdown.value = Math.max(0, countdown.value - 1)
-    updateTime()
-  }, 1000)
+  timer = setInterval(fetchData, 10000)
+  clockTimer = setInterval(updateTime, 1000)
 })
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
-  if (countdownTimer) clearInterval(countdownTimer)
+  if (clockTimer) clearInterval(clockTimer)
 })
 </script>
 
 <style scoped>
 .ops-panel {
   min-height: 100vh;
-  background: #f5f7fa;
-  padding-bottom: 30px;
+  background: #f0f2f5;
+  padding-bottom: 50px;
 }
 
-/* 返回导航栏 */
-.back-nav-bar {
+/* ====== 顶部状态栏 ====== */
+.ops-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px; background: #fff; border-bottom: 1px solid #e8e8e8;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #0d1b3e 0%, #1a237e 100%);
+  color: #fff;
+  position: sticky; top: 0; z-index: 10;
 }
-.page-title { font-size: 16px; font-weight: 600; color: #333; }
-.refresh-info { font-size: 12px; color: #999; }
-.back-link { color: #1890ff; font-size: 14px; text-decoration: none; cursor: pointer; }
+.oh-left, .oh-right { display: flex; align-items: center; gap: 10px; }
+.oh-back {
+  width: 28px; height: 28px; border-radius: 6px; border: none;
+  background: rgba(255,255,255,0.15); color: #fff; font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.oh-title { font-size: 16px; font-weight: 600; }
+.oh-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500;
+}
+.badge-ok { background: rgba(82,196,26,0.25); color: #b7eb8f; }
+.badge-err { background: rgba(255,77,79,0.3); color: #ffa39e; }
+.oh-time { font-size: 12px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.oh-refresh {
+  width: 28px; height: 28px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,0.15); color: #fff; font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: transform 0.3s;
+}
+.oh-refresh.spinning { animation: spin 0.6s linear; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-/* 告警横幅 */
+/* ====== 告警横幅 ====== */
 .alert-banner {
   display: flex; align-items: flex-start; gap: 10px;
-  margin: 12px 16px; padding: 12px 16px;
-  background: #fff2f0; border: 1px solid #ffccc7; border-radius: 8px;
+  margin: 10px 16px; padding: 12px 14px;
+  background: linear-gradient(135deg, #fff2f0 0%, #fff1f0 100%);
+  border: 1px solid #ffccc7; border-radius: 10px;
 }
-.alert-icon {
-  width: 24px; height: 24px; border-radius: 50%; background: #ff4d4f;
-  color: #fff; display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 14px; flex-shrink: 0;
+.ab-icon { font-size: 20px; line-height: 1; flex-shrink: 0; }
+.ab-list { flex: 1; }
+.ab-item { font-size: 13px; color: #cf1322; line-height: 1.8; }
+
+/* ====== 分区 ====== */
+.section {
+  margin: 12px 16px 0;
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
 }
-.alert-content { flex: 1; }
-.alert-item { font-size: 13px; color: #cf1322; line-height: 1.8; }
-
-/* 分区标题 */
-.section-title {
-  font-size: 14px; font-weight: 600; color: #666;
-  margin: 16px 16px 8px; padding-left: 8px;
-  border-left: 3px solid #1890ff;
+.sec-head {
+  font-size: 14px; font-weight: 600; color: #333;
+  margin-bottom: 12px; display: flex; align-items: center; gap: 6px;
 }
+.sec-icon { font-size: 16px; }
 
-/* 卡片网格 */
-.card-grid { display: grid; gap: 8px; padding: 0 16px; margin-bottom: 8px; }
-.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.cols-4 { grid-template-columns: repeat(4, 1fr); }
+/* ====== 环形进度条 ====== */
+.ring-row {
+  display: flex; justify-content: space-around; gap: 8px; margin-bottom: 14px;
+}
+.ring-wrap { text-align: center; flex: 1; }
+.ring-box { position: relative; width: 80px; height: 80px; margin: 0 auto 4px; }
+.ring-svg { width: 80px; height: 80px; }
+.ring-arc { transition: stroke-dashoffset 0.8s ease; }
+.ring-inner {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  text-align: center;
+}
+.ring-pct { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ring-label { font-size: 13px; color: #666; font-weight: 500; }
+.ring-info { font-size: 11px; color: #999; margin-top: 2px; }
+.ring-alert { font-size: 11px; color: #ff4d4f; margin-top: 2px; font-weight: 500; }
 
-/* 指标卡片 */
-.metric-card {
-  background: #fff; border-radius: 8px; padding: 12px;
-  border: 1px solid #f0f0f0;
+/* ====== 迷你卡片行 ====== */
+.mini-card-row {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.mini-card {
+  background: #fafafa; border-radius: 8px; padding: 10px 8px;
+  text-align: center;
+}
+.mc-emoji { font-size: 18px; margin-bottom: 4px; }
+.mc-body { display: flex; align-items: baseline; justify-content: center; gap: 2px; }
+.mc-val { font-size: 16px; font-weight: 700; color: #333; font-variant-numeric: tabular-nums; }
+.mc-unit { font-size: 11px; color: #999; }
+.mc-label { font-size: 11px; color: #999; margin-top: 2px; }
+
+/* ====== 容器卡片 ====== */
+.container-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+}
+.ctr-card {
+  border-radius: 10px; padding: 12px; border: 1.5px solid #f0f0f0;
   transition: border-color 0.3s;
 }
-.card-warning { border-color: #faad14; background: #fffbe6; }
-.card-error { border-color: #ff4d4f; background: #fff2f0; }
-.mc-label { font-size: 12px; color: #999; margin-bottom: 4px; }
-.mc-value { font-size: 20px; font-weight: 700; color: #333; font-variant-numeric: tabular-nums; }
-.mc-value.time { font-size: 15px; font-weight: 500; }
-.mc-sub { font-size: 11px; color: #bbb; margin-top: 2px; }
-.mc-row { display: flex; align-items: center; gap: 6px; }
+.ctr-ok { border-left: 3px solid #52c41a; background: #f6ffed; }
+.ctr-err { border-left: 3px solid #ff4d4f; background: #fff2f0; }
+.ctr-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.ctr-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-g { background: #52c41a; box-shadow: 0 0 6px rgba(82,196,26,0.4); }
+.dot-r { background: #ff4d4f; box-shadow: 0 0 6px rgba(255,77,79,0.4); }
+.ctr-name { font-size: 15px; font-weight: 600; color: #333; }
+.ctr-status { font-size: 12px; color: #666; margin-bottom: 2px; }
+.ctr-img { font-size: 11px; color: #bbb; word-break: break-all; }
+.ctr-ports { font-size: 11px; color: #8c8c8c; margin-top: 3px; }
 
-/* 状态圆点 */
-.dot-ok, .dot-err { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.dot-ok { background: #52c41a; }
-.dot-err { background: #ff4d4f; }
-.sc-status { font-size: 16px; font-weight: 600; }
-.sc-dot { flex-shrink: 0; }
+/* ====== 服务健康 ====== */
+.svc-row {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px;
+}
+.svc-card {
+  border-radius: 10px; padding: 14px 10px; text-align: center;
+  transition: all 0.3s;
+}
+.svc-ok { background: linear-gradient(135deg, #f6ffed 0%, #fcffe6 100%); border: 1px solid #d9f7be; }
+.svc-fail { background: linear-gradient(135deg, #fff2f0 0%, #fff1f0 100%); border: 1px solid #ffccc7; }
+.svc-dot { font-size: 22px; margin-bottom: 4px; }
+.svc-ok .svc-dot { color: #52c41a; }
+.svc-fail .svc-dot { color: #ff4d4f; }
+.svc-name { font-size: 14px; font-weight: 600; color: #333; }
+.svc-detail { font-size: 11px; color: #999; margin-top: 2px; }
+.svc-detail-row {
+  display: flex; justify-content: space-around;
+}
+.svc-detail { font-size: 11px; color: #bbb; }
 
-/* 容器卡片网格 */
-.container-grid {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 0 16px; margin-bottom: 8px;
+/* ====== 业务数据 ====== */
+.biz-card-row {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px;
 }
-.container-card {
-  background: #fff; border-radius: 8px; padding: 12px;
-  border: 1px solid #f0f0f0;
+.biz-card-row:last-child {
+  grid-template-columns: repeat(3, 1fr);
 }
-.container-warning { border-color: #ff4d4f; background: #fff2f0; }
-.cc-name { font-size: 15px; font-weight: 600; color: #333; margin-bottom: 6px; }
-.cc-status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #666; }
-.cc-image { font-size: 11px; color: #bbb; margin-top: 4px; word-break: break-all; }
-.cc-health { font-size: 11px; color: #52c41a; margin-top: 2px; }
+.biz-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px; border-radius: 8px; background: #fafafa;
+}
+.bc-icon {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
+.bc-body { flex: 1; }
+.bc-val { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bc-label { font-size: 11px; color: #999; }
+
+/* ====== 存储信息 ====== */
+.storage-row {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 12px;
+}
+.sto-card {
+  background: #fafafa; border-radius: 8px; padding: 14px; text-align: center;
+}
+.sto-label { font-size: 12px; color: #999; margin-bottom: 4px; }
+.sto-value { font-size: 22px; font-weight: 700; color: #333; font-variant-numeric: tabular-nums; }
+.sto-sub { font-size: 11px; color: #bbb; margin-top: 2px; }
 
 /* 磁盘进度条 */
-.disk-bar {
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 16px; margin: 4px 0 16px;
+.disk-section { padding: 0 2px; }
+.disk-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; color: #666; margin-bottom: 6px;
 }
-.disk-bar-label { font-size: 12px; color: #999; white-space: nowrap; }
-.disk-bar-track {
-  flex: 1; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden;
+.disk-pct { font-weight: 700; color: #333; }
+.pct-warn { color: #ff4d4f; }
+.disk-track {
+  height: 10px; background: #f0f0f0; border-radius: 5px; overflow: hidden;
 }
-.disk-bar-fill {
-  height: 100%; background: linear-gradient(90deg, #1890ff, #52c41a);
-  border-radius: 4px; transition: width 0.5s;
+.disk-fill {
+  height: 100%; border-radius: 5px;
+  background: linear-gradient(90deg, #1890ff, #52c41a);
+  transition: width 0.8s ease;
 }
-.bar-warning { background: linear-gradient(90deg, #faad14, #ff4d4f); }
-.disk-bar-text { font-size: 13px; font-weight: 600; color: #333; min-width: 36px; }
+.fill-warn { background: linear-gradient(90deg, #faad14, #ff4d4f); }
+.disk-info { font-size: 11px; color: #bbb; margin-top: 4px; }
+
+/* ====== 底部 ====== */
+.ops-footer {
+  text-align: center; font-size: 12px; color: #bbb;
+  padding: 16px 0 8px;
+}
 </style>

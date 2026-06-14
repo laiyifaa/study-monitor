@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from app.config import get_settings
 from app.database import init_db
 from app.database_redis import close_redis
-from app.routers import auth, heartbeat, course, stats, notify, admin, homework
+from app.routers import auth, heartbeat, course, stats, notify, admin, homework, ops, section
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -68,18 +68,22 @@ app.add_middleware(
 # 注册各业务路由模块
 # auth     — 钉钉免登认证，获取 JWT 令牌
 # heartbeat — 学习心跳上报，防刷课核心
-# course   — 课程 CRUD 和学习进度查询
+# course   — 课程 CRUD（元数据级）
+# section  — 小节 CRUD + 视频上传（v3.0 课程-小节两级结构）
 # stats    — 教师统计看板数据聚合
 # notify   — 钉钉消息推送（学习提醒、每日报告）
 # admin    — 管理后台（用户管理、班级管理）
 # homework — 作业管理（发布、提交、批改）
+# ops      — 运维监控（服务器资源、容器状态、业务数据、存储信息）
 app.include_router(auth.router)
 app.include_router(heartbeat.router)
 app.include_router(course.router)
+app.include_router(section.router)
 app.include_router(stats.router)
 app.include_router(notify.router)
 app.include_router(admin.router)
 app.include_router(homework.router)
+app.include_router(ops.router)
 
 
 @app.get("/api/health")

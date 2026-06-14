@@ -106,7 +106,7 @@ async def list_users(
 
 class RoleUpdateRequest(BaseModel):
     """角色修改请求体"""
-    role: str  # 目标角色：student / teacher / admin
+    role: str  # 目标角色：student / teacher / admin / ops
 
 
 @router.put("/users/{user_id}/role")
@@ -132,7 +132,7 @@ async def update_user_role(
         - 只允许设置合法的角色值
     """
     # 合法角色校验
-    if req.role not in ("student", "teacher", "admin"):
+    if req.role not in ("student", "teacher", "admin", "ops"):
         return {"code": 1, "msg": "无效的角色"}
 
     # 教师不能设置管理员角色
@@ -415,7 +415,7 @@ async def create_user(
     if not req.name.strip():
         return {"code": 1, "msg": "用户姓名不能为空"}
 
-    if req.role not in ("student", "teacher", "admin"):
+    if req.role not in ("student", "teacher", "admin", "ops"):
         return {"code": 1, "msg": "无效的角色"}
 
     # 检查同名用户是否已存在

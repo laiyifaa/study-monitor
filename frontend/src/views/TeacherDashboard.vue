@@ -46,6 +46,7 @@
       <router-link to="/course-edit/0" class="btn primary">+ 新建课程</router-link>
       <router-link to="/" class="btn" target="_blank">预览课程</router-link>
       <router-link to="/admin" class="btn">管理后台</router-link>
+      <router-link v-if="isOpsOrAdmin" to="/ops" class="btn info">运维面板</router-link>
       <template v-if="selectedCourseId">
         <router-link :to="`/course-edit/${selectedCourseId}`" class="btn">编辑课程</router-link>
         <router-link :to="`/homework/${selectedCourseId}`" class="btn success">作业管理</router-link>
@@ -67,7 +68,7 @@
 
     <!-- 已选择课程时显示统计内容 -->
     <template v-else>
-      <!-- ==================== 概览卡片：4格网格 ==================== -->
+      <!-- ==================== 概览卡片：5格网格 ==================== -->
       <div class="overview-cards">
         <div class="card">
           <div class="card-num">{{ overview.total_students }}</div>
@@ -87,6 +88,11 @@
           <!-- 完成率：蓝色主题色，保留1位小数 -->
           <div class="card-num primary">{{ (overview.completion_rate * 100).toFixed(1) }}%</div>
           <div class="card-label">完成率</div>
+        </div>
+        <div class="card">
+          <!-- 小节数量 -->
+          <div class="card-num">{{ overview.section_count || 0 }}</div>
+          <div class="card-label">课程小节</div>
         </div>
       </div>
 
@@ -201,7 +207,8 @@ import { useAuthStore } from '../utils/auth'
 const router = useRouter()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user.value?.role === 'admin')
-const isTeacherOrAdmin = computed(() => auth.user.value?.role === 'teacher' || auth.user.value?.role === 'admin')
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin', 'ops'].includes(auth.user.value?.role))
+const isOpsOrAdmin = computed(() => auth.user.value?.role === 'ops' || auth.user.value?.role === 'admin')
 
 /** API Key 状态 */
 const apiKeyInfo = ref({ has_key: false, masked: '' })
@@ -214,7 +221,7 @@ const courses = ref([])
 const selectedCourseId = ref('')
 
 /** 班级概览数据 */
-const overview = ref({ total_students: 0, completed_students: 0, completion_rate: 0, require_minutes: 60 })
+const overview = ref({ total_students: 0, completed_students: 0, completion_rate: 0, require_minutes: 60, section_count: 0 })
 const students = ref([])
 const sending = ref(false)
 
@@ -493,8 +500,8 @@ function copyApiKey() {
   font-size: 14px; background: #fff;
 }
 
-/* 概览卡片：4列等宽网格 */
-.overview-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+/* 概览卡片：5列等宽网格 */
+.overview-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
 .card {
   background: #fff; border-radius: 8px; padding: 16px; text-align: center;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);

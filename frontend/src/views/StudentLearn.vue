@@ -1,19 +1,21 @@
 <!--
   @模块：StudentLearn.vue — 在线学习页（系统核心页面）
-  @页面用途：学生在线观看课程视频，自动计时有效学习时长，支持防挂机验证弹窗。
+  @页面用途：学生在线观看小节视频，自动计时有效学习时长，支持防挂机验证弹窗。
             是整个学习进度监督系统的核心交互页面。
   @数据流：
-    1. 组件挂载 → 调用 GET /courses/:courseId 获取课程信息（视频类型、视频地址、要求时长）
+    1. 组件挂载 → 调用 GET /sections/:sectionId 获取小节信息（视频类型、视频地址）
+       同时调用 GET /courses/:courseId 获取课程信息（要求时长）
     2. 视频播放 → 通过 useStudyTracker 组合式函数自动计时并上报心跳
-    3. 心跳上报 → composable 内部定时调用 POST /study/heartbeat 上报当前播放进度
+    3. 心跳上报 → composable 内部定时调用 POST /heartbeat/beat 上报当前播放进度
     4. 防挂机 → composable 内部检测到长时间无操作时弹出验证弹窗
     5. 组件卸载 → 清理 postMessage 监听器，composable 内部停止心跳
   @视频播放双模式：
     - url 模式：外部链接（B站/腾讯视频等），通过 iframe 嵌入，通过 postMessage 接收播放状态
     - local 模式：本地上传的 MP4 文件，使用 HTML5 <video> 标签播放，原生事件监听
   @后端API：
-    - GET /courses/:courseId：获取课程详情（video_type, video_url, require_minutes 等）
-    - POST /study/heartbeat：由 useStudyTracker 内部调用，上报学习进度心跳
+    - GET /sections/:sectionId：获取小节详情（video_type, video_url 等）
+    - GET /courses/:courseId：获取课程详情（require_minutes 等）
+    - POST /heartbeat/*：由 useStudyTracker 内部调用，上报学习进度心跳
   @依赖：
     - composables/useStudyTracker：学习计时核心逻辑（心跳上报、有效时长计算、防挂机验证）
     - composables/useDingTalk：钉钉 H5 微应用 API 封装（设置标题等）
@@ -23,7 +25,7 @@
   <div class="learn-page">
     <!-- 返回导航 -->
     <div class="back-nav-bar">
-      <a href="javascript:void(0)" @click="$router.back()" class="back-link">&larr; 返回课程列表</a>
+      <a href="javascript:void(0)" @click="$router.back()" class="back-link">&larr; 返回课程</a>
     </div>
 
     <!-- ==================== 顶部状态栏 ==================== -->
@@ -119,8 +121,9 @@ import api from '../utils/api'
 /** 当前路由实例，用于获取路径参数 courseId */
 const route = useRoute()
 
-/** 从路由参数解构出课程ID，转为整数 */
+/** 从路由参数解构出课程ID和小节ID */
 const courseId = parseInt(route.params.courseId)
+const sectionId = parseInt(route.params.sectionId) || null
 
 /** 视频类型：'url'（外部链接iframe）或 'local'（本地上传HTML5 video） */
 const videoType = ref('url')
@@ -136,12 +139,17 @@ const videoPlayer = ref(null)
 
 /**
  * 计算本地视频的播放源地址：
- * 优先使用 CDN 地址（video_cdn_url），降级到原始 API 路径
- * 这样 CDN 开启时视频流量走 CDN，CDN 未配置时走 Nginx 直连
+ * 1. 优先使用 CDN 地址（video_cdn_url）—— 天翼云 CDN 加速
+ * 2. 降级到 Nginx 静态路径 /uploads/videos/ —— 走 sendfile 零拷贝，性能远超 FastAPI FileResponse
+ *
+ * 注意：不使用 /api/courses/video-file/ 路径，因为：
+ * - 视频文件只挂载到前端 Nginx 容器，后端容器内无视频文件（会导致 404）
+ * - 即使后端容器有文件，FastAPI FileResponse 也受 Python GIL 限制，并发能力远不如 Nginx sendfile
+ * - Nginx sendfile 直接在内核态完成磁盘→网卡的数据传输，不经过用户态
  */
 const videoSourceUrl = computed(() => {
   if (videoCdnUrl.value) return videoCdnUrl.value
-  return `/api/courses/video-file/${videoUrl.value}`
+  return `/uploads/videos/${videoUrl.value}`
 })
 
 /**
@@ -159,7 +167,7 @@ const videoSourceUrl = computed(() => {
 const {
   isPlaying, isEffective, effectiveMinutes, videoProgress,
   showVerify, requireMinutes, setVideoTime, setPlaying, verifyPass,
-} = useStudyTracker(courseId)
+} = useStudyTracker(courseId, sectionId)
 
 /** 钉钉 API 封装，用于设置 H5 微应用的页面标题 */
 const { setTitle } = useDingTalk()
@@ -180,26 +188,36 @@ function formatTime(seconds) {
 }
 
 /**
- * 组件挂载：获取课程信息并初始化视频播放
+ * 组件挂载：获取小节和课程信息并初始化视频播放
  * 流程：
- *   1. 请求课程详情 → 设置视频类型、视频地址、要求时长
- *   2. 设置钉钉H5微应用标题和浏览器标签页标题
- *   3. 注册 window message 监听器（接收 iframe 播放器状态）
+ *   1. 请求小节详情 → 设置视频类型、视频地址
+ *   2. 请求课程详情 → 获取要求时长、课程名称（设置标题）
+ *   3. 设置钉钉H5微应用标题和浏览器标签页标题
+ *   4. 注册 window message 监听器（接收 iframe 播放器状态）
  */
 onMounted(async () => {
   try {
-    const res = await api.get(`/courses/${courseId}`)
-    if (res.data.code === 0) {
-      const course = res.data.data
-      videoType.value = course.video_type || 'url'
-      videoUrl.value = course.video_url || ''
-      videoCdnUrl.value = course.video_cdn_url || ''
+    // 并行请求小节详情和课程详情
+    const [sectionRes, courseRes] = await Promise.all([
+      api.get(`/sections/${sectionId}`),
+      api.get(`/courses/${courseId}`),
+    ])
+    // 从小节获取视频信息
+    if (sectionRes.data.code === 0) {
+      const section = sectionRes.data.data
+      videoType.value = section.video_type || 'url'
+      videoUrl.value = section.video_url || ''
+      videoCdnUrl.value = section.video_cdn_url || ''
+    }
+    // 从课程获取要求时长和标题
+    if (courseRes.data.code === 0) {
+      const course = courseRes.data.data
       requireMinutes.value = course.require_minutes
       setTitle(course.title)
       document.title = course.title
     }
   } catch (e) {
-    console.error('获取课程信息失败:', e)
+    console.error('获取学习信息失败:', e)
   }
 
   // 监听 iframe 发来的 postMessage（通用视频播放器适配 / 钉钉悟空智能体通信预留）

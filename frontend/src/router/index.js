@@ -14,7 +14,8 @@
  *
  * 路由设计说明：
  *   - '/' 课程列表：公开页面，未登录也可查看（降低使用门槛）
- *   - '/learn/:courseId' 学习页：仅 student 角色可访问，teacher 也能听课所以放行
+ *   - '/course/:courseId' 课程详情：展示课程信息+小节列表
+ *   - '/learn/:courseId/:sectionId' 学习页：仅 student 角色可访问，teacher 也能听课所以放行
  *   - '/my-progress' 我的进度：仅 student 角色可访问
  *   - '/teacher' 统计看板：仅 teacher/admin 可访问
  *   - '/course-edit/:courseId?' 编辑课程：仅 teacher/admin 可访问，courseId 可选（新建/编辑）
@@ -59,7 +60,14 @@ const routes = [
     meta: { title: '登录' },  // 无 role 限制，登录页本身不需要认证
   },
   {
-    path: '/learn/:courseId',      // :courseId 为动态参数，对应课程 ID
+    // 课程详情页：展示课程信息+小节列表，学生点击小节进入学习
+    path: '/course/:courseId',
+    name: 'CourseDetail',
+    component: () => import('../views/CourseDetail.vue'),
+    meta: { title: '课程详情' },  // 无 role 限制，登录即可
+  },
+  {
+    path: '/learn/:courseId/:sectionId',  // :courseId 课程ID + :sectionId 小节ID
     name: 'StudentLearn',
     component: () => import('../views/StudentLearn.vue'),
     meta: { title: '在线学习', role: 'student' },  // 仅学生角色
@@ -102,6 +110,13 @@ const routes = [
     name: 'StudentHomework',
     component: () => import('../views/StudentHomework.vue'),
     meta: { title: '课程作业', role: 'student' },
+  },
+  {
+    // 运维监控面板：服务器资源、容器状态、业务数据、存储信息
+    path: '/ops',
+    name: 'OpsPanel',
+    component: () => import('../views/OpsPanel.vue'),
+    meta: { title: '运维监控', role: 'ops' },  // 仅运维/管理员
   },
   {
     // 404 兜底路由：匹配所有未定义的路径
@@ -157,14 +172,17 @@ router.beforeEach((to, from, next) => {
       if (user.role === 'admin') {
         return next()
       }
-      // teacher 专属页面：非 teacher 角色拒绝访问
-      if (requiredRole === 'teacher' && user.role !== 'teacher') {
+      // ops 专属页面：仅 ops 角色可访问
+      if (requiredRole === 'ops' && user.role !== 'ops') {
         return next('/')
       }
-      // student 专属页面：teacher 也能访问学生页面
-      // 原因：教师可能需要预览学生视角、查看学习内容
-      // 只有非 student 且非 teacher 的角色才被拒绝
-      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher') {
+      // teacher 专属页面：ops 也能访问教师页面
+      if (requiredRole === 'teacher' && user.role !== 'teacher' && user.role !== 'ops') {
+        return next('/')
+      }
+      // student 专属页面：teacher 和 ops 也能访问学生页面
+      // 原因：教师/运维可能需要预览学生视角、查看学习内容
+      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher' && user.role !== 'ops') {
         return next('/')
       }
     } catch {

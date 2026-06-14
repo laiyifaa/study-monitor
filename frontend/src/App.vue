@@ -34,6 +34,8 @@
       <span class="app-title">在线学习平台</span>
     </div>
     <div v-if="auth.isLoggedIn.value" class="header-right">
+      <!-- 运维面板入口：ops 和 admin 可见 -->
+      <router-link v-if="auth.user.value?.role === 'ops' || auth.user.value?.role === 'admin'" to="/ops" class="btn-ops-link">运维</router-link>
       <!-- 用户角色标签 -->
       <span class="role-tag" :class="auth.user.value?.role">{{ roleLabel }}</span>
       <!-- 用户姓名 -->
@@ -111,6 +113,7 @@ const roleLabel = computed(() => {
   const role = auth.user.value?.role
   if (role === 'teacher') return '教师'
   if (role === 'admin') return '管理员'
+  if (role === 'ops') return '运维'
   return '学生'
 })
 
@@ -221,6 +224,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .role-tag.student { background: #e6f7ff; color: #1890ff; }
 .role-tag.teacher { background: #f6ffed; color: #52c41a; }
 .role-tag.admin { background: #fff7e6; color: #fa8c16; }
+.role-tag.ops { background: #e6fffb; color: #13c2c2; }
 
 /* 用户姓名 */
 .user-name {
@@ -260,6 +264,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 }
 .btn-login-link:hover {
   background: #1890ff;
+  color: #fff;
+}
+
+/* 运维面板入口 */
+.btn-ops-link {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid #13c2c2;
+  border-radius: 4px;
+  color: #13c2c2;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+.btn-ops-link:hover {
+  background: #13c2c2;
   color: #fff;
 }
 

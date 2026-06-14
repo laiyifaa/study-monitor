@@ -5,14 +5,15 @@
 
 在系统中的角色：
 - User：用户表，存储钉钉用户信息，区分学生/教师/管理员角色
-- Course：课程表，存储课程元数据和视频源信息，由教师创建管理
+- Course：课程表，存储课程元数据和学习要求，由教师创建管理
+- Section：小节表，存储课程下的视频小节，每个课程包含多个小节
 - StudySession：学习会话表，记录每次学习行为的完整生命周期，
   是"有效学习时长"计算的核心数据源
 - HeartbeatLog：心跳日志表，记录学习过程中的实时状态快照，
   是防刷课判定和有效时长计算的依据
 
 数据流概览：
-  学生打开课程 → 创建 StudySession → 前端每30秒上报心跳 → 写入 HeartbeatLog
+  学生打开课程小节 → 创建 StudySession → 前端每30秒上报心跳 → 写入 HeartbeatLog
   → 心跳处理器校验播放状态/页面可见性 → 累加 StudySession.effective_seconds
   → 学生关闭页面 → 标记 StudySession.is_active=False
 
@@ -21,6 +22,10 @@
   - 播放中且页面可见 → 有效学习，累加时长
   - 暂停/页面隐藏 → 无效，不累加
   这确保了学生不能通过最小化窗口或暂停视频来刷时长
+
+课程-小节两级结构（v3.0）：
+  Course（课程）→ 包含多个 Section（小节）→ 每个小节有独立视频
+  学生学习时针对具体小节计时，课程总进度由各小节进度汇总
 """
 
 from sqlalchemy import Column, BigInteger, String, Enum, DateTime, ForeignKey, Boolean, Integer, DECIMAL, Text
@@ -51,7 +56,7 @@ class User(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     dingtalk_user_id = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(50), nullable=False)
-    role = Column(Enum("student", "teacher", "admin"), default="student", nullable=False)
+    role = Column(Enum("student", "teacher", "admin", "ops"), default="student", nullable=False)
     class_name = Column(String(50), default="", comment="班级名称")
     class_id = Column(BigInteger, default=0, comment="班级ID")
     avatar = Column(String(500), default="")
@@ -71,18 +76,13 @@ class Course(Base):
     """
     课程模型
 
-    用途：存储课程信息，包括视频源和学习要求，由教师创建和管理。
+    用途：存储课程元数据和学习要求，由教师创建和管理。
+         视频内容通过 Section（小节）模型关联，一门课包含多个小节。
 
     字段说明：
         id               — 自增主键
         title            — 课程标题
         description      — 课程描述
-        video_type       — 视频来源类型：
-                           url=外部链接（B站/腾讯视频等，学生跳转观看）
-                           local=本地上传（视频文件存储在服务器本地）
-        video_url        — 视频地址，含义随 video_type 变化
-        wukong_url       — 钉钉悟空智能体接口（预留字段，暂未使用）
-        duration_seconds — 课程视频总时长（秒），用于计算学习进度百分比
         teacher_id       — 创建该课程的教师 ID，外键关联 users 表
         require_minutes  — 该课程要求的有效学习时长（分钟），达标即视为完成
         start_date       — 课程开始日期，控制学生何时可以开始学习
@@ -90,17 +90,25 @@ class Course(Base):
         status           — 课程状态：draft=草稿/active=进行中/ended=已结束
         created_at       — 创建时间
         updated_at       — 最后修改时间
+
+    视频字段迁移说明（v3.0）：
+        video_type, video_url, wukong_url, duration_seconds 已迁移到 Section 表。
+        旧字段保留在数据库中但不再使用（MySQL 无法 DROP COLUMN 安全在线操作），
+        新代码通过 Section 访问视频数据。
     """
     __tablename__ = "courses"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     title = Column(String(200), nullable=False)
     description = Column(String(1000), default="")
-    # 视频源：url=外部链接(如B站/腾讯视频)，local=本地上传
-    video_type = Column(Enum("url", "local"), default="url", nullable=False)
-    video_url = Column(String(500), default="", comment="视频地址：外部链接或本地路径")
-    wukong_url = Column(String(500), default="", comment="钉钉悟空智能体接口预留(暂未使用)")
-    duration_seconds = Column(Integer, default=0, comment="课程总时长(秒)")
+    # === 以下视频字段已废弃，保留在DB但不再使用 ===
+    # 视频数据已迁移到 sections 表，每个小节有独立的 video_type/video_url/duration_seconds
+    # 旧字段在数据库中仍存在，但新代码不再读写这些字段
+    video_type = Column(Enum("url", "local"), default="url", nullable=True)
+    video_url = Column(String(500), default="", comment="[已废弃] 迁移至 sections 表")
+    wukong_url = Column(String(500), default="", comment="[已废弃]")
+    duration_seconds = Column(Integer, default=0, comment="[已废弃] 迁移至 sections 表")
+    # === 废弃字段结束 ===
     teacher_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     # 默认60分钟，教师可按课程难度调整要求学习时长
     require_minutes = Column(Integer, default=60, comment="要求学习时长(分钟)")
@@ -109,6 +117,40 @@ class Course(Base):
     status = Column(Enum("active", "ended", "draft"), default="draft", nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class Section(Base):
+    """
+    小节模型
+
+    用途：课程下的视频小节，每个课程包含多个小节。
+         小节是学生实际学习的最小单元，每个小节有独立的视频源。
+
+    字段说明：
+        id               — 自增主键
+        course_id        — 所属课程 ID，外键关联 courses 表，加索引加速课程维度查询
+        title            — 小节标题（如"第1讲 集合的概念"）
+        sort_order       — 排序序号，控制小节在课程内的显示顺序，从小到大排列
+        video_type       — 视频来源类型：
+                           url=外部链接（B站/腾讯视频等）
+                           local=本地上传（视频文件存储在服务器本地）
+        video_url        — 视频地址：外部链接或服务器本地文件名
+        duration_seconds — 小节视频总时长（秒）
+        created_at       — 创建时间
+
+    与课程的关系：
+        Course 1:N Section — 一门课包含多个小节，删除课程时级联删除其下所有小节
+    """
+    __tablename__ = "sections"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False, comment="小节标题")
+    sort_order = Column(Integer, default=0, comment="排序序号（从小到大）")
+    video_type = Column(Enum("url", "local"), default="url", nullable=False)
+    video_url = Column(String(500), default="", comment="视频地址：外部链接或本地路径")
+    duration_seconds = Column(Integer, default=0, comment="小节视频时长(秒)")
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class StudySession(Base):
@@ -122,6 +164,7 @@ class StudySession(Base):
         id                — 自增主键
         user_id           — 学习的学生 ID，外键关联 users 表，加索引加速用户维度查询
         course_id         — 学习的课程 ID，外键关联 courses 表，加索引加速课程维度查询
+        section_id        — 学习的小节 ID，外键关联 sections 表，nullable 兼容旧数据
         session_id        — 会话唯一标识（UUID），前端生成，用于关联心跳日志，
                             设为 unique + index 防止重复提交
         start_time        — 学习开始时间，学生打开课程页面时记录
@@ -144,6 +187,8 @@ class StudySession(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=False, index=True)
+    # section_id 可为空，兼容 v2.x 旧数据（旧数据没有小节维度）
+    section_id = Column(BigInteger, ForeignKey("sections.id"), nullable=True, index=True, comment="学习的小节ID")
     session_id = Column(String(64), unique=True, nullable=False, index=True)
     start_time = Column(DateTime, nullable=False)
     last_heartbeat = Column(DateTime, nullable=True)

@@ -60,6 +60,12 @@ services:
       # 格式：https://cdn.your-domain.com，为空表示不使用 CDN（向后兼容）
       - CDN_DOMAIN=${CDN_DOMAIN:-}
 
+    volumes:
+      # 将上传的视频文件挂载到后端容器，使 ops/storage API 能统计视频大小
+      # 前端 Nginx 容器也需要此挂载（只读）用于视频分发
+      - ./uploads:/app/uploads
+      # 挂载 Docker socket，使后端容器能通过 Docker SDK 查询容器状态（运维面板用）
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       mysql:
         condition: service_healthy            # 等待 MySQL 健康检查通过后再启动，避免连接失败

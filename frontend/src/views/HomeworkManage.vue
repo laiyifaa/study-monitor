@@ -16,7 +16,10 @@
       <div v-else class="assignment-detail">
         <div class="assignment-header">
           <h3>{{ assignment.title }}</h3>
-          <span class="status-badge" :class="assignment.status">{{ statusText(assignment.status) }}</span>
+          <div class="status-group">
+            <span class="status-badge" :class="assignment.status">{{ statusText(assignment.status) }}</span>
+            <span class="status-badge" :class="assignment.grading_status">{{ gradingStatusText(assignment.grading_status) }}</span>
+          </div>
         </div>
         <p class="desc">{{ assignment.description || '暂无描述' }}</p>
         <div class="meta">
@@ -206,6 +209,10 @@ function statusText(status) {
   return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
 }
 
+function gradingStatusText(status) {
+  return { pending: '待批改', graded: '已批改' }[status] || status
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return ''
   return new Date(dateStr).toLocaleString('zh-CN')
@@ -316,6 +323,11 @@ async function submitGrade() {
 .status-badge.closed { background: #fff7e6; color: #fa8c16; }
 .status-badge.pending { background: #fff7e6; color: #fa8c16; }
 .status-badge.graded { background: #f6ffed; color: #52c41a; }
+
+.status-group {
+  display: flex;
+  gap: 6px;
+}
 
 .desc {
   color: #666;

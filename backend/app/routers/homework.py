@@ -37,7 +37,7 @@ import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
@@ -50,6 +50,18 @@ router = APIRouter(prefix="/api/homework", tags=["作业管理"])
 settings = get_settings()
 
 HOMEWORK_UPLOAD_DIR = "uploads/homework"
+
+
+async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
+    pending_count = await db.scalar(
+        select(func.count()).select_from(Submission).where(
+            and_(Submission.assignment_id == assignment_id, Submission.status == "pending")
+        )
+    )
+    if pending_count == 0:
+        assignment = (await db.execute(select(Assignment).where(Assignment.id == assignment_id))).scalar_one_or_none()
+        if assignment and assignment.grading_status != "graded":
+            assignment.grading_status = "graded"
 
 
 class CreateAssignmentRequest(BaseModel):
@@ -130,6 +142,7 @@ async def get_assignment(
             "grading_prompt": assignment.grading_prompt,
             "deadline": assignment.deadline.isoformat() if assignment.deadline else None,
             "status": assignment.status,
+            "grading_status": assignment.grading_status,
             "created_at": assignment.created_at.isoformat(),
         },
     }
@@ -180,6 +193,7 @@ async def create_assignment(
             "grading_prompt": assignment.grading_prompt,
             "deadline": assignment.deadline.isoformat() if assignment.deadline else None,
             "status": assignment.status,
+            "grading_status": assignment.grading_status,
             "created_at": assignment.created_at.isoformat(),
         },
     }
@@ -324,6 +338,9 @@ async def create_submission(
         status="pending",
     )
     db.add(submission)
+
+    assignment.grading_status = "pending"
+
     await db.commit()
     await db.refresh(submission)
 
@@ -414,6 +431,8 @@ async def manual_grade(
 
     submission.status = "graded"
 
+    await _refresh_grading_status(submission.assignment_id, db)
+
     await db.commit()
     await db.refresh(report)
 
@@ -450,6 +469,8 @@ async def grading_callback(
     db.add(report)
 
     submission.status = "graded"
+
+    await _refresh_grading_status(submission.assignment_id, db)
 
     await db.commit()
     await db.refresh(report)

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # 为空时表示不使用 CDN，视频直接从 Nginx 服务器分发（向后兼容）
     CDN_DOMAIN: str = ""
 
+    # ── 智能体批改配置 ──
+    # 智能体 API 地址，用于自动批改作业
+    # 为空时表示未配置，定时任务会跳过智能体调用
+    GRADING_AGENT_URL: str = ""
+
     # ── 服务运行参数 ──
     API_HOST: str = "0.0.0.0"            # 监听所有网卡，Docker 部署时必须
     API_PORT: int = 8000

@@ -208,15 +208,17 @@ class Assignment(Base):
     用途：教师发布的作业，绑定到课程，包含题目描述和评分标准。
 
     字段说明：
-        id              — 自增主键
-        course_id       — 所属课程 ID，外键关联 courses 表
-        title           — 作业标题
-        description     — 题目描述/要求（Markdown 或纯文本）
-        grading_prompt  — 评分标准/批改提示词（传递给智能体）
-        deadline        — 截止时间
-        status          — 作业状态：draft=草稿/published=已发布/closed=已关闭
-        created_at      — 创建时间
-        updated_at      — 最后修改时间
+        id                — 自增主键
+        course_id         — 所属课程 ID，外键关联 courses 表
+        title             — 作业标题
+        description       — 题目描述/要求（Markdown 或纯文本）
+        grading_prompt    — 评分标准/批改提示词（传递给智能体）
+        deadline          — 截止时间
+        status            — 作业状态：draft=草稿/published=已发布/closed=已关闭
+        grading_status    — 批改状态：pending=待批改/graded=已批改
+        grading_triggered — 是否已触发智能体批改（防重复触发）
+        created_at        — 创建时间
+        updated_at        — 最后修改时间
     """
     __tablename__ = "assignments"
 
@@ -227,6 +229,8 @@ class Assignment(Base):
     grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
     deadline = Column(DateTime, nullable=True)
     status = Column(Enum("draft", "published", "closed"), default="draft", nullable=False)
+    grading_status = Column(Enum("pending", "graded"), default="pending", nullable=False, comment="批改状态")
+    grading_triggered = Column(Boolean, default=False, comment="是否已触发智能体批改")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

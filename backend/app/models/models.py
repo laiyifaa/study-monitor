@@ -257,9 +257,11 @@ class Assignment(Base):
         course_id         — 所属课程 ID，外键关联 courses 表
         title             — 作业标题
         description       — 题目描述/要求（Markdown 或纯文本）
+        question_files    — 题目文件 URL 列表（图片/PDF，JSON 数组）
         grading_prompt    — 评分标准/批改提示词（传递给智能体）
         deadline          — 截止时间
         status            — 作业状态：draft=草稿/published=已发布/closed=已关闭
+        grading_mode      — 批改模式：auto=自动/manual=人工/hybrid=混合
         grading_status    — 批改状态：pending=待批改/graded=已批改
         grading_triggered — 是否已触发智能体批改（防重复触发）
         created_at        — 创建时间
@@ -271,9 +273,11 @@ class Assignment(Base):
     course_id = Column(BigInteger, ForeignKey("courses.id"), unique=True, nullable=False, index=True)
     title = Column(String(200), nullable=False)
     description = Column(Text, default="")
+    question_files = Column(Text, default="[]", comment="题目文件URL数组(JSON)")
     grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
     deadline = Column(DateTime, nullable=True)
     status = Column(Enum("draft", "published", "closed"), default="draft", nullable=False)
+    grading_mode = Column(Enum("auto", "manual", "hybrid"), default="auto", nullable=False, comment="批改模式")
     grading_status = Column(Enum("pending", "graded"), default="pending", nullable=False, comment="批改状态")
     grading_triggered = Column(Boolean, default=False, comment="是否已触发智能体批改")
     created_at = Column(DateTime, server_default=func.now())
@@ -284,7 +288,7 @@ class Submission(Base):
     """
     作业提交模型
 
-    用途：学生提交的作业，包含上传的图片列表。
+    用途：学生提交的作业，包含上传的图片列表。支持多次提交（截止前可修改）。
 
     字段说明：
         id              — 自增主键
@@ -292,6 +296,8 @@ class Submission(Base):
         user_id         — 提交的学生 ID，外键关联 users 表
         images          — 图片 URL 数组（JSON 格式）
         status          — 提交状态：pending=待批改/graded=已批改
+        version         — 提交版本号（1, 2, 3...）
+        is_latest       — 是否为最新版本
         submitted_at    — 提交时间
     """
     __tablename__ = "submissions"
@@ -301,6 +307,8 @@ class Submission(Base):
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     images = Column(Text, default="[]", comment="图片URL数组(JSON)")
     status = Column(Enum("pending", "graded"), default="pending", nullable=False)
+    version = Column(Integer, default=1, comment="提交版本号")
+    is_latest = Column(Boolean, default=True, index=True, comment="是否最新版本")
     submitted_at = Column(DateTime, server_default=func.now())
 
 
@@ -317,6 +325,7 @@ class GradingReport(Base):
         feedback        — 总评（Markdown 或纯文本）
         detail          — 各题详细批改（JSON 格式）
         generated_by    — 智能体标识（如 "wukong", "gpt-4o", "custom"）
+        review_status   — 复核状态：pending_review=待复核/confirmed=已确认/modified=已修改
         created_at      — 生成时间
     """
     __tablename__ = "grading_reports"
@@ -327,4 +336,37 @@ class GradingReport(Base):
     feedback = Column(Text, default="")
     detail = Column(Text, default="{}", comment="各题详细批改(JSON)")
     generated_by = Column(String(50), default="", comment="智能体标识")
+    review_status = Column(Enum("pending_review", "confirmed", "modified"), default="confirmed", nullable=False, comment="复核状态")
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class GradingTask(Base):
+    """
+    批改任务模型
+
+    用途：追踪每个提交的智能体批改状态，支持重试和错误记录。
+
+    字段说明：
+        id                 — 自增主键
+        submission_id      — 关联的提交 ID，外键关联 submissions 表
+        stitched_image_url — 拼接后的长图 URL
+        agent_task_id      — 智能体返回的任务 ID（用于状态查询）
+        status             — 任务状态：pending=待发送/sent=已发送/graded=已批改/failed=失败
+        retry_count        — 已重试次数
+        error_message      — 错误信息（失败时记录）
+        sent_at            — 发送给智能体的时间
+        graded_at          — 智能体回调时间
+        created_at         — 创建时间
+    """
+    __tablename__ = "grading_tasks"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    submission_id = Column(BigInteger, ForeignKey("submissions.id"), nullable=False, index=True)
+    stitched_image_url = Column(String(500), default="", comment="拼接后的长图URL")
+    agent_task_id = Column(String(100), default="", comment="智能体任务ID")
+    status = Column(Enum("pending", "sent", "graded", "failed"), default="pending", nullable=False, comment="任务状态")
+    retry_count = Column(Integer, default=0, comment="已重试次数")
+    error_message = Column(Text, default="", comment="错误信息")
+    sent_at = Column(DateTime, nullable=True, comment="发送时间")
+    graded_at = Column(DateTime, nullable=True, comment="批改完成时间")
     created_at = Column(DateTime, server_default=func.now())

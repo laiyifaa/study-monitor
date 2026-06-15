@@ -15,12 +15,23 @@
           <span class="status-badge" :class="assignment.status">{{ statusText(assignment.status) }}</span>
         </div>
         <p class="desc">{{ assignment.description || '暂无描述' }}</p>
+        <div v-if="assignment.question_files && assignment.question_files.length > 0" class="question-files">
+          <h4>题目文件</h4>
+          <div class="question-files-list">
+            <div v-for="(file, i) in assignment.question_files" :key="i" class="question-file">
+              <img v-if="!file.endsWith('.pdf')" :src="file" class="question-image" @click="previewImage(file)" />
+              <a v-else :href="file" target="_blank" class="pdf-link">📄 查看 PDF</a>
+            </div>
+          </div>
+        </div>
         <div class="meta">
           <span v-if="assignment.deadline">截止：{{ formatDate(assignment.deadline) }}</span>
         </div>
 
         <div v-if="assignment.status === 'published'" class="submit-section">
-          <button class="btn-primary" @click="showSubmitModal = true">提交作业</button>
+          <button class="btn-primary" @click="showSubmitModal = true">
+            {{ mySubmission ? '修改提交' : '提交作业' }}
+          </button>
           <button class="btn-secondary" @click="loadMySubmission">查看我的提交</button>
         </div>
 
@@ -31,6 +42,20 @@
           </div>
           <div v-if="mySubmission.report" class="report">
             <div class="score">分数：{{ mySubmission.report.score }}</div>
+            <div v-if="getQuestions(mySubmission.report)" class="questions-detail">
+              <div v-for="q in getQuestions(mySubmission.report)" :key="q.index" class="question-item">
+                <span class="q-index">第{{ q.index }}题</span>
+                <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
+                <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
+                <div v-if="q.comment" class="q-comment">{{ q.comment }}</div>
+              </div>
+            </div>
+            <div v-if="getIssues(mySubmission.report)" class="issues-list">
+              <h5>问题汇总</h5>
+              <ul>
+                <li v-for="(issue, i) in getIssues(mySubmission.report)" :key="i">{{ issue }}</li>
+              </ul>
+            </div>
             <div class="feedback">{{ mySubmission.report.feedback }}</div>
           </div>
           <div v-else class="pending">等待批改中...</div>
@@ -167,6 +192,30 @@ function formatDate(dateStr) {
   if (!dateStr) return ''
   return new Date(dateStr).toLocaleString('zh-CN')
 }
+
+function previewImage(url) {
+  window.open(url, '_blank')
+}
+
+function getQuestions(report) {
+  if (!report?.detail) return null
+  try {
+    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
+    return detail.questions || null
+  } catch {
+    return null
+  }
+}
+
+function getIssues(report) {
+  if (!report?.detail) return null
+  try {
+    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
+    return detail.issues || null
+  } catch {
+    return null
+  }
+}
 </script>
 
 <style scoped>
@@ -233,6 +282,44 @@ function formatDate(dateStr) {
   margin-bottom: 8px;
 }
 
+.question-files {
+  margin: 16px 0;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 4px;
+}
+
+.question-files h4 {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.question-files-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.question-file {
+  display: inline-block;
+}
+
+.question-image {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pdf-link {
+  display: inline-block;
+  padding: 8px 16px;
+  background: #1890ff;
+  color: white;
+  border-radius: 4px;
+  text-decoration: none;
+}
+
 .meta {
   font-size: 12px;
   color: #999;
@@ -273,6 +360,71 @@ function formatDate(dateStr) {
   background: #f6ffed;
   padding: 12px;
   border-radius: 4px;
+}
+
+.questions-detail {
+  margin: 12px 0;
+  padding: 12px;
+  background: white;
+  border-radius: 4px;
+}
+
+.question-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.question-item:last-child {
+  border-bottom: none;
+}
+
+.q-index {
+  font-weight: 500;
+  min-width: 50px;
+}
+
+.q-score {
+  min-width: 60px;
+  color: #ff4d4f;
+}
+
+.q-score.correct {
+  color: #52c41a;
+}
+
+.q-status {
+  font-size: 16px;
+}
+
+.q-comment {
+  flex: 1;
+  color: #666;
+  font-size: 13px;
+}
+
+.issues-list {
+  margin: 12px 0;
+  padding: 12px;
+  background: #fff7e6;
+  border-radius: 4px;
+}
+
+.issues-list h5 {
+  margin-bottom: 8px;
+  color: #fa8c16;
+}
+
+.issues-list ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.issues-list li {
+  margin: 4px 0;
+  color: #666;
 }
 
 .score {

@@ -1,36 +1,39 @@
 """
 定时任务模块 (scheduler)
-========================
-功能：管理后台定时任务，目前包含心跳日志自动清理。
+=======================
+功能：管理后台定时任务，目前包含心跳日志自动清理和作业自动批改。
 
 在系统中的角色：
     运维保障层——自动执行数据维护任务，防止 heartbeat_logs 表无限增长导致磁盘爆满。
-    通过 APScheduler 的 AsyncIOScheduler 在 FastAPI lifespan 中启动/关闭。
+    批改触发层——到达作业截止时间后，自动触发智能体批改流程。
 
 定时任务列表：
     - cleanup_heartbeat_logs：每天凌晨3点清理超过30天的心跳日志
+    - trigger_auto_grading：每分钟检查是否有到期作业需要自动批改
 
 扩展说明：
     如需新增定时任务，在此模块中定义 async 函数并调用 scheduler.add_job() 注册即可。
-    常见扩展场景：每日学习报告推送、过期课程自动归档等。
 """
 
+import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, and_
 
+from app.config import get_settings
 from app.database import async_session
-from app.models.models import HeartbeatLog
+from app.models.models import HeartbeatLog, Assignment, Submission, GradingTask
+from app.services.image_stitcher import stitch_images, image_url_to_local_path
+from app.services.agent_caller import call_grading_agent
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
-# APScheduler 异步调度器实例
 scheduler = AsyncIOScheduler()
 
-# 心跳日志保留天数，超过此天数的记录将被自动清理
-# 30天足够支撑争议申诉和审计回溯，同时控制表体积
 HEARTBEAT_RETENTION_DAYS = 30
 
 
@@ -93,6 +96,135 @@ async def cleanup_heartbeat_logs():
         logger.error(f"心跳日志清理失败: {e}")
 
 
+async def trigger_auto_grading():
+    """
+    自动批改到期作业（并发处理 + GradingTask 状态追踪）
+
+    执行频率：每分钟
+    逻辑：
+        1. 查找所有 deadline <= now 且 status=published 且 grading_triggered=False 的作业
+        2. 对每个作业，查找所有 pending 的提交
+        3. 并发处理每个提交：
+           a. 检查是否已有 GradingTask，跳过已处理的
+           b. 创建 GradingTask (status=pending)
+           c. 取出图片 URL 列表，转换为本地路径
+           d. 调用 image_stitcher 拼接为长图，保存 URL 到 GradingTask
+           e. 调用 agent_caller 发给智能体（带重试）
+        4. 标记作业 grading_triggered=True，防止重复触发
+    """
+    try:
+        async with async_session() as db:
+            now = datetime.utcnow()
+            result = await db.execute(
+                select(Assignment).where(
+                    and_(
+                        Assignment.status == "published",
+                        Assignment.deadline <= now,
+                        Assignment.grading_triggered == False,
+                    )
+                )
+            )
+            assignments = result.scalars().all()
+
+            if not assignments:
+                return
+
+            for assignment in assignments:
+                if assignment.grading_mode == "manual":
+                    assignment.grading_triggered = True
+                    await db.commit()
+                    logger.info(f"作业 {assignment.id} 批改模式为人工，跳过智能体")
+                    continue
+
+                sub_result = await db.execute(
+                    select(Submission).where(
+                        and_(
+                            Submission.assignment_id == assignment.id,
+                            Submission.status == "pending",
+                            Submission.is_latest == True,
+                        )
+                    )
+                )
+                submissions = sub_result.scalars().all()
+
+                if not submissions:
+                    assignment.grading_triggered = True
+                    await db.commit()
+                    logger.info(f"作业 {assignment.id} 无待批改提交，标记已触发")
+                    continue
+
+                tasks = [
+                    _process_submission(submission, assignment)
+                    for submission in submissions
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                success_count = sum(1 for r in results if r is True)
+                fail_count = sum(1 for r in results if r is False or isinstance(r, Exception))
+
+                assignment.grading_triggered = True
+                await db.commit()
+                logger.info(
+                    f"作业 {assignment.id} 批改任务已触发: "
+                    f"共 {len(submissions)} 个提交, 成功 {success_count}, 失败 {fail_count}"
+                )
+
+    except Exception as e:
+        logger.error(f"自动批改任务执行失败: {e}")
+
+
+async def _process_submission(submission: Submission, assignment: Assignment) -> bool:
+    """
+    处理单个提交的批改任务
+
+    参数：
+        submission  — 提交对象
+        assignment  — 作业对象
+
+    返回值：
+        True  — 成功发送给智能体
+        False — 处理失败
+    """
+    try:
+        async with async_session() as db:
+            existing_task = await db.execute(
+                select(GradingTask).where(GradingTask.submission_id == submission.id)
+            )
+            if existing_task.scalar_one_or_none():
+                logger.info(f"提交 {submission.id} 已有 GradingTask，跳过")
+                return True
+
+            images = json.loads(submission.images)
+            if not images:
+                logger.warning(f"提交 {submission.id} 无图片，跳过")
+                return False
+
+            local_paths = [image_url_to_local_path(url) for url in images]
+            output_filename = f"stitched_{submission.id}.jpg"
+            stitched_url = stitch_images(local_paths, output_filename)
+
+            task = GradingTask(
+                submission_id=submission.id,
+                stitched_image_url=stitched_url,
+                status="pending",
+            )
+            db.add(task)
+            await db.commit()
+            await db.refresh(task)
+
+        success = await call_grading_agent(
+            task_id=task.id,
+            submission_id=submission.id,
+            stitched_image_url=stitched_url,
+            prompt=assignment.grading_prompt,
+        )
+        return success
+
+    except Exception as e:
+        logger.error(f"提交 {submission.id} 批改处理失败: {e}")
+        return False
+
+
 def start_scheduler():
     """
     启动定时任务调度器
@@ -100,7 +232,6 @@ def start_scheduler():
     在 FastAPI lifespan 的启动阶段调用，注册所有定时任务并启动调度器。
     调用位置：app/main.py 的 lifespan() 函数中。
     """
-    # 注册心跳日志清理任务：每天凌晨3点执行
     scheduler.add_job(
         cleanup_heartbeat_logs,
         "cron",
@@ -110,8 +241,19 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    scheduler.add_job(
+        trigger_auto_grading,
+        "cron",
+        minute="*",
+        id="trigger_auto_grading",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("定时任务调度器已启动: 心跳日志清理(每天03:00, 保留%d天)", HEARTBEAT_RETENTION_DAYS)
+    logger.info(
+        "定时任务调度器已启动: 心跳日志清理(每天03:00, 保留%d天), 自动批改(每分钟检查)",
+        HEARTBEAT_RETENTION_DAYS,
+    )
 
 
 def stop_scheduler():

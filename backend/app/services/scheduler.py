@@ -15,6 +15,7 @@
     如需新增定时任务，在此模块中定义 async 函数并调用 scheduler.add_job() 注册即可。
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -22,12 +23,14 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, select, text, and_
 
+from app.config import get_settings
 from app.database import async_session
-from app.models.models import HeartbeatLog, Assignment, Submission
+from app.models.models import HeartbeatLog, Assignment, Submission, GradingTask
 from app.services.image_stitcher import stitch_images, image_url_to_local_path
 from app.services.agent_caller import call_grading_agent
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 scheduler = AsyncIOScheduler()
 
@@ -95,16 +98,18 @@ async def cleanup_heartbeat_logs():
 
 async def trigger_auto_grading():
     """
-    自动批改到期作业
+    自动批改到期作业（并发处理 + GradingTask 状态追踪）
 
     执行频率：每分钟
     逻辑：
         1. 查找所有 deadline <= now 且 status=published 且 grading_triggered=False 的作业
         2. 对每个作业，查找所有 pending 的提交
-        3. 对每个提交：
-           a. 取出图片 URL 列表，转换为本地路径
-           b. 调用 image_stitcher 拼接为长图
-           c. 调用 agent_caller 发给智能体
+        3. 并发处理每个提交：
+           a. 检查是否已有 GradingTask，跳过已处理的
+           b. 创建 GradingTask (status=pending)
+           c. 取出图片 URL 列表，转换为本地路径
+           d. 调用 image_stitcher 拼接为长图，保存 URL 到 GradingTask
+           e. 调用 agent_caller 发给智能体（带重试）
         4. 标记作业 grading_triggered=True，防止重复触发
     """
     try:
@@ -125,11 +130,18 @@ async def trigger_auto_grading():
                 return
 
             for assignment in assignments:
+                if assignment.grading_mode == "manual":
+                    assignment.grading_triggered = True
+                    await db.commit()
+                    logger.info(f"作业 {assignment.id} 批改模式为人工，跳过智能体")
+                    continue
+
                 sub_result = await db.execute(
                     select(Submission).where(
                         and_(
                             Submission.assignment_id == assignment.id,
                             Submission.status == "pending",
+                            Submission.is_latest == True,
                         )
                     )
                 )
@@ -141,35 +153,76 @@ async def trigger_auto_grading():
                     logger.info(f"作业 {assignment.id} 无待批改提交，标记已触发")
                     continue
 
-                for submission in submissions:
-                    try:
-                        images = json.loads(submission.images)
-                        if not images:
-                            logger.warning(f"提交 {submission.id} 无图片，跳过")
-                            continue
+                tasks = [
+                    _process_submission(submission, assignment)
+                    for submission in submissions
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                        local_paths = [image_url_to_local_path(url) for url in images]
-                        output_filename = f"stitched_{submission.id}.jpg"
-                        stitched_url = stitch_images(local_paths, output_filename)
-
-                        await call_grading_agent(
-                            submission_id=submission.id,
-                            stitched_image_url=stitched_url,
-                            prompt=assignment.grading_prompt,
-                        )
-                        logger.info(f"提交 {submission.id} 已触发智能体批改")
-                    except Exception as e:
-                        logger.error(f"提交 {submission.id} 批改触发失败: {e}")
+                success_count = sum(1 for r in results if r is True)
+                fail_count = sum(1 for r in results if r is False or isinstance(r, Exception))
 
                 assignment.grading_triggered = True
                 await db.commit()
                 logger.info(
-                    f"作业 {assignment.id} 批改任务已触发, "
-                    f"共 {len(submissions)} 个待批改提交"
+                    f"作业 {assignment.id} 批改任务已触发: "
+                    f"共 {len(submissions)} 个提交, 成功 {success_count}, 失败 {fail_count}"
                 )
 
     except Exception as e:
         logger.error(f"自动批改任务执行失败: {e}")
+
+
+async def _process_submission(submission: Submission, assignment: Assignment) -> bool:
+    """
+    处理单个提交的批改任务
+
+    参数：
+        submission  — 提交对象
+        assignment  — 作业对象
+
+    返回值：
+        True  — 成功发送给智能体
+        False — 处理失败
+    """
+    try:
+        async with async_session() as db:
+            existing_task = await db.execute(
+                select(GradingTask).where(GradingTask.submission_id == submission.id)
+            )
+            if existing_task.scalar_one_or_none():
+                logger.info(f"提交 {submission.id} 已有 GradingTask，跳过")
+                return True
+
+            images = json.loads(submission.images)
+            if not images:
+                logger.warning(f"提交 {submission.id} 无图片，跳过")
+                return False
+
+            local_paths = [image_url_to_local_path(url) for url in images]
+            output_filename = f"stitched_{submission.id}.jpg"
+            stitched_url = stitch_images(local_paths, output_filename)
+
+            task = GradingTask(
+                submission_id=submission.id,
+                stitched_image_url=stitched_url,
+                status="pending",
+            )
+            db.add(task)
+            await db.commit()
+            await db.refresh(task)
+
+        success = await call_grading_agent(
+            task_id=task.id,
+            submission_id=submission.id,
+            stitched_image_url=stitched_url,
+            prompt=assignment.grading_prompt,
+        )
+        return success
+
+    except Exception as e:
+        logger.error(f"提交 {submission.id} 批改处理失败: {e}")
+        return False
 
 
 def start_scheduler():

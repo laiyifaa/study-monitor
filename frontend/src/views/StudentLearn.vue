@@ -58,9 +58,19 @@
       {{ effectiveMinutes }} / {{ requireMinutes }} 分钟
     </div>
 
+    <!-- ==================== 未开播提示（v4.0） ==================== -->
+    <div v-if="sectionLocked" class="locked-overlay">
+      <div class="locked-card">
+        <div class="locked-icon">🔒</div>
+        <h3>课程尚未开播</h3>
+        <p>开播时间：{{ openTimeInfo }}</p>
+        <p class="locked-hint">开播后即可开始学习</p>
+      </div>
+    </div>
+
     <!-- ==================== 视频播放区域 ==================== -->
     <!-- 根据 video_type 切换 iframe / HTML5 video 两种播放方式 -->
-    <div class="video-container">
+    <div v-if="!sectionLocked" class="video-container">
       <!-- 外部链接模式：iframe 嵌入第三方视频播放页 -->
       <iframe
         v-if="videoType === 'url' && videoUrl"
@@ -133,6 +143,10 @@ const videoUrl = ref('')
 
 /** CDN 加速地址：后端开启 CDN 时返回，优先使用；为空时降级到原始路径 */
 const videoCdnUrl = ref('')
+
+/** 小节是否未开播（v4.0） */
+const sectionLocked = ref(false)
+const openTimeInfo = ref('')
 
 /** HTML5 video 元素的模板引用，用于读取 currentTime */
 const videoPlayer = ref(null)
@@ -208,6 +222,14 @@ onMounted(async () => {
       videoType.value = section.video_type || 'url'
       videoUrl.value = section.video_url || ''
       videoCdnUrl.value = section.video_cdn_url || ''
+      // v4.0: 检查小节开播时间
+      if (section.open_time) {
+        const openTime = new Date(section.open_time)
+        if (openTime > new Date()) {
+          sectionLocked.value = true
+          openTimeInfo.value = `${openTime.getMonth() + 1}月${openTime.getDate()}日 ${openTime.getHours()}:${String(openTime.getMinutes()).padStart(2, '0')}`
+        }
+      }
     }
     // 从课程获取要求时长和标题
     if (courseRes.data.code === 0) {
@@ -390,6 +412,20 @@ const onVideoTimeUpdate = () => {
   border-radius: 6px; font-size: 16px; cursor: pointer;
 }
 .verify-btn:active { background: #096dd9; }
+
+/* 未开播锁屏提示（v4.0） */
+.locked-overlay {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 300px; padding: 40px 20px;
+}
+.locked-card {
+  text-align: center; background: #fff; border-radius: 12px; padding: 32px 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.locked-icon { font-size: 48px; margin-bottom: 12px; }
+.locked-card h3 { font-size: 18px; margin-bottom: 8px; color: #333; }
+.locked-card p { font-size: 14px; color: #666; }
+.locked-hint { color: #999; font-size: 13px; margin-top: 8px; }
 
 /* 返回导航栏 */
 .back-nav-bar {

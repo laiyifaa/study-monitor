@@ -36,6 +36,10 @@
     <div v-if="auth.isLoggedIn.value" class="header-right">
       <!-- 运维面板入口：ops 和 admin 可见 -->
       <router-link v-if="auth.user.value?.role === 'ops' || auth.user.value?.role === 'admin'" to="/ops" class="btn-ops-link">运维</router-link>
+      <!-- v4.0: 新功能入口 -->
+      <router-link to="/announcements" class="btn-feature-link">公告</router-link>
+      <router-link v-if="auth.user.value?.role === 'student'" to="/checkin" class="btn-feature-link">签到</router-link>
+      <router-link to="/study-report" class="btn-feature-link">报告</router-link>
       <!-- 用户角色标签 -->
       <span class="role-tag" :class="auth.user.value?.role">{{ roleLabel }}</span>
       <!-- 用户姓名 -->
@@ -279,6 +283,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 }
 .btn-ops-link:hover {
   background: #13c2c2;
+  color: #fff;
+}
+
+/* v4.0: 新功能入口按钮 */
+.btn-feature-link {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid #1890ff;
+  border-radius: 4px;
+  color: #1890ff;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+.btn-feature-link:hover {
+  background: #1890ff;
   color: #fff;
 }
 

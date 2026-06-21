@@ -119,6 +119,48 @@ const routes = [
     meta: { title: '运维监控', role: 'ops' },  // 仅运维/管理员
   },
   {
+    // v4.0: 公告列表
+    path: '/announcements',
+    name: 'AnnouncementList',
+    component: () => import('../views/AnnouncementList.vue'),
+    meta: { title: '通知公告' },
+  },
+  {
+    // v4.0: 发布公告
+    path: '/announcement-create',
+    name: 'AnnouncementCreate',
+    component: () => import('../views/AnnouncementCreate.vue'),
+    meta: { title: '发布公告', role: 'teacher' },
+  },
+  {
+    // v4.0: 学习排行榜
+    path: '/leaderboard/:courseId',
+    name: 'Leaderboard',
+    component: () => import('../views/Leaderboard.vue'),
+    meta: { title: '学习排行榜' },
+  },
+  {
+    // v4.0: 小节评价
+    path: '/feedback/:sectionId',
+    name: 'SectionFeedback',
+    component: () => import('../views/SectionFeedback.vue'),
+    meta: { title: '课程评价' },
+  },
+  {
+    // v4.0: 签到日历
+    path: '/checkin',
+    name: 'CheckInCalendar',
+    component: () => import('../views/CheckInCalendar.vue'),
+    meta: { title: '学习签到', role: 'student' },
+  },
+  {
+    // v4.0: 学习报告
+    path: '/study-report',
+    name: 'StudyReport',
+    component: () => import('../views/StudyReport.vue'),
+    meta: { title: '学习报告' },
+  },
+  {
     // 404 兜底路由：匹配所有未定义的路径
     // 不用专门的 404 页面，而是重定向到课程列表，对用户更友好
     path: '/:pathMatch(.*)*',

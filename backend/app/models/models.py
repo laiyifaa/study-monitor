@@ -28,7 +28,7 @@
   学生学习时针对具体小节计时，课程总进度由各小节进度汇总
 """
 
-from sqlalchemy import Column, BigInteger, String, Enum, DateTime, ForeignKey, Boolean, Integer, DECIMAL, Text
+from sqlalchemy import Column, BigInteger, String, Enum, DateTime, ForeignKey, Boolean, Integer, DECIMAL, Text, Float
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -44,6 +44,8 @@ class User(Base):
         dingtalk_user_id — 钉钉用户唯一标识，作为钉钉 API 交互的 key，
                            设为 unique + index 防止重复注册并加速查询
         name             — 用户姓名（来自钉钉通讯录）
+        real_name        — 真实姓名（钉钉通讯录详解接口获取，用于实名展示）
+        phone            — 手机号（钉钉通讯录获取，用于实名信息核验）
         role             — 角色：student 教师/管理员/学生，控制前端页面和 API 权限
         class_name       — 班级名称（如"高三1班"），用于按班级筛选统计
         class_id         — 班级 ID，关联钉钉部门体系（预留）
@@ -63,6 +65,9 @@ class User(Base):
     # 浏览器登录密码哈希：钉钉免登用户没有密码，浏览器登录用户必须有
     # 使用 PBKDF2-SHA256 算法，格式为 "盐:哈希值"
     password_hash = Column(String(200), default="", comment="浏览器登录密码哈希(空=仅钉钉登录)")
+    # 实名信息：钉钉免登时从通讯录API自动获取
+    real_name = Column(String(50), default="", comment="真实姓名（钉钉通讯录获取）")
+    phone = Column(String(20), default="", comment="手机号（钉钉通讯录获取）")
     # API Key：供智能体/外部程序调用系统接口的长期密钥
     # 格式为 "sk_" + 32字节随机十六进制字符串，共67字符
     # 教师和管理员可通过管理后台生成，智能体携带此Key即可代替JWT访问API
@@ -136,6 +141,7 @@ class Section(Base):
                            local=本地上传（视频文件存储在服务器本地）
         video_url        — 视频地址：外部链接或服务器本地文件名
         duration_seconds — 小节视频总时长（秒）
+        open_time        — 开播时间：未到该时间学生无法进入学习，null表示不限制
         created_at       — 创建时间
 
     与课程的关系：
@@ -150,6 +156,9 @@ class Section(Base):
     video_type = Column(Enum("url", "local"), default="url", nullable=False)
     video_url = Column(String(500), default="", comment="视频地址：外部链接或本地路径")
     duration_seconds = Column(Integer, default=0, comment="小节视频时长(秒)")
+    # 开播时间：未到该时间学生无法进入学习，null表示不限制
+    # 开播时间过后学生始终可进入（包括复习），不再锁定
+    open_time = Column(DateTime, nullable=True, comment="开播时间（未到不可进入学习，null=不限制）")
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -250,16 +259,18 @@ class Assignment(Base):
     """
     作业模型
 
-    用途：教师发布的作业，绑定到课程，包含题目描述和评分标准。
+    用途：教师发布的作业，绑定到小节（section），每个小节最多一份作业。
+         v4.0 起从课程级（1 course = 1 assignment）迁移到小节级（1 section = 1 assignment）。
 
     字段说明：
         id                — 自增主键
-        course_id         — 所属课程 ID，外键关联 courses 表
+        section_id        — 所属小节 ID，外键关联 sections 表（unique 约束保证 1:1）
+        course_id         — 所属课程 ID（冗余字段，方便按课程批量查询作业）
         title             — 作业标题
         description       — 题目描述/要求（Markdown 或纯文本）
         question_files    — 题目文件 URL 列表（图片/PDF，JSON 数组）
         grading_prompt    — 评分标准/批改提示词（传递给智能体）
-        deadline          — 截止时间
+        deadline          — 截止时间（迟交仍可提交，但标记 is_late=True）
         status            — 作业状态：draft=草稿/published=已发布/closed=已关闭
         grading_mode      — 批改模式：auto=自动/manual=人工/hybrid=混合
         grading_status    — 批改状态：pending=待批改/graded=已批改
@@ -270,7 +281,10 @@ class Assignment(Base):
     __tablename__ = "assignments"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    course_id = Column(BigInteger, ForeignKey("courses.id"), unique=True, nullable=False, index=True)
+    # v4.0: 从 course_id 迁移到 section_id，1 section = 1 assignment
+    section_id = Column(BigInteger, ForeignKey("sections.id"), unique=True, nullable=False, index=True, comment="所属小节ID")
+    # course_id 冗余字段，方便按课程维度查询所有作业，迁移后从 section.course_id 自动填入
+    course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=True, index=True, comment="所属课程ID(冗余)")
     title = Column(String(200), nullable=False)
     description = Column(Text, default="")
     question_files = Column(Text, default="[]", comment="题目文件URL数组(JSON)")
@@ -296,6 +310,7 @@ class Submission(Base):
         user_id         — 提交的学生 ID，外键关联 users 表
         images          — 图片 URL 数组（JSON 格式）
         status          — 提交状态：pending=待批改/graded=已批改
+        is_late         — 是否迟交：截止时间后提交标记为 True，仍可提交但记录迟交
         version         — 提交版本号（1, 2, 3...）
         is_latest       — 是否为最新版本
         submitted_at    — 提交时间
@@ -307,6 +322,8 @@ class Submission(Base):
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     images = Column(Text, default="[]", comment="图片URL数组(JSON)")
     status = Column(Enum("pending", "graded"), default="pending", nullable=False)
+    # 是否迟交：截止时间后仍可提交，但标记为迟交，方便教师统计
+    is_late = Column(Boolean, default=False, comment="是否迟交（截止时间后提交）")
     version = Column(Integer, default=1, comment="提交版本号")
     is_latest = Column(Boolean, default=True, index=True, comment="是否最新版本")
     submitted_at = Column(DateTime, server_default=func.now())
@@ -340,7 +357,59 @@ class GradingReport(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
-class GradingTask(Base):
+class Announcement(Base):
+    """
+    公告模型
+
+    用途：教师/管理员发布的公告通知，学生端首页展示。
+         可绑定到具体课程（课程公告），也可为全平台公告（course_id=null）。
+
+    字段说明：
+        id           — 自增主键
+        course_id    — 关联课程 ID，null 表示全平台公告
+        title        — 公告标题
+        content      — 公告正文（纯文本）
+        priority     — 优先级：normal=普通/important=重要/urgent=紧急
+        created_by   — 发布者用户 ID，外键关联 users 表
+        created_at   — 发布时间
+        updated_at   — 更新时间
+    """
+    __tablename__ = "announcements"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # course_id 为 null 时表示全平台公告，所有人都可见
+    course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=True, index=True, comment="关联课程ID(null=全平台公告)")
+    title = Column(String(200), nullable=False, comment="公告标题")
+    content = Column(Text, default="", comment="公告正文")
+    priority = Column(Enum("normal", "important", "urgent"), default="normal", nullable=False, comment="优先级")
+    created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class SectionFeedback(Base):
+    """
+    小节评价/反馈模型
+
+    用途：学生对课程小节的评价反馈，包括评分和文字留言。
+         教师可据此了解课程质量和学生满意度。
+
+    字段说明：
+        id           — 自增主键
+        section_id   — 关联小节 ID，外键关联 sections 表
+        user_id      — 评价学生 ID，外键关联 users 表
+        rating       — 评分（1-5 星）
+        comment      — 文字评价（最多500字）
+        created_at   — 评价时间
+    """
+    __tablename__ = "section_feedbacks"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    section_id = Column(BigInteger, ForeignKey("sections.id"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    rating = Column(Integer, default=5, comment="评分1-5星")
+    comment = Column(String(500), default="", comment="文字评价")
+    created_at = Column(DateTime, server_default=func.now())
     """
     批改任务模型
 

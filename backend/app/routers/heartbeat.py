@@ -26,11 +26,12 @@ import time
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.database_redis import get_redis
-from app.models.models import StudySession, User
+from app.models.models import StudySession, User, Section
 from app.services.study_engine import StudyEngine
 from app.utils.jwt_helper import get_current_user
 
@@ -80,6 +81,17 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
 
     权限要求：已登录用户
     """
+    # 开播时间检查：如果小节设置了 open_time 且当前时间未到，拒绝开始学习
+    if req.section_id:
+        section_result = await db.execute(select(Section).where(Section.id == req.section_id))
+        section = section_result.scalar_one_or_none()
+        if section and section.open_time and datetime.now() < section.open_time:
+            return {
+                "code": 1,
+                "msg": f"该课程尚未开播，开播时间：{section.open_time.strftime('%Y-%m-%d %H:%M')}",
+                "data": {"open_time": section.open_time.isoformat()},
+            }
+
     # 先结束已有的活跃会话（防多开）
     await StudyEngine.end_active_sessions(db, user.id, req.course_id)
 

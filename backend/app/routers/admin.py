@@ -12,19 +12,26 @@
 
 API 列表：
     用户管理：
-        GET  /api/admin/users           — 获取用户列表（支持角色/班级/搜索过滤）
-        PUT  /api/admin/users/{id}/role — 修改用户角色
-        POST /api/admin/users/{id}/reset-password — 重置用户密码
+        GET    /api/admin/users                    — 获取用户列表（支持角色/班级/搜索过滤）
+        GET    /api/admin/users/{id}               — 获取用户详情（v4.0 新增）
+        POST   /api/admin/users                    — 创建用户
+        PUT    /api/admin/users/{id}               — 更新用户信息（v4.0 新增）
+        PUT    /api/admin/users/{id}/role          — 修改用户角色
+        POST   /api/admin/users/{id}/reset-password — 重置用户密码
+        DELETE /api/admin/users/{id}               — 删除用户（v4.0 新增，仅admin）
     
     班级管理：
-        GET    /api/admin/classes       — 获取班级列表（含学生人数统计）
-        POST   /api/admin/classes       — 创建班级
-        PUT    /api/admin/classes/{id}  — 更新班级信息
-        DELETE /api/admin/classes/{id}  — 删除班级
-        PUT    /api/admin/classes/{id}/students — 批量分配学生到班级
+        GET    /api/admin/classes                  — 获取班级列表（含学生人数统计）
+        POST   /api/admin/classes                  — 创建班级
+        PUT    /api/admin/classes/{id}             — 更新班级信息
+        DELETE /api/admin/classes/{id}             — 删除班级
+        PUT    /api/admin/classes/{id}/students    — 批量分配学生到班级
 
 权限矩阵：
-    所有接口：admin / teacher
+    所有接口支持 API Key 认证（X-API-Key 请求头）和 JWT 认证
+    用户管理：admin / teacher
+    用户删除：仅 admin
+    班级管理：admin / teacher
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -92,6 +99,8 @@ async def list_users(
             {
                 "id": u.id,
                 "name": u.name,
+                "real_name": u.real_name or "",
+                "phone": u.phone or "",
                 "role": u.role,
                 "class_name": u.class_name,
                 "avatar": u.avatar,
@@ -442,7 +451,148 @@ async def create_user(
         "data": {
             "id": user.id,
             "name": user.name,
+            "real_name": user.real_name or "",
+            "phone": user.phone or "",
             "role": user.role,
             "class_name": user.class_name,
         },
     }
+
+
+class UserUpdateRequest(BaseModel):
+    """更新用户信息请求体（部分更新）"""
+    name: Optional[str] = None
+    real_name: Optional[str] = None
+    phone: Optional[str] = None
+    class_name: Optional[str] = None
+    role: Optional[str] = None
+
+
+@router.put("/users/{user_id}")
+async def update_user(
+    user_id: int,
+    req: UserUpdateRequest,
+    current_user: User = Depends(require_role("admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    更新用户信息（部分更新，v4.0 新增）
+
+    请求参数：
+        path.user_id (int):          目标用户ID
+        body.name (str):             用户名（可选）
+        body.real_name (str):        真实姓名（可选）
+        body.phone (str):            手机号（可选）
+        body.class_name (str):       班级名称（可选）
+        body.role (str):             角色（可选，需admin权限）
+
+    权限要求：【admin / teacher】
+    安全说明：
+        - teacher 不能修改角色字段
+        - admin 可修改所有字段
+    """
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    update_data = req.model_dump(exclude_unset=True)
+
+    # 角色修改权限控制
+    if "role" in update_data:
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="仅管理员可修改角色")
+        if update_data["role"] not in ("student", "teacher", "admin", "ops"):
+            raise HTTPException(status_code=400, detail="无效的角色")
+        # 不能修改自己的角色
+        if user.id == current_user.id:
+            raise HTTPException(status_code=400, detail="不能修改自己的角色")
+
+    for key, value in update_data.items():
+        setattr(user, key, value)
+
+    await db.commit()
+    await db.refresh(user)
+
+    return {
+        "code": 0,
+        "msg": "用户信息更新成功",
+        "data": {
+            "id": user.id,
+            "name": user.name,
+            "real_name": user.real_name or "",
+            "phone": user.phone or "",
+            "role": user.role,
+            "class_name": user.class_name,
+        },
+    }
+
+
+@router.get("/users/{user_id}")
+async def get_user(
+    user_id: int,
+    current_user: User = Depends(require_role("admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取用户详情（v4.0 新增）
+
+    请求参数：
+        path.user_id (int): 目标用户ID
+
+    权限要求：【admin / teacher】
+    """
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return {
+        "code": 0,
+        "data": {
+            "id": user.id,
+            "name": user.name,
+            "real_name": user.real_name or "",
+            "phone": user.phone or "",
+            "role": user.role,
+            "class_name": user.class_name,
+            "avatar": user.avatar,
+            "dingtalk_user_id": user.dingtalk_user_id,
+            "has_password": bool(user.password_hash),
+            "has_api_key": bool(user.api_key),
+            "created_at": str(user.created_at) if user.created_at else None,
+            "updated_at": str(user.updated_at) if user.updated_at else None,
+        },
+    }
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    current_user: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    删除用户（v4.0 新增，仅管理员）
+
+    请求参数：
+        path.user_id (int): 目标用户ID
+
+    权限要求：【仅 admin】
+
+    安全说明：
+        - 不能删除自己
+        - 删除用户会级联影响其学习记录、作业提交等数据
+        - 建议优先使用角色降级或密码重置，而非删除
+    """
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="不能删除自己的账号")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    await db.delete(user)
+    await db.commit()
+    return {"code": 0, "msg": f"用户 '{user.name}' 已删除"}

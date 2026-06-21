@@ -54,6 +54,7 @@ class SectionCreate(BaseModel):
     video_type: str = "url"             # 视频类型：url 或 local
     video_url: str = ""                 # 视频URL（video_type=url时填写）
     duration_seconds: int = 0           # 视频时长（秒）
+    open_time: str | None = None        # 开播时间，ISO格式，null=不限制
 
 
 class SectionUpdate(BaseModel):
@@ -63,6 +64,7 @@ class SectionUpdate(BaseModel):
     video_type: str | None = None
     video_url: str | None = None
     duration_seconds: int | None = None
+    open_time: str | None = None        # 开播时间
 
 
 def _section_to_dict(s: Section):
@@ -88,6 +90,7 @@ def _section_to_dict(s: Section):
         "video_url": video_url_val,
         "video_cdn_url": video_cdn_url,
         "duration_seconds": s.duration_seconds,
+        "open_time": s.open_time.isoformat() if s.open_time else None,
     }
 
 
@@ -115,6 +118,15 @@ async def create_section(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="课程不存在")
 
+    # 解析开播时间
+    open_time_dt = None
+    if req.open_time:
+        try:
+            from datetime import datetime
+            open_time_dt = datetime.fromisoformat(req.open_time.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="开播时间格式错误")
+
     section = Section(
         course_id=req.course_id,
         title=req.title,
@@ -122,6 +134,7 @@ async def create_section(
         video_type=req.video_type,
         video_url=req.video_url,
         duration_seconds=req.duration_seconds,
+        open_time=open_time_dt,
     )
     db.add(section)
     await db.commit()
@@ -183,6 +196,17 @@ async def update_section(
         raise HTTPException(status_code=404, detail="小节不存在")
 
     update_data = req.model_dump(exclude_unset=True)
+    # 特殊处理 open_time：字符串 → datetime
+    if "open_time" in update_data:
+        ot_val = update_data.pop("open_time")
+        if ot_val is not None:
+            try:
+                from datetime import datetime
+                setattr(section, "open_time", datetime.fromisoformat(ot_val.replace("Z", "+00:00")))
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="开播时间格式错误")
+        else:
+            setattr(section, "open_time", None)
     for key, value in update_data.items():
         setattr(section, key, value)
     await db.commit()

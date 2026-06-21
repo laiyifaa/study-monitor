@@ -50,8 +50,12 @@
       <template v-if="selectedCourseId">
         <router-link :to="`/course-edit/${selectedCourseId}`" class="btn">编辑课程</router-link>
         <router-link :to="`/homework/${selectedCourseId}`" class="btn success">作业管理</router-link>
+        <router-link :to="`/leaderboard/${selectedCourseId}`" class="btn">排行榜</router-link>
         <button v-if="isAdmin" class="btn danger" @click="deleteCourse">删除课程</button>
       </template>
+      <!-- v4.0: 全局功能入口 -->
+      <router-link to="/announcements" class="btn">公告管理</router-link>
+      <router-link to="/study-report" class="btn">学习报告</router-link>
     </div>
 
     <!-- 课程选择下拉框：切换课程后触发 loadData 重新获取统计数据 -->

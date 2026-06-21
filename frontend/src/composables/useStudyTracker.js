@@ -130,8 +130,22 @@ export function useStudyTracker(courseId, sectionId = null) {
         startHeartbeat()
         startIdleCheck()
         scheduleVerify()
+      } else {
+        // v4.0: 处理开播时间限制等业务错误
+        const detail = res.data.detail || res.data.msg || ''
+        if (detail.includes('开播时间') || detail.includes('未开播')) {
+          alert(detail)
+        }
+        console.warn('启动学习会话被拒绝:', detail)
       }
     } catch (e) {
+      // v4.0: 处理 HTTP 400 等错误（如小节未开播）
+      if (e.response?.status === 400) {
+        const detail = e.response?.data?.detail || ''
+        if (detail) {
+          alert(detail)
+        }
+      }
       console.error('启动学习会话失败:', e)
     }
   }

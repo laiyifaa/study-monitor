@@ -59,6 +59,8 @@
               <span v-if="sec.video_type === 'local'">本地上传</span>
               <span v-else>外部链接</span>
               <span v-if="sec.duration_seconds > 0">{{ formatDuration(sec.duration_seconds) }}</span>
+              <!-- v4.0: 开播时间状态 -->
+              <span v-if="sec.open_time && !isSectionOpen(sec)" class="sc-locked">未开播 {{ formatOpenTime(sec.open_time) }}</span>
             </div>
             <!-- 小节进度条 -->
             <div v-if="getSectionProgress(sec.id)" class="sc-progress">
@@ -70,6 +72,7 @@
           </div>
           <div class="sc-action">
             <span v-if="getSectionProgress(sec.id)?.is_completed" class="sc-done">已完成</span>
+            <span v-else-if="sec.open_time && !isSectionOpen(sec)" class="sc-locked-tag">未开播</span>
             <span v-else class="sc-go">去学习</span>
           </div>
         </div>
@@ -120,6 +123,22 @@ function formatDuration(seconds) {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
   return s > 0 ? `${m}分${s}秒` : `${m}分钟`
+}
+
+/**
+ * v4.0: 判断小节是否已开播
+ */
+function isSectionOpen(section) {
+  if (!section.open_time) return true
+  return new Date(section.open_time) <= new Date()
+}
+
+/**
+ * v4.0: 格式化开播时间显示
+ */
+function formatOpenTime(openTime) {
+  const d = new Date(openTime)
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 const goLearn = (section) => {
@@ -220,6 +239,10 @@ onMounted(async () => {
 .sc-action { flex-shrink: 0; }
 .sc-done { font-size: 12px; color: #52c41a; font-weight: 500; }
 .sc-go { font-size: 12px; color: #1890ff; font-weight: 500; }
+
+/* v4.0: 未开播状态 */
+.sc-locked { color: #fa8c16; font-size: 11px; }
+.sc-locked-tag { font-size: 12px; color: #fa8c16; font-weight: 500; }
 
 /* 作业入口 */
 .homework-entry {

@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '4609e59a-5285-42c9-9c8f-8969ca27c3b2'
+  PropagateID: '4609e59a-5285-42c9-9c8f-8969ca27c3b2'
+  ReservedCode1: '2dc678a2-cfab-4cb5-b6b4-c1cef173220a'
+  ReservedCode2: '2dc678a2-cfab-4cb5-b6b4-c1cef173220a'
+---
+
 # AGENTS.md
 
 ## Project
@@ -35,10 +46,11 @@ bash scripts/remote-update.sh  # git pull → rebuild → restart → health che
 
 - **Backend entry**: `backend/app/main.py` — FastAPI app with lifespan (init_db → start_scheduler → yield → stop_scheduler → close_redis)
 - **7 routers**: auth, heartbeat, course, stats, notify, admin, homework — all mounted at `/api/*`
+- **v4.0 added 2 routers**: announcement (CRUD for announcements), feedback (student feedback/ratings) — 9 routers total
 - **Core logic**: `services/study_engine.py` — anti-cheat effective-study-time engine (heartbeat validation, pause tolerance, page visibility, multi-tab prevention)
 - **Scheduled jobs**: `services/scheduler.py` — APScheduler: cleans `heartbeat_logs` older than 30 days daily at 03:00; checks for assignments past deadline every minute and triggers auto-grading
 - **Auto-grading pipeline**: `services/agent_caller.py` (stub — logs intent but doesn't call any API yet) + `services/image_stitcher.py` (Pillow-based vertical stitching of homework images to 800px width)
-- **Models**: single file `backend/app/models/models.py` — User, Course, StudySession, HeartbeatLog, Assignment, Submission, GradingReport
+- **Models**: single file `backend/app/models/models.py` — User, Course, Section, StudySession, HeartbeatLog, Assignment, Submission, GradingReport, Announcement, SectionFeedback, GradingTask
 - **Frontend entry**: `frontend/src/main.js` — Vue3 SPA with hash-mode router (`createWebHashHistory`, not history mode — required for DingTalk H5)
 - **Key composables**: `useStudyTracker.js` (heartbeat sender), `useDingTalk.js` (DingTalk JSAPI wrapper)
 - **Video serving**: Nginx serves videos directly from `/uploads/videos/` (not FastAPI) for performance — mounted read-only into frontend container
@@ -46,17 +58,31 @@ bash scripts/remote-update.sh  # git pull → rebuild → restart → health che
 ## Homework Management
 
 - **Feature**: Teachers publish assignments, students submit homework images, AI agents grade and generate reports
-- **Relationship**: One course = one assignment (1:1, enforced by `Assignment.course_id` unique constraint)
-- **Models**: `Assignment` (作业), `Submission` (提交), `GradingReport` (批改报告)
+- **Relationship (v4.0)**: One section = one assignment (1:1, enforced by `Assignment.section_id` unique constraint). Migrated from course-level to section-level.
+- **Models**: `Assignment` (作业), `Submission` (提交), `GradingReport` (批改报告), `GradingTask` (批改任务)
 - **Router**: `backend/app/routers/homework.py`
 - **Key APIs**:
-  - `GET/POST/PUT /api/homework/assignments/{course_id}` — CRUD for course assignment
+  - `GET/POST/PUT /api/homework/assignments/section/{section_id}` — CRUD for section assignment
+  - `GET /api/homework/assignments/course/{course_id}` — list all assignments for a course
   - `POST /api/homework/upload` — upload homework images
-  - `POST /api/homework/submissions` — student submit homework
+  - `POST /api/homework/submissions` — student submit homework (marks is_late if past deadline)
   - `POST /api/homework/grading-callback` — AI agent callback (requires `X-API-Key` header)
   - `GET /api/homework/reports/{submission_id}` — view grading report
 - **Frontend pages**: `HomeworkManage.vue` (teacher), `StudentHomework.vue` (student)
 - **AI agent integration**: Agent calls `/api/homework/grading-callback` with `X-API-Key` header; `agent_caller.py` is currently a stub (GRADING_AGENT_URL env var is empty by default)
+
+## v4.0 Features
+
+- **Announcements**: CRUD for platform/course announcements with priority levels (normal/important/urgent). Router: `announcement.py`, Frontend: `AnnouncementList.vue`, `AnnouncementCreate.vue`
+- **Leaderboard**: Per-course study time ranking. API: `GET /api/stats/leaderboard/{course_id}`, Frontend: `Leaderboard.vue`
+- **Check-in Calendar**: Monthly study check-in visualization. API: `GET /api/stats/checkin-calendar`, Frontend: `CheckInCalendar.vue`
+- **Section Feedback**: Star ratings + comments per section. Router: `feedback.py`, Frontend: `SectionFeedback.vue`
+- **Study Reports**: Personal/class/platform dimension reports. API: `GET /api/stats/study-report`, Frontend: `StudyReport.vue`
+- **Section Open Time**: Sections can be locked until a scheduled open_time. Heartbeat rejects early access.
+- **Late Submissions**: Submissions after deadline are marked `is_late=True` but still accepted.
+- **Real-name Sync**: DingTalk API auto-fetches real_name and phone on login.
+- **User Guide**: Built-in help page (`/guide`) with role-specific instructions.
+- **User CRUD API**: Admin can GET/PUT/DELETE users via API with X-API-Key support.
 
 ## Important conventions & gotchas
 

@@ -161,6 +161,13 @@ const routes = [
     meta: { title: '学习报告' },
   },
   {
+    // v4.0: 使用指南
+    path: '/guide',
+    name: 'UserGuide',
+    component: () => import('../views/UserGuide.vue'),
+    meta: { title: '使用指南' },
+  },
+  {
     // 404 兜底路由：匹配所有未定义的路径
     // 不用专门的 404 页面，而是重定向到课程列表，对用户更友好
     path: '/:pathMatch(.*)*',

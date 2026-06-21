@@ -410,6 +410,9 @@ class SectionFeedback(Base):
     rating = Column(Integer, default=5, comment="评分1-5星")
     comment = Column(String(500), default="", comment="文字评价")
     created_at = Column(DateTime, server_default=func.now())
+
+
+class GradingTask(Base):
     """
     批改任务模型
 

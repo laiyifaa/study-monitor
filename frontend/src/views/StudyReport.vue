@@ -108,7 +108,7 @@ import api from '../utils/api'
 import { useAuthStore } from '../utils/auth'
 
 const auth = useAuthStore()
-const isTeacherOrAdmin = computed(() => ['teacher', 'admin', 'ops'].includes(auth.user.value?.role))
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
 const isAdmin = computed(() => auth.user.value?.role === 'admin')
 
 const reportType = ref('personal')

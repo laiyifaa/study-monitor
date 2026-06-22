@@ -57,7 +57,6 @@
         <span class="quick-fill-label">快捷登录</span>
         <button class="quick-btn" @click="fillAccount('admin')" :disabled="loading">管理员</button>
         <button class="quick-btn student" @click="fillAccount('student')" :disabled="loading">学生</button>
-        <button class="quick-btn ops" @click="fillAccount('ops')" :disabled="loading">运维</button>
       </div>
 
       <!-- 底部提示 -->
@@ -90,7 +89,6 @@ const errorMsg = ref('')
 const quickAccounts = {
   admin:   { username: '张老师', password: 'teacher123' },
   student: { username: '王小明', password: '123456' },
-  ops:     { username: '周运维', password: 'ops2026secure' },
 }
 
 function fillAccount(role) {
@@ -293,11 +291,6 @@ async function handleLogin() {
   border-color: #52c41a;
   color: #52c41a;
   background: #f6ffed;
-}
-.quick-btn.ops:hover:not(:disabled) {
-  border-color: #faad14;
-  color: #d48806;
-  background: #fffbe6;
 }
 .quick-btn:disabled {
   opacity: 0.4;

@@ -116,7 +116,7 @@ const routes = [
     path: '/ops',
     name: 'OpsPanel',
     component: () => import('../views/OpsPanel.vue'),
-    meta: { title: '运维监控', role: 'ops' },  // 仅运维/管理员
+    meta: { title: '运维监控', role: 'admin' },  // 仅管理员
   },
   {
     // v4.0: 公告列表
@@ -221,17 +221,12 @@ router.beforeEach((to, from, next) => {
       if (user.role === 'admin') {
         return next()
       }
-      // ops 专属页面：仅 ops 角色可访问
-      if (requiredRole === 'ops' && user.role !== 'ops') {
+      // teacher 专属页面：仅 teacher 角色可访问
+      if (requiredRole === 'teacher' && user.role !== 'teacher') {
         return next('/')
       }
-      // teacher 专属页面：ops 也能访问教师页面
-      if (requiredRole === 'teacher' && user.role !== 'teacher' && user.role !== 'ops') {
-        return next('/')
-      }
-      // student 专属页面：teacher 和 ops 也能访问学生页面
-      // 原因：教师/运维可能需要预览学生视角、查看学习内容
-      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher' && user.role !== 'ops') {
+      // student 专属页面：teacher 也能访问学生页面（预览学生视角）
+      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher') {
         return next('/')
       }
     } catch {

@@ -14,7 +14,6 @@
       <button :class="['tab', { active: activeRole === 'student' }]" @click="activeRole = 'student'">学生</button>
       <button :class="['tab', { active: activeRole === 'teacher' }]" @click="activeRole = 'teacher'">教师</button>
       <button :class="['tab', { active: activeRole === 'admin' }]" @click="activeRole = 'admin'">管理员</button>
-      <button :class="['tab', { active: activeRole === 'ops' }]" @click="activeRole = 'ops'">运维</button>
     </div>
 
     <!-- 学生指南 -->
@@ -133,7 +132,7 @@
         <h3>管理后台</h3>
         <p>管理员拥有教师全部权限，额外可：</p>
         <ul>
-          <li>查看和管理所有用户（学生/教师/运维）</li>
+          <li>查看和管理所有用户（学生/教师）</li>
           <li>修改任意用户角色</li>
           <li>删除用户</li>
           <li>分配和调整班级</li>
@@ -156,10 +155,7 @@
         <h3>全平台报告</h3>
         <p>管理员可查看全平台维度的学习报告，包括总用户数、活跃用户数、各课程完成率等全局数据。</p>
       </section>
-    </div>
 
-    <!-- 运维指南 -->
-    <div v-if="activeRole === 'ops'" class="guide-content">
       <section class="guide-section">
         <h3>运维监控面板</h3>
         <p>点击顶栏「运维」进入监控面板，可查看：</p>
@@ -238,7 +234,7 @@ const activeRole = ref('student')
 onMounted(() => {
   // 默认显示当前用户角色对应的指南
   const role = auth.user.value?.role
-  if (role === 'teacher' || role === 'admin' || role === 'ops') {
+  if (role === 'teacher' || role === 'admin') {
     activeRole.value = role
   }
 })

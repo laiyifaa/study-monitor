@@ -10,9 +10,13 @@ FastAPI 应用入口模块
 - 汇总所有子路由（auth/heartbeat/course/stats/notify），构成完整 API 体系
 """
 
-from fastapi import FastAPI
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.database import init_db
@@ -21,6 +25,18 @@ from app.routers import auth, heartbeat, course, stats, notify, admin, homework,
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+REPO_DIR = BASE_DIR.parent
+
+
+def _candidate_upload_dirs() -> list[str]:
+    return [
+        str(BASE_DIR / "uploads"),
+        str(REPO_DIR / "uploads"),
+        str(REPO_DIR / "jpg"),
+    ]
 
 
 @asynccontextmanager
@@ -64,6 +80,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _is_safe_upload_path(path: str) -> bool:
+    norm = os.path.normpath(path).replace("\\", "/")
+    return not (
+        norm.startswith("../")
+        or norm.startswith("..\\")
+        or norm.startswith("./")
+        or norm == ".."
+        or norm == "."
+    )
+
+
+@app.get("/api/uploads/{file_path:path}")
+async def serve_upload(file_path: str):
+    if not _is_safe_upload_path(file_path):
+        raise HTTPException(status_code=400, detail="非法文件路径")
+
+    norm_path = os.path.normpath(file_path).lstrip(os.sep)
+    fallback_paths = [norm_path]
+    normalized_for_prefix = os.path.normpath(norm_path).replace("\\", "/")
+    if normalized_for_prefix.startswith("homework/"):
+        fallback_paths.append(norm_path[len("homework/"):])
+
+    for base in _candidate_upload_dirs():
+        for path_item in fallback_paths:
+            candidate = Path(base) / path_item
+            try:
+                candidate = candidate.resolve()
+            except OSError:
+                continue
+
+            base_path = Path(base).resolve()
+            if str(candidate).startswith(f"{str(base_path)}{os.sep}") and candidate.is_file():
+                return FileResponse(candidate)
+
+    raise HTTPException(status_code=404, detail="文件不存在")
 
 # 注册各业务路由模块
 # auth     — 钉钉免登认证，获取 JWT 令牌

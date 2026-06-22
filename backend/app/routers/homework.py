@@ -342,6 +342,129 @@ async def list_submissions(
     return {"code": 0, "data": data}
 
 
+@router.get("/assignments/{course_id}/submissions-summary")
+async def list_submissions_summary(
+    course_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取课程作业提交汇总（含已交/未交）
+
+    数据口径说明：
+    - 全部学生：按角色筛选 users.role == 'student'
+    - 已交：提交该课程作业的学生（基于 assignment_id 的最新提交 is_latest=True）
+    - 未交：全体学生减已交学生集合
+    """
+    assignment_result = await db.execute(select(Assignment).where(Assignment.course_id == course_id))
+    assignment = assignment_result.scalar_one_or_none()
+
+    if not assignment:
+        return {
+            "code": 0,
+            "data": {
+                "assignment": None,
+                "submissions": [],
+                "unsubmitted_students": [],
+                "summary": {
+                    "total_students": 0,
+                    "submitted_count": 0,
+                    "unsubmitted_count": 0,
+                    "pending_count": 0,
+                    "graded_count": 0,
+                },
+            },
+        }
+
+    submission_result = await db.execute(
+        select(Submission)
+        .where(Submission.assignment_id == assignment.id)
+        .where(Submission.is_latest == True)
+        .order_by(Submission.submitted_at.desc())
+    )
+    submissions = submission_result.scalars().all()
+
+    submission_ids = [s.id for s in submissions]
+    student_ids = [s.user_id for s in submissions]
+
+    user_rows = await db.execute(select(User).where(User.id.in_(student_ids))) if student_ids else []
+    users = {u.id: u for u in user_rows.scalars().all()} if student_ids else {}
+
+    report_rows = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id.in_(submission_ids))
+    ) if submission_ids else []
+    reports = {r.submission_id: r for r in report_rows.scalars().all()} if submission_ids else {}
+
+    task_rows = await db.execute(
+        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids))
+    ) if submission_ids else []
+    tasks = {t.submission_id: t for t in task_rows.scalars().all()} if submission_ids else {}
+
+    data = []
+    for s in submissions:
+        user = users.get(s.user_id)
+        report = reports.get(s.id)
+        task = tasks.get(s.id)
+        data.append({
+            "id": s.id,
+            "user": {"id": user.id, "name": user.name} if user else None,
+            "images": json.loads(s.images),
+            "status": s.status,
+            "submitted_at": s.submitted_at.isoformat(),
+            "report": {
+                "score": report.score,
+                "feedback": report.feedback,
+                "generated_by": report.generated_by,
+                "created_at": report.created_at.isoformat(),
+            } if report else None,
+            "task": {
+                "status": task.status,
+                "retry_count": task.retry_count,
+                "error_message": task.error_message,
+                "sent_at": task.sent_at.isoformat() if task and task.sent_at else None,
+                "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
+            } if task else None,
+        })
+
+    all_students_result = await db.execute(select(User).where(User.role == "student"))
+    all_students = all_students_result.scalars().all()
+    all_student_ids = {u.id for u in all_students}
+
+    submitted_student_ids = set(student_ids)
+    unsubmitted_students = [
+        {"id": u.id, "name": u.name, "class_name": u.class_name}
+        for u in all_students
+        if u.id not in submitted_student_ids
+    ]
+
+    pending_count = sum(1 for s in submissions if s.status == "pending")
+    graded_count = sum(1 for s in submissions if s.status == "graded")
+
+    return {
+        "code": 0,
+        "data": {
+            "assignment": {
+                "id": assignment.id,
+                "status": assignment.status,
+                "grading_status": assignment.grading_status,
+                "grading_mode": assignment.grading_mode,
+            },
+            "submissions": data,
+            "unsubmitted_students": sorted(
+                unsubmitted_students,
+                key=lambda s: ((s["class_name"] or ""), (s["name"] or "")),
+            ),
+            "summary": {
+                "total_students": len(all_students),
+                "submitted_count": len(submitted_student_ids & all_student_ids),
+                "unsubmitted_count": max(len(all_student_ids) - len(submitted_student_ids), 0),
+                "pending_count": pending_count,
+                "graded_count": graded_count,
+            },
+        },
+    }
+
+
 @router.get("/reports/{submission_id}")
 async def get_grading_report(
     submission_id: int,

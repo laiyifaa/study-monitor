@@ -25,10 +25,30 @@
         <div class="meta">
           <span v-if="assignment.deadline">截止：{{ formatDate(assignment.deadline) }}</span>
         </div>
+        <div v-if="assignment.question_files && assignment.question_files.length > 0" class="question-files-preview">
+          <h4>题目文件</h4>
+          <div class="question-files-list">
+            <div v-for="(file, i) in assignment.question_files" :key="`qf-${i}`" class="question-file-item">
+              <img v-if="!isPdf(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
+              <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">📄 查看 PDF</a>
+            </div>
+          </div>
+        </div>
         <div class="assignment-actions">
-          <button class="btn-sm" @click="showEditModal = true">编辑</button>
+          <button class="btn-sm" @click="openEditModal">编辑</button>
           <button v-if="assignment.status === 'draft'" class="btn-sm primary" @click="publishAssignment">发布</button>
-          <button class="btn-sm" @click="loadSubmissions">查看提交 ({{ submissions.length }})</button>
+          <button class="btn-sm" @click="loadSubmissions">查看提交 ({{ summary.submitted_count || submissions.length }})</button>
+          <button class="btn-sm" @click="showUnsubmittedModal = true">未交名单 ({{ summary.unsubmitted_count }})</button>
+        </div>
+        <div class="submission-summary">
+          <h4>提交概况</h4>
+          <div class="summary-grid">
+            <span>全体学生：{{ summary.total_students }}</span>
+            <span>已交：{{ summary.submitted_count }}</span>
+            <span>未交：{{ summary.unsubmitted_count }}</span>
+            <span>已批改：{{ summary.graded_count }}</span>
+            <span>待批改：{{ summary.pending_count }}</span>
+          </div>
         </div>
       </div>
     </template>
@@ -49,8 +69,8 @@
           <input type="file" multiple accept="image/*,.pdf" @change="handleQuestionFileSelect" />
           <div v-if="form.question_files.length > 0" class="question-files-preview">
             <div v-for="(file, i) in form.question_files" :key="i" class="question-file-item">
-              <span v-if="file.endsWith('.pdf')" class="file-icon">📄</span>
-              <img v-else :src="file" class="question-thumb" />
+              <span v-if="isPdf(file)" class="file-icon">📄</span>
+              <img v-else :src="getMediaUrl(file)" class="question-thumb" />
               <button class="remove-btn" @click="removeQuestionFile(i)">×</button>
             </div>
           </div>
@@ -89,9 +109,9 @@
               <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
               <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
             </div>
-            <div class="submission-images">
-              <img v-for="(img, i) in s.images" :key="i" :src="img" class="thumb" @click="previewImage(img)" />
-            </div>
+              <div class="submission-images">
+                <img v-for="(img, i) in s.images" :key="i" :src="getMediaUrl(img)" class="thumb" @click="previewImage(getMediaUrl(img))" />
+              </div>
             <div v-if="s.report" class="report-preview">
               <div class="score">分数：{{ s.report.score }}</div>
               <div v-if="getConfidence(s.report)" class="confidence">
@@ -130,6 +150,24 @@
       </div>
     </div>
 
+    <div v-if="showUnsubmittedModal" class="modal-overlay" @click.self="showUnsubmittedModal = false">
+      <div class="modal modal-lg">
+        <h3>未交名单</h3>
+        <div v-if="unsubmittedStudents.length === 0" class="empty">暂无未交学生</div>
+        <div v-else class="submissions-list">
+          <div v-for="u in unsubmittedStudents" :key="u.id" class="submission-item">
+            <div class="submission-header">
+              <span class="student-name">{{ u.name }}</span>
+              <span>{{ u.class_name || '未分配班级' }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showUnsubmittedModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showGradeModal" class="modal-overlay" @click.self="showGradeModal = false">
       <div class="modal">
         <h3>手动批改 — {{ gradingSubmission?.user?.name }}</h3>
@@ -162,9 +200,18 @@ const courseId = route.params.courseId
 const loading = ref(false)
 const assignment = ref(null)
 const submissions = ref([])
+const summary = ref({
+  submitted_count: 0,
+  unsubmitted_count: 0,
+  total_students: 0,
+  pending_count: 0,
+  graded_count: 0,
+})
+const unsubmittedStudents = ref([])
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showSubmissionsModal = ref(false)
+const showUnsubmittedModal = ref(false)
 const showGradeModal = ref(false)
 const gradingSubmission = ref(null)
 const gradeForm = ref({ score: '', feedback: '' })
@@ -179,8 +226,38 @@ const form = ref({
   deadline: '',
 })
 
+function getMediaUrl(url) {
+  if (!url) return ''
+  const normalized = typeof url === 'string' ? url.trim() : ''
+  if (!normalized) return ''
+  if (/^https?:\/\//i.test(normalized)) return normalized
+  if (normalized.startsWith('/api/')) return normalized
+  if (normalized.startsWith('/uploads/')) return `/api${normalized}`
+  if (normalized.startsWith('uploads/')) return `/api/${normalized}`
+  if (normalized.startsWith('homework/')) return `/api/${normalized}`
+  if (!normalized.includes('/')) return `/api/uploads/${normalized}`
+  return normalized
+}
+
+function isPdf(file) {
+  return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
+}
+
+function openEditModal() {
+  if (!assignment.value) return
+  form.value = {
+    title: assignment.value.title || '',
+    description: assignment.value.description || '',
+    question_files: assignment.value.question_files ? [...assignment.value.question_files] : [],
+    grading_prompt: assignment.value.grading_prompt || '',
+    grading_mode: assignment.value.grading_mode || 'auto',
+    deadline: assignment.value.deadline ? assignment.value.deadline.slice(0, 16).replace(' ', 'T') : '',
+  }
+  showEditModal.value = true
+}
+
 onMounted(() => {
-  loadAssignment()
+  Promise.all([loadAssignment(), loadSubmissionSummary()])
 })
 
 async function loadAssignment() {
@@ -197,11 +274,28 @@ async function loadAssignment() {
 
 async function loadSubmissions() {
   try {
-    const res = await api.get(`/homework/assignments/${courseId}/submissions`)
-    submissions.value = res.data.data || []
+    const res = await api.get(`/homework/assignments/${courseId}/submissions-summary`)
+    const data = res.data.data || {}
+    submissions.value = data.submissions || []
+    if (submissions.value.length === 0) {
+      const fallback = await api.get(`/homework/assignments/${courseId}/submissions`)
+      submissions.value = fallback.data.data || []
+    }
     showSubmissionsModal.value = true
   } catch (e) {
     alert('加载失败')
+  }
+}
+
+async function loadSubmissionSummary() {
+  try {
+    const res = await api.get(`/homework/assignments/${courseId}/submissions-summary`)
+    const data = res.data.data || {}
+    summary.value = data.summary || summary.value
+    submissions.value = data.submissions || []
+    unsubmittedStudents.value = data.unsubmitted_students || []
+  } catch {
+    // 保留旧接口以降低失败影响，后续由现有 list 接口兜底
   }
 }
 
@@ -231,7 +325,7 @@ async function saveAssignment() {
       })
     }
     closeModal()
-    loadAssignment()
+    await Promise.all([loadAssignment(), loadSubmissionSummary()])
   } catch (e) {
     alert('保存失败：' + (e.response?.data?.detail || e.message))
   }
@@ -241,7 +335,7 @@ async function publishAssignment() {
   if (!confirm('确认发布此作业？')) return
   try {
     await api.put(`/homework/assignments/${courseId}`, { status: 'published' })
-    loadAssignment()
+    await Promise.all([loadAssignment(), loadSubmissionSummary()])
   } catch (e) {
     alert('发布失败')
   }
@@ -342,7 +436,7 @@ async function submitGrade() {
       feedback: gradeForm.value.feedback,
     })
     showGradeModal.value = false
-    loadSubmissions()
+    await Promise.all([loadSubmissions(), loadSubmissionSummary()])
   } catch (e) {
     alert('批改失败：' + (e.response?.data?.detail || e.message))
   } finally {
@@ -487,6 +581,21 @@ async function submitGrade() {
   margin-top: 16px;
 }
 
+.submission-summary {
+  margin-top: 16px;
+  border-top: 1px solid #f0f0f0;
+  padding-top: 12px;
+}
+
+.summary-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  color: #555;
+  font-size: 13px;
+}
+
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -569,6 +678,20 @@ async function submitGrade() {
   height: 100%;
   object-fit: cover;
   border-radius: 4px;
+  cursor: pointer;
+}
+
+.pdf-link {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background: #1890ff;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 4px;
+  font-size: 12px;
 }
 
 .file-icon {

@@ -433,4 +433,41 @@ const onVideoTimeUpdate = () => {
 }
 .back-link { color: #1890ff; font-size: 14px; text-decoration: none; cursor: pointer; }
 .back-link:hover { text-decoration: underline; }
+
+/* ====== 响应式：手机（480px以下） ====== */
+@media (max-width: 480px) {
+  /* 状态栏：4项太挤，缩小字体+隐藏"我的进度"文字链接 */
+  .status-bar {
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .status-item { font-size: 12px; gap: 4px; }
+  .dot { width: 6px; height: 6px; }
+  .label { font-size: 11px; }
+  .value { font-size: 12px; }
+  /* "我的进度"在超小屏上缩小或换行 */
+  .link { font-size: 11px; white-space: nowrap; }
+
+  /* 进度条文字 */
+  .progress-text { font-size: 11px; }
+
+  /* 控制提示 */
+  .controls-hint { padding: 12px 10px; font-size: 12px; line-height: 1.8; }
+
+  /* 验证弹窗 */
+  .verify-dialog { width: 260px; padding: 24px 18px; }
+  .verify-dialog h3 { font-size: 16px; }
+  .verify-btn { padding: 8px 30px; font-size: 14px; }
+
+  /* 锁屏提示 */
+  .locked-card { padding: 24px 18px; }
+  .locked-icon { font-size: 36px; }
+  .locked-card h3 { font-size: 16px; }
+  .locked-card p { font-size: 13px; }
+
+  /* 返回导航 */
+  .back-nav-bar { padding: 8px 10px; }
+  .back-link { font-size: 13px; }
+}
 </style>

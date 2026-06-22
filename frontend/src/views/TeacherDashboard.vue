@@ -584,9 +584,69 @@ tr.incomplete { background: #fff7e6; }
 tr.not-started { background: #fafafa; }
 .tag.not-started-tag { background: #f5f5f5; color: #999; }
 
-/* 响应式：小屏幕下概览卡片改为2列 */
-@media (max-width: 600px) {
-  .overview-cards { grid-template-columns: repeat(2, 1fr); }
+/* 响应式：平板（768px以下） */
+@media (max-width: 768px) {
+  .dashboard { padding: 12px; }
+  .overview-cards { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .card-num { font-size: 22px; }
+  .top-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .top-actions .btn { font-size: 13px; padding: 7px 14px; }
+  .today-cards { gap: 12px; }
+  .chart-container { height: 220px; }
+}
+
+/* 响应式：手机（480px以下） */
+@media (max-width: 480px) {
+  .dashboard { padding: 10px; max-width: 100%; }
+  .page-title { font-size: 17px; margin-bottom: 12px; }
+
+  /* 概览卡片：5列 → 2列 */
+  .overview-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .card { padding: 12px 8px; }
+  .card-num { font-size: 20px; }
+  .card-label { font-size: 11px; }
+
+  /* 顶部操作按钮栏：允许换行，缩小按钮 */
+  .top-actions {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-bottom: 12px;
+  }
+  .top-actions .btn {
+    font-size: 12px; padding: 6px 10px;
+  }
+
+  /* 今日概况卡片：纵向堆叠或紧凑排列 */
+  .today-cards {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .today-item {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #fafafa;
+    border-radius: 6px;
+  }
+  .today-num { font-size: 18px; }
+
+  /* 表格控制区：搜索框和排序下拉换行 */
+  .section-header { flex-direction: column; align-items: stretch; gap: 8px; }
+  .table-controls { width: 100%; flex-wrap: wrap; }
+  .search-input { width: 100%; box-sizing: border-box; flex: 1 1 auto; min-width: 120px; }
+  .sort-select { flex: 1 1 auto; min-width: 140px; }
+
+  /* 图表高度缩减 */
+  .chart-container { height: 200px; }
+
+  /* 操作按钮区 */
+  .actions { flex-direction: column; }
+  .actions .btn { width: 100%; text-align: center; box-sizing: border-box; }
+
+  /* API Key 区域 */
+  .api-key-section { padding: 10px 12px; }
+  .api-key-header { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .api-key-display { flex-direction: column; align-items: flex-start; }
 }
 
 /* API Key 区域 */

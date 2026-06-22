@@ -340,4 +340,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .pw-error { color: #ff4d4f; font-size: 13px; margin-bottom: 10px; }
+
+/* ====== 全局响应式：顶栏适配 ====== */
+@media (max-width: 600px) {
+  .app-header { height: 44px; padding: 0 10px; }
+  .app-title { font-size: 14px; }
+  .header-right { gap: 4px; flex-wrap: nowrap; overflow-x: auto; }
+
+  /* 隐藏部分功能链接文字，只保留图标感 */
+  .btn-feature-link { font-size: 11px; padding: 2px 6px; white-space: nowrap; }
+  .user-name { max-width: 50px; font-size: 12px; }
+  .role-tag { font-size: 10px; padding: 1px 5px; }
+  .btn-changepw { display: none; }  /* 手机端隐藏改密按钮，用其他方式访问 */
+  .btn-logout { font-size: 12px; padding: 3px 8px; }
+}
+
+/* 超小屏：进一步精简 */
+@media (max-width: 380px) {
+  .app-header { height: 42px; padding: 0 8px; }
+  .app-title { font-size: 13px; }
+  .btn-feature-link { padding: 2px 4px; font-size: 10px; }
+  .btn-ops-link { display: none; }  /* 超小屏隐藏运维入口 */
+  .user-name { max-width: 36px; font-size: 11px; }
+}
 </style>

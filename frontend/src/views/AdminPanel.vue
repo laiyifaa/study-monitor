@@ -549,4 +549,39 @@ td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; }
 .back-nav { margin-bottom: 8px; }
 .back-link { color: #1890ff; font-size: 14px; text-decoration: none; }
 .back-link:hover { text-decoration: underline; }
+
+/* ====== 响应式：平板（768px以下） ====== */
+@media (max-width: 768px) {
+  .admin-page { padding: 12px; max-width: 100%; }
+  .tabs { gap: 0; }
+  .tab { padding: 8px 16px; font-size: 14px; }
+}
+
+/* ====== 响应式：手机（480px以下） ====== */
+@media (max-width: 480px) {
+  .admin-page { padding: 10px; }
+  .page-title { font-size: 17px; margin-bottom: 12px; }
+
+  /* 标签页：等宽分布 */
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: none; gap: 2px; }
+  .tab {
+    text-align: center; padding: 10px;
+    border-bottom: none; border-radius: 6px 6px 0 0;
+    background: #f5f5f5; margin-bottom: 0;
+  }
+  .tab.active { background: #1890ff; color: #fff; border-bottom-color: transparent; }
+
+  /* 筛选栏：纵向堆叠 */
+  .filter-bar { flex-direction: column; gap: 8px; }
+  .filter-bar select, .filter-bar input { width: 100%; box-sizing: border-box; }
+
+  /* 表格字体缩小 */
+  table { font-size: 12px; }
+  th, td { padding: 8px 6px; }
+
+  /* 弹窗更宽 */
+  .modal-card { width: 95%; padding: 18px; max-height: 85vh; overflow-y: auto; }
+  .modal-card h3 { font-size: 15px; }
+  .student-check { font-size: 13px; }
+}
 </style>

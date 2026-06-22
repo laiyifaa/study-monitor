@@ -524,4 +524,78 @@ onUnmounted(() => {
   text-align: center; font-size: 12px; color: #bbb;
   padding: 16px 0 8px;
 }
+
+/* ====== 响应式：平板（768px以下） ====== */
+@media (max-width: 768px) {
+  .ops-panel { padding-bottom: 40px; }
+  .section { margin: 10px 12px 0; padding: 12px; }
+
+  /* 环形图：缩小尺寸 */
+  .ring-box { width: 60px; height: 60px; }
+  .ring-svg { width: 60px; height: 60px; }
+  .ring-pct { font-size: 13px; }
+
+  /* 迷你卡片：4列 → 2列 */
+  .mini-card-row { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .mc-val { font-size: 14px; }
+
+  /* 业务数据：4列 → 2列 */
+  .biz-card-row { grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 6px; }
+  .biz-card-row:last-child { grid-template-columns: repeat(2, 1fr); }
+  .bc-icon { width: 32px; height: 32px; font-size: 16px; }
+  .bc-val { font-size: 16px; }
+
+  /* 服务健康：3列保持但缩小内边距 */
+  .svc-card { padding: 10px 8px; }
+  .svc-dot { font-size: 18px; }
+}
+
+/* ====== 响应式：手机（480px以下） ====== */
+@media (max-width: 480px) {
+  .section { margin: 8px 10px 0; padding: 10px; }
+  .sec-head { font-size: 13px; }
+
+  /* 环形图进一步缩小 */
+  .ring-box { width: 56px; height: 56px; }
+  .ring-svg { width: 56px; height: 56px; }
+  .ring-pct { font-size: 12px; }
+  .ring-label { font-size: 11px; }
+  .ring-info { font-size: 10px; }
+
+  /* 迷你卡片：紧凑 */
+  .mini-card-row { grid-template-columns: repeat(2, 1fr); gap: 5px; }
+  .mini-card { padding: 8px 6px; }
+  .mc-top { gap: 2px; }
+  .mc-emoji { font-size: 12px; }
+  .mc-label { font-size: 10px; }
+  .mc-val { font-size: 13px; }
+
+  /* 容器卡片 */
+  .container-grid { gap: 8px; }
+  .ctr-card { padding: 10px; }
+  .ctr-name { font-size: 14px; }
+
+  /* 服务健康：允许换行 */
+  .svc-row { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .svc-detail-row { flex-direction: column; align-items: center; gap: 4px; }
+
+  /* 业务数据：2列 */
+  .biz-card-row { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .biz-card { padding: 8px; gap: 8px; }
+  .bc-icon { width: 28px; height: 28px; font-size: 14px; }
+  .bc-val { font-size: 15px; }
+  .bc-label { font-size: 10px; }
+
+  /* 存储 */
+  .storage-row { gap: 8px; }
+  .sto-card { padding: 10px; }
+  .sto-value { font-size: 18px; }
+
+  /* 告警横幅 */
+  .alert-banner { margin: 8px 10px; padding: 10px 12px; }
+  .ab-item { font-size: 12px; }
+
+  /* 头部 */
+  .ops-header { padding: 10px 12px; }
+}
 </style>

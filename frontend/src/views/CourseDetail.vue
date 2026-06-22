@@ -263,4 +263,18 @@ onMounted(async () => {
   text-decoration: none; color: #999; font-size: 14px;
 }
 .nav-item.active { color: #1890ff; }
+
+/* ====== 响应式：手机（480px以下） ====== */
+@media (max-width: 480px) {
+  .course-detail-page { padding: 12px; padding-bottom: 60px; }
+  .course-title { font-size: 16px; }
+  .course-info-card { padding: 12px; }
+  .course-meta { flex-wrap: wrap; gap: 8px 12px; font-size: 11px; }
+  .section-card { padding: 10px 12px; gap: 10px; }
+  .sc-order { width: 24px; height: 24px; font-size: 12px; }
+  .sc-title { font-size: 13px; }
+  .sc-meta { flex-wrap: wrap; gap: 6px; }
+  .sl-header { font-size: 14px; }
+  .homework-entry { padding: 12px; }
+}
 </style>

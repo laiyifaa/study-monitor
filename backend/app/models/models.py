@@ -71,7 +71,7 @@ class User(Base):
     # API Key：供智能体/外部程序调用系统接口的长期密钥
     # 格式为 "sk_" + 32字节随机十六进制字符串，共67字符
     # 教师和管理员可通过管理后台生成，智能体携带此Key即可代替JWT访问API
-    api_key = Column(String(100), default="", unique=True, comment="API Key(空=未生成)")
+    api_key = Column(String(100), default=None, nullable=True, unique=True, comment="API Key(null=未生成)")
     created_at = Column(DateTime, server_default=func.now())
     # onupdate=func.now() — 当任意字段被 UPDATE 时自动刷新时间戳
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

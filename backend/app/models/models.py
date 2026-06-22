@@ -58,7 +58,7 @@ class User(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     dingtalk_user_id = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(50), nullable=False)
-    role = Column(Enum("student", "teacher", "admin", "ops"), default="student", nullable=False)
+    role = Column(Enum("student", "teacher", "admin"), default="student", nullable=False)
     class_name = Column(String(50), default="", comment="班级名称")
     class_id = Column(BigInteger, default=0, comment="班级ID")
     avatar = Column(String(500), default="")

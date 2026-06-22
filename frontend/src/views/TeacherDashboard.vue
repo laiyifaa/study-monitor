@@ -211,8 +211,8 @@ import { useAuthStore } from '../utils/auth'
 const router = useRouter()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user.value?.role === 'admin')
-const isTeacherOrAdmin = computed(() => ['teacher', 'admin', 'ops'].includes(auth.user.value?.role))
-const isOpsOrAdmin = computed(() => auth.user.value?.role === 'ops' || auth.user.value?.role === 'admin')
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
+const isOpsOrAdmin = computed(() => auth.user.value?.role === 'admin')
 
 /** API Key 状态 */
 const apiKeyInfo = ref({ has_key: false, masked: '' })

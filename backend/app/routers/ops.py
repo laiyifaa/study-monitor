@@ -4,10 +4,10 @@
 
 功能说明：
     提供系统运维所需的实时监控数据，包括服务器资源、服务健康、业务状态、存储信息等。
-    面向运维人员（ops 角色）和管理员，用于日常巡检和故障排查。
+    面向管理员，用于日常巡检和故障排查。
 
 在系统中的角色：
-    运维可观测层——将系统内部状态暴露给运维人员，是故障发现和性能分析的核心入口。
+    运维可观测层——将系统内部状态暴露给管理员，是故障发现和性能分析的核心入口。
 
 API 列表：
     GET /api/ops/server      — 服务器资源：CPU、内存、磁盘IO、网络流量
@@ -17,7 +17,7 @@ API 列表：
     GET /api/ops/storage     — 存储信息：视频大小、磁盘剩余、MySQL 大小
     GET /api/ops/overview    — 全量聚合（一次请求获取所有数据，前端面板用）
 
-权限要求：ops 或 admin 角色
+权限要求：admin 角色
 
 告警阈值说明：
     CPU 使用率 > 80%       → warning
@@ -78,7 +78,7 @@ def _human_size(bytes_val: float) -> str:
 # ============================================================
 
 @router.get("/server")
-async def server_stats(user: User = Depends(require_role("ops", "admin"))):
+async def server_stats(user: User = Depends(require_role("admin"))):
     """
     服务器资源统计 — CPU、内存、磁盘IO、网络流量
 
@@ -160,7 +160,7 @@ async def server_stats(user: User = Depends(require_role("ops", "admin"))):
 # ============================================================
 
 @router.get("/containers")
-async def container_stats(user: User = Depends(require_role("ops", "admin"))):
+async def container_stats(user: User = Depends(require_role("admin"))):
     """
     Docker 容器状态 — 仅查询 study-monitor 相关容器
 
@@ -254,7 +254,7 @@ async def container_stats(user: User = Depends(require_role("ops", "admin"))):
 
 @router.get("/services")
 async def service_health(
-    user: User = Depends(require_role("ops", "admin")),
+    user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -342,7 +342,7 @@ async def service_health(
 
 @router.get("/business")
 async def business_stats(
-    user: User = Depends(require_role("ops", "admin")),
+    user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -381,7 +381,7 @@ async def business_stats(
     online_teachers = await db.scalar(
         select(func.count(func.distinct(User.id))).where(
             and_(
-                User.role.in_(["teacher", "ops", "admin"]),
+                User.role.in_(["teacher", "admin"]),
                 User.updated_at >= two_min_ago,
             )
         )
@@ -452,7 +452,7 @@ async def business_stats(
 
 @router.get("/storage")
 async def storage_stats(
-    user: User = Depends(require_role("ops", "admin")),
+    user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -537,7 +537,7 @@ async def storage_stats(
 
 @router.get("/overview")
 async def overview(
-    user: User = Depends(require_role("ops", "admin")),
+    user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """

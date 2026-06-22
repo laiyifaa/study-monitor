@@ -115,7 +115,7 @@ async def list_users(
 
 class RoleUpdateRequest(BaseModel):
     """角色修改请求体"""
-    role: str  # 目标角色：student / teacher / admin / ops
+    role: str  # 目标角色：student / teacher / admin
 
 
 @router.put("/users/{user_id}/role")
@@ -141,7 +141,7 @@ async def update_user_role(
         - 只允许设置合法的角色值
     """
     # 合法角色校验
-    if req.role not in ("student", "teacher", "admin", "ops"):
+    if req.role not in ("student", "teacher", "admin"):
         return {"code": 1, "msg": "无效的角色"}
 
     # 教师不能设置管理员角色
@@ -424,7 +424,7 @@ async def create_user(
     if not req.name.strip():
         return {"code": 1, "msg": "用户姓名不能为空"}
 
-    if req.role not in ("student", "teacher", "admin", "ops"):
+    if req.role not in ("student", "teacher", "admin"):
         return {"code": 1, "msg": "无效的角色"}
 
     # 检查同名用户是否已存在
@@ -502,7 +502,7 @@ async def update_user(
     if "role" in update_data:
         if current_user.role != "admin":
             raise HTTPException(status_code=403, detail="仅管理员可修改角色")
-        if update_data["role"] not in ("student", "teacher", "admin", "ops"):
+        if update_data["role"] not in ("student", "teacher", "admin"):
             raise HTTPException(status_code=400, detail="无效的角色")
         # 不能修改自己的角色
         if user.id == current_user.id:

@@ -59,7 +59,7 @@ import api from '../utils/api'
 import { useAuthStore } from '../utils/auth'
 
 const auth = useAuthStore()
-const isTeacherOrAdmin = computed(() => ['teacher', 'admin', 'ops'].includes(auth.user.value?.role))
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
 
 const list = ref([])
 const loading = ref(true)

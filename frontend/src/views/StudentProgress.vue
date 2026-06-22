@@ -53,28 +53,36 @@
           截止日期：{{ c.end_date }}
         </div>
 
-        <!-- 小节级别进度列表 -->
-        <div v-if="c.sections && c.sections.length > 0" class="section-progress-list">
-          <div
-            v-for="sec in c.sections"
-            :key="sec.section_id"
-            class="section-progress-item"
-            @click="goLearn(c.course_id, sec.section_id)"
-          >
-            <div class="spi-left">
-              <span class="spi-dot" :class="sec.is_completed ? 'done' : (sec.effective_minutes > 0 ? 'active' : '')"></span>
-            </div>
-            <div class="spi-body">
-              <div class="spi-title">{{ sec.title }}</div>
-              <div class="spi-bar">
-                <div class="spi-fill" :style="{ width: sec.is_completed ? '100%' : '0%' }"></div>
+        <!-- 小节进度列表（可折叠） -->
+        <div v-if="c.sections && c.sections.length > 0" class="section-collapse-area">
+          <div class="section-toggle" @click="toggleSection(c.course_id)">
+            <span class="toggle-text">{{ expandedSections[c.course_id] ? '收起小节' : '展开小节' }}（{{ c.sections.length }}）</span>
+            <span class="toggle-arrow" :class="{ expanded: expandedSections[c.course_id] }">▶</span>
+          </div>
+          <transition name="slide">
+            <div v-show="expandedSections[c.course_id]" class="section-progress-list">
+              <div
+                v-for="sec in c.sections"
+                :key="sec.section_id"
+                class="section-progress-item"
+                @click="goLearn(c.course_id, sec.section_id)"
+              >
+                <div class="spi-left">
+                  <span class="spi-dot" :class="sec.is_completed ? 'done' : (sec.effective_minutes > 0 ? 'active' : '')"></span>
+                </div>
+                <div class="spi-body">
+                  <div class="spi-title">{{ sec.title }}</div>
+                  <div class="spi-bar">
+                    <div class="spi-fill" :style="{ width: sec.is_completed ? '100%' : '0%' }"></div>
+                  </div>
+                </div>
+                <div class="spi-right">
+                  <span v-if="sec.is_completed" class="spi-done">已完成</span>
+                  <span v-else class="spi-min">{{ sec.effective_minutes }}分钟</span>
+                </div>
               </div>
             </div>
-            <div class="spi-right">
-              <span v-if="sec.is_completed" class="spi-done">已完成</span>
-              <span v-else class="spi-min">{{ sec.effective_minutes }}分钟</span>
-            </div>
-          </div>
+          </transition>
         </div>
 
         <!-- 跳转课程详情按钮 -->
@@ -87,7 +95,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../utils/api'
 
@@ -98,6 +106,16 @@ const courses = ref([])
 
 /** 加载状态标识 */
 const loading = ref(true)
+
+/** 记录哪些课程的小节列表已展开 */
+const expandedSections = reactive({})
+
+/**
+ * 切换课程小节列表的展开/收起
+ */
+function toggleSection(courseId) {
+  expandedSections[courseId] = !expandedSections[courseId]
+}
 
 /**
  * 统计已完成小节数量
@@ -166,8 +184,38 @@ onMounted(async () => {
 /* 截止日期 */
 .deadline { font-size: 12px; color: #ff4d4f; margin-top: 4px; }
 
+/* 小节折叠区域 */
+.section-collapse-area { margin-top: 12px; border-top: 1px solid #f0f0f0; padding-top: 6px; }
+
+/* 折叠切换按钮 */
+.section-toggle {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; cursor: pointer; user-select: none;
+}
+.section-toggle:active { opacity: 0.7; }
+.toggle-text { font-size: 13px; color: #1890ff; }
+.toggle-arrow {
+  font-size: 10px; color: #999; transition: transform 0.25s;
+  display: inline-block;
+}
+.toggle-arrow.expanded { transform: rotate(90deg); }
+
+/* 折叠动画 */
+.slide-enter-active, .slide-leave-active {
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+.slide-enter-from, .slide-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+.slide-enter-to, .slide-leave-from {
+  opacity: 1;
+  max-height: 500px;
+}
+
 /* 小节进度列表 */
-.section-progress-list { margin-top: 12px; border-top: 1px solid #f0f0f0; padding-top: 10px; }
+.section-progress-list { overflow: hidden; }
 
 .section-progress-item {
   display: flex; align-items: center; gap: 8px; padding: 6px 0;

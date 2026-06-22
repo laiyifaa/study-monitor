@@ -116,7 +116,7 @@ class Course(Base):
     # === 废弃字段结束 ===
     teacher_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     # 默认60分钟，教师可按课程难度调整要求学习时长；null=不设时长要求
-    require_minutes = Column(Integer, default=60, nullable=True, comment="要求学习时长(分钟)，null=不设要求")
+    require_minutes = Column(Integer, default=None, nullable=True, comment="要求学习时长(分钟)，null=不设要求")
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
     status = Column(Enum("active", "ended", "draft"), default="draft", nullable=False)

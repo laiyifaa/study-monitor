@@ -55,7 +55,7 @@
       <!-- 快捷填入：点击只填充表单，不提交，不影响钉钉免登 -->
       <div class="quick-fill">
         <span class="quick-fill-label">快捷登录</span>
-        <button class="quick-btn" @click="fillAccount('admin')" :disabled="loading">管理员</button>
+        <button class="quick-btn teacher" @click="fillAccount('teacher')" :disabled="loading">老师</button>
         <button class="quick-btn student" @click="fillAccount('student')" :disabled="loading">学生</button>
       </div>
 
@@ -87,7 +87,7 @@ const errorMsg = ref('')
  * 快捷填入测试账号（仅填充表单，不触发登录）
  */
 const quickAccounts = {
-  admin:   { username: '张老师', password: 'teacher123' },
+  teacher: { username: '张老师', password: '123456' },
   student: { username: '王小明', password: '123456' },
 }
 
@@ -283,6 +283,11 @@ async function handleLogin() {
   transition: all 0.2s;
 }
 .quick-btn:hover:not(:disabled) {
+  border-color: #1890ff;
+  color: #1890ff;
+  background: #e6f7ff;
+}
+.quick-btn.teacher:hover:not(:disabled) {
   border-color: #1890ff;
   color: #1890ff;
   background: #e6f7ff;

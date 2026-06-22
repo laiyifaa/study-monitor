@@ -45,7 +45,7 @@ class CourseCreate(BaseModel):
     """创建课程请求体"""
     title: str                       # 课程标题（必填）
     description: str = ""            # 课程描述
-    require_minutes: int = 60        # 要求学习时长（分钟），默认60分钟
+    require_minutes: int | None = 60 # 要求学习时长（分钟），默认60分钟，null=不设要求
     start_date: datetime | None = None  # 学习开始日期
     end_date: datetime | None = None    # 学习截止日期
 

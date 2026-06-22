@@ -61,7 +61,7 @@ import { ref, computed, onMounted } from 'vue'
 import api from '../utils/api'
 
 const year = ref(new Date().getFullYear())
-const month = ref(null)
+const month = ref(new Date().getMonth() + 1)
 const days = ref([])
 const loading = ref(true)
 

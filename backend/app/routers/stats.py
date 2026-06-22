@@ -85,7 +85,7 @@ async def class_overview(
     result = await db.execute(query)
     rows = result.all()
 
-    require_minutes = course.require_minutes or 60
+    require_minutes = course.require_minutes  # 可能是 None
     students = []
     for r in rows:
         effective_min = round(r.total_effective / 60, 1) if r.total_effective else 0
@@ -95,9 +95,9 @@ async def class_overview(
             "class_name": r.class_name,
             "effective_minutes": effective_min,
             "require_minutes": require_minutes,
-            "completion_rate": round(min(effective_min / require_minutes, 1), 3) if require_minutes else 0,
+            "completion_rate": round(min(effective_min / require_minutes, 1), 3) if require_minutes else None,
             "video_progress": round(float(r.max_progress), 1) if r.max_progress else 0,
-            "is_completed": effective_min >= require_minutes,
+            "is_completed": effective_min >= require_minutes if require_minutes else None,
         })
 
     total = len(students)
@@ -157,13 +157,16 @@ async def my_progress(
         stats = stats_result.one()
 
         effective_min = round(stats.total_effective / 60, 1) if stats.total_effective else 0
-        require_minutes = course.require_minutes or 60
+        require_minutes = course.require_minutes  # 可能是 None
 
         # 查询该课程下所有小节
         sec_result = await db.execute(
             select(Section).where(Section.course_id == course.id).order_by(Section.sort_order, Section.id)
         )
         sections = sec_result.scalars().all()
+
+        # 计算课程默认要求时长：所有小节视频时长之和（分钟）
+        total_section_minutes = sum(sec.duration_seconds or 0 for sec in sections) / 60
 
         # 每个小节的进度
         section_progress = []
@@ -183,8 +186,13 @@ async def my_progress(
             sec_s = sec_stats.one()
             sec_effective = round(sec_s.sec_effective / 60, 1) if sec_s.sec_effective else 0
             sec_video_progress = round(float(sec_s.sec_progress), 1) if sec_s.sec_progress else 0
-            # 小节完成标准：有有效学习时长（>0）即视为已学习
-            sec_completed = sec_effective > 0
+            # 小节要求时长：默认等于视频时长（秒→分钟）
+            sec_require_min = round((sec.duration_seconds or 0) / 60, 1)
+            # 小节完成标准：有效学习时长 >= 小节要求时长（有视频时长时），或 >0（无视频时长时）
+            if sec_require_min > 0:
+                sec_completed = sec_effective >= sec_require_min
+            else:
+                sec_completed = sec_effective > 0
             if sec_completed:
                 completed_sections += 1
             section_progress.append({
@@ -192,17 +200,29 @@ async def my_progress(
                 "title": sec.title,
                 "sort_order": sec.sort_order,
                 "effective_minutes": sec_effective,
+                "require_minutes": sec_require_min,
                 "video_progress": sec_video_progress,
                 "is_completed": sec_completed,
             })
+
+        # 课程完成率计算：
+        # - 有 require_minutes: 按课程时长要求算
+        # - 无 require_minutes: 按已完成小节比例算
+        if require_minutes:
+            completion_rate = round(min(effective_min / require_minutes, 1), 3)
+            is_completed = effective_min >= require_minutes
+        else:
+            completion_rate = round(completed_sections / len(sections), 3) if sections else 0
+            is_completed = completed_sections == len(sections) if sections else False
 
         result_list.append({
             "course_id": course.id,
             "title": course.title,
             "effective_minutes": effective_min,
             "require_minutes": require_minutes,
-            "completion_rate": round(min(effective_min / require_minutes, 1), 3),
-            "is_completed": effective_min >= require_minutes,
+            "total_section_minutes": round(total_section_minutes, 1),
+            "completion_rate": completion_rate,
+            "is_completed": is_completed,
             "last_study_time": str(stats.last_study_time) if stats.last_study_time else None,
             "end_date": str(course.end_date) if course.end_date else None,
             "section_count": len(sections),
@@ -319,24 +339,38 @@ async def incomplete_students(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    require_minutes = course.require_minutes or 60
+    require_minutes = course.require_minutes  # 可能是 None
 
     # 使用 HAVING 子句在聚合后过滤，只保留有效时长不足的学生
     # HAVING SUM(...) < require_minutes * 60  将要求分钟转为秒进行比较
-    query = (
-        select(
-            StudySession.user_id,
-            User.name,
-            User.class_name,
-            func.sum(StudySession.effective_seconds).label("total_effective"),
+    # 仅在设置了时长要求时过滤
+    if require_minutes:
+        query = (
+            select(
+                StudySession.user_id,
+                User.name,
+                User.class_name,
+                func.sum(StudySession.effective_seconds).label("total_effective"),
+            )
+            .join(User, StudySession.user_id == User.id)
+            .where(StudySession.course_id == course_id)
+            .where(User.role == "student")
+            .group_by(StudySession.user_id, User.name, User.class_name)
+            .having(func.sum(StudySession.effective_seconds) < require_minutes * 60)
         )
-        .join(User, StudySession.user_id == User.id)
-        .where(StudySession.course_id == course_id)
-        # 【修复】只统计学生角色，排除教师/管理员
-        .where(User.role == "student")
-        .group_by(StudySession.user_id, User.name, User.class_name)
-        .having(func.sum(StudySession.effective_seconds) < require_minutes * 60)
-    )
+    else:
+        query = (
+            select(
+                StudySession.user_id,
+                User.name,
+                User.class_name,
+                func.sum(StudySession.effective_seconds).label("total_effective"),
+            )
+            .join(User, StudySession.user_id == User.id)
+            .where(StudySession.course_id == course_id)
+            .where(User.role == "student")
+            .group_by(StudySession.user_id, User.name, User.class_name)
+        )
     result = await db.execute(query)
     incomplete = [
         {"user_id": r.user_id, "name": r.name, "class_name": r.class_name,
@@ -624,14 +658,14 @@ async def study_report(
             )
             c_data = c_result.one()
             c_effective = round(c_data.c_effective / 60, 1) if c_data.c_effective else 0
-            require_minutes = c.require_minutes or 60
+            require_minutes = c.require_minutes  # 可能是 None
             course_progress.append({
                 "course_id": c.id,
                 "title": c.title,
                 "effective_minutes": c_effective,
                 "require_minutes": require_minutes,
-                "completion_rate": round(min(c_effective / require_minutes, 1), 3) if require_minutes else 0,
-                "is_completed": c_effective >= require_minutes,
+                "completion_rate": round(min(c_effective / require_minutes, 1), 3) if require_minutes else None,
+                "is_completed": c_effective >= require_minutes if require_minutes else None,
             })
 
         # 最近7天每日学习时长分布

@@ -44,8 +44,11 @@
 
         <!-- 课程总体信息 -->
         <div class="info-row">
-          <span>有效时长：{{ c.effective_minutes }} / {{ c.require_minutes }} 分钟</span>
+          <span>有效时长：{{ c.effective_minutes }} 分钟<span v-if="c.require_minutes"> / 要求 {{ c.require_minutes }} 分钟</span></span>
           <span v-if="c.sections && c.sections.length > 0">{{ getCompletedSectionCount(c) }}/{{ c.sections.length }} 小节</span>
+        </div>
+        <div v-if="!c.require_minutes && c.total_section_minutes > 0" class="info-row sub">
+          <span>视频总时长：{{ c.total_section_minutes }} 分钟</span>
         </div>
 
         <!-- 截止日期 -->
@@ -72,13 +75,18 @@
                 </div>
                 <div class="spi-body">
                   <div class="spi-title">{{ sec.title }}</div>
+                  <div class="spi-meta">
+                    <span>{{ sec.effective_minutes }}分钟</span>
+                    <span v-if="sec.require_minutes > 0" class="spi-req">/ 要求{{ sec.require_minutes }}分钟</span>
+                  </div>
                   <div class="spi-bar">
-                    <div class="spi-fill" :style="{ width: sec.is_completed ? '100%' : '0%' }"></div>
+                    <div class="spi-fill" :style="{ width: getSectionProgress(sec) + '%' }"></div>
                   </div>
                 </div>
                 <div class="spi-right">
                   <span v-if="sec.is_completed" class="spi-done">已完成</span>
-                  <span v-else class="spi-min">{{ sec.effective_minutes }}分钟</span>
+                  <span v-else-if="sec.effective_minutes > 0" class="spi-partial">学习中</span>
+                  <span v-else class="spi-notstart">未开始</span>
                 </div>
               </div>
             </div>
@@ -115,6 +123,17 @@ const expandedSections = reactive({})
  */
 function toggleSection(courseId) {
   expandedSections[courseId] = !expandedSections[courseId]
+}
+
+/**
+ * 计算小节进度百分比
+ */
+function getSectionProgress(sec) {
+  if (sec.is_completed) return 100
+  if (sec.require_minutes > 0) {
+    return Math.min(Math.round(sec.effective_minutes / sec.require_minutes * 100), 99)
+  }
+  return 0
 }
 
 /**
@@ -180,6 +199,7 @@ onMounted(async () => {
 
 /* 详细信息行 */
 .info-row { display: flex; justify-content: space-between; font-size: 13px; color: #666; }
+.info-row.sub { margin-top: 2px; font-size: 12px; color: #999; }
 
 /* 截止日期 */
 .deadline { font-size: 12px; color: #ff4d4f; margin-top: 4px; }
@@ -232,14 +252,17 @@ onMounted(async () => {
 .spi-dot.active { background: #1890ff; }
 
 .spi-body { flex: 1; min-width: 0; }
-.spi-title { font-size: 13px; color: #333; margin-bottom: 3px; }
+.spi-title { font-size: 13px; color: #333; margin-bottom: 2px; }
+.spi-meta { font-size: 11px; color: #999; margin-bottom: 3px; }
+.spi-req { color: #bbb; }
 /* 小节进度条 */
 .spi-bar { height: 3px; background: #f0f0f0; border-radius: 2px; overflow: hidden; }
 .spi-fill { height: 100%; background: #52c41a; border-radius: 2px; transition: width 0.3s; }
 
 .spi-right { flex-shrink: 0; font-size: 12px; }
 .spi-done { color: #52c41a; }
-.spi-min { color: #999; }
+.spi-partial { color: #1890ff; }
+.spi-notstart { color: #d9d9d9; }
 
 /* 继续学习链接按钮 */
 .continue-btn {

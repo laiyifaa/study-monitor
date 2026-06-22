@@ -19,8 +19,8 @@
           <h4>题目文件</h4>
           <div class="question-files-list">
             <div v-for="(file, i) in assignment.question_files" :key="i" class="question-file">
-              <img v-if="!file.endsWith('.pdf')" :src="file" class="question-image" @click="previewImage(file)" />
-              <a v-else :href="file" target="_blank" class="pdf-link">📄 查看 PDF</a>
+              <img v-if="!isPdf(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
+              <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">📄 查看 PDF</a>
             </div>
           </div>
         </div>
@@ -38,7 +38,7 @@
         <div v-if="mySubmission" class="my-submission">
           <h4>我的提交</h4>
           <div class="submission-images">
-            <img v-for="(img, i) in mySubmission.images" :key="i" :src="img" class="preview" />
+            <img v-for="(img, i) in mySubmission.images" :key="i" :src="getMediaUrl(img)" class="preview" />
           </div>
           <div v-if="mySubmission.report" class="report">
             <div class="score">分数：{{ mySubmission.report.score }}</div>
@@ -186,6 +186,23 @@ function closeSubmitModal() {
 
 function statusText(status) {
   return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
+}
+
+function getMediaUrl(url) {
+  if (!url) return ''
+  const normalized = typeof url === 'string' ? url.trim() : ''
+  if (!normalized) return ''
+  if (/^https?:\/\//i.test(normalized)) return normalized
+  if (normalized.startsWith('/api/')) return normalized
+  if (normalized.startsWith('/uploads/')) return `/api${normalized}`
+  if (normalized.startsWith('uploads/')) return `/api/${normalized}`
+  if (normalized.startsWith('homework/')) return `/api/${normalized}`
+  if (!normalized.includes('/')) return `/api/uploads/${normalized}`
+  return normalized
+}
+
+function isPdf(file) {
+  return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
 }
 
 function formatDate(dateStr) {

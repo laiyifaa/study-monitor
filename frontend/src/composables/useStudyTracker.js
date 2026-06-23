@@ -54,6 +54,7 @@
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import api from '../utils/api'
+import { useAuthStore } from '../utils/auth'
 
 export function useStudyTracker(courseId, sectionId = null) {
   // ──────────────────────────────────────────────
@@ -257,17 +258,17 @@ export function useStudyTracker(courseId, sectionId = null) {
    *   - document.hidden = true → 页面不可见
    *     → isPageVisible = false，下一心跳周期后端不计入有效时长
    *     → isPlaying = false，自动"暂停"视频播放状态
+   *     → 立即发一次心跳保存当前视频进度（防止退出丢进度）
    *   - document.hidden = false → 页面重新可见
    *     → isPageVisible = true，恢复正常计时
-   *
-   * 注意：此处仅修改状态标记，不直接调用后端 API，
-   * 实际时长调整由下次心跳上报时后端根据 is_page_visible 判定。
    */
   const handleVisibility = () => {
     isPageVisible.value = !document.hidden
     if (document.hidden) {
       // 页面不可见时强制标记为未播放，防止切后台挂机
       isPlaying.value = false
+      // 立即发一次心跳保存当前视频进度，防止用户直接关闭页面导致进度丢失
+      sendAction('visibility_hidden')
     }
   }
 
@@ -290,10 +291,34 @@ export function useStudyTracker(courseId, sectionId = null) {
   // ──────────────────────────────────────────────
 
   /**
+   * 使用 fetch + keepalive 发送请求
+   *
+   * 专门用于 beforeunload / onUnmounted 等页面卸载场景。
+   * 普通的 axios/fetch 请求在页面卸载时可能被浏览器取消，
+   * 而 fetch({ keepalive: true }) 保证请求一定会发出，
+   * 同时支持自定义 Authorization header（sendBeacon 做不到）。
+   */
+  const fetchKeepalive = (url, body) => {
+    const auth = useAuthStore()
+    const tokenVal = auth.token.value || auth.token
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(tokenVal ? { Authorization: `Bearer ${tokenVal}` } : {}),
+      },
+      body: JSON.stringify(body),
+      keepalive: true,
+    }).catch(() => {
+      // keepalive 请求无法等待响应，失败也无所谓
+    })
+  }
+
+  /**
    * 结束学习会话
    *
    * 流程：
-   *   1. 调用后端 POST /heartbeat/end，携带当前状态快照
+   *   1. 使用 fetch keepalive 发送结束请求，确保页面卸载时也能送达
    *   2. 后端关闭会话记录，计算本次学习的最终有效时长
    *   3. 清除所有定时器，防止组件卸载后继续上报
    *
@@ -301,19 +326,15 @@ export function useStudyTracker(courseId, sectionId = null) {
    *   请求体：{ course_id, is_playing, is_page_visible, video_current_time }
    *   响应体：{ code: 0, data: { ... } }
    */
-  const endSession = async () => {
-    try {
-      await api.post('/heartbeat/end', {
-        course_id: courseId,
-        section_id: sectionId,
-        is_playing: isPlaying.value,
-        is_page_visible: isPageVisible.value,
-        video_current_time: videoCurrentTime.value,
-      })
-    } catch (e) {
-      // 结束会话失败仅警告，不影响页面关闭流程
-      console.warn('结束会话失败:', e)
-    }
+  const endSession = () => {
+    // 使用 fetch keepalive 替代 api.post，确保 beforeunload 时请求不被浏览器取消
+    fetchKeepalive('/api/heartbeat/end', {
+      course_id: courseId,
+      section_id: sectionId,
+      is_playing: isPlaying.value,
+      is_page_visible: isPageVisible.value,
+      video_current_time: videoCurrentTime.value,
+    })
     // 无论 API 成败，都必须清除定时器
     cleanup()
   }

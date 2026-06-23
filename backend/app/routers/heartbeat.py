@@ -23,6 +23,7 @@ API 列表：
 """
 
 import time
+import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -108,7 +109,7 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
         if max_progress:
             historical_progress = float(max_progress)
 
-    session_id = f"{user.id}_{req.course_id}_{int(time.time())}"
+    session_id = f"{user.id}_{req.course_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
     session = StudySession(
         user_id=user.id,
         course_id=req.course_id,

@@ -26,7 +26,7 @@ import time
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -95,6 +95,19 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
     # 先结束已有的活跃会话（防多开）
     await StudyEngine.end_active_sessions(db, user.id, req.course_id)
 
+    # 查询该用户该小节的历史最大视频进度（用于断点续播）
+    historical_progress = 0.0
+    if req.section_id:
+        progress_result = await db.execute(
+            select(func.max(StudySession.video_progress)).where(
+                StudySession.user_id == user.id,
+                StudySession.section_id == req.section_id,
+            )
+        )
+        max_progress = progress_result.scalar()
+        if max_progress:
+            historical_progress = float(max_progress)
+
     session_id = f"{user.id}_{req.course_id}_{int(time.time())}"
     session = StudySession(
         user_id=user.id,
@@ -104,13 +117,13 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
         start_time=datetime.now(),
         last_heartbeat=datetime.now(),
         effective_seconds=0,
-        video_progress=0,
+        video_progress=historical_progress,  # 从历史进度开始，避免首次心跳产生巨大增量
         is_active=True,
     )
     db.add(session)
     await db.commit()
 
-    return {"code": 0, "data": {"session_id": session_id}}
+    return {"code": 0, "data": {"session_id": session_id, "last_video_progress": historical_progress}}
 
 
 @router.post("/beat")

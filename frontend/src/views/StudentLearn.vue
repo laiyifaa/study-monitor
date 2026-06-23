@@ -91,6 +91,7 @@
         @play="onVideoPlay"
         @pause="onVideoPause"
         @timeupdate="onVideoTimeUpdate"
+        @loadedmetadata="onVideoLoaded"
       >
         <source :src="videoSourceUrl" type="video/mp4" />
         您的浏览器不支持视频播放
@@ -122,7 +123,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useStudyTracker } from '../composables/useStudyTracker'
 import { useDingTalk } from '../composables/useDingTalk'
@@ -180,7 +181,7 @@ const videoSourceUrl = computed(() => {
  */
 const {
   isPlaying, isEffective, effectiveMinutes, videoProgress,
-  showVerify, requireMinutes, setVideoTime, setPlaying, verifyPass,
+  showVerify, requireMinutes, lastVideoProgress, setVideoTime, setPlaying, verifyPass,
 } = useStudyTracker(courseId, sectionId)
 
 /** 钉钉 API 封装，用于设置 H5 微应用的页面标题 */
@@ -333,6 +334,37 @@ const onVideoTimeUpdate = () => {
     setVideoTime(videoPlayer.value.currentTime)
   }
 }
+
+/**
+ * HTML5 video 元数据加载完成：从历史进度恢复播放位置
+ * 实现断点续播 —— 学生重新进入学习页时，视频从上次观看的位置继续播放
+ */
+const onVideoLoaded = () => {
+  restoreVideoProgress()
+}
+
+/**
+ * 恢复视频播放进度（断点续播）
+ * 当 lastVideoProgress 有值且 video 元素可操作时，跳转到上次观看位置
+ */
+const restoreVideoProgress = () => {
+  if (videoPlayer.value && lastVideoProgress.value > 0) {
+    // 避免跳到超出视频总时长
+    const target = Math.min(lastVideoProgress.value, videoPlayer.value.duration || Infinity)
+    if (target > 0 && Math.abs(videoPlayer.value.currentTime - target) > 1) {
+      videoPlayer.value.currentTime = target
+      setVideoTime(target)
+    }
+  }
+}
+
+// 监听 lastVideoProgress 变化：如果 startSession 返回较晚，
+// 在视频已加载后才拿到历史进度，此时也需要恢复
+watch(lastVideoProgress, (val) => {
+  if (val > 0 && videoPlayer.value && videoPlayer.value.readyState >= 1) {
+    restoreVideoProgress()
+  }
+})
 </script>
 
 <style scoped>

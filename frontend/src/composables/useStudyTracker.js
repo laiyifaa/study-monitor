@@ -91,6 +91,9 @@ export function useStudyTracker(courseId, sectionId = null) {
   /** 课程要求学习时长（分钟），由后端 POST /heartbeat/start 返回 */
   const requireMinutes = ref(60)
 
+  /** 历史最大视频进度（秒），由后端返回，用于断点续播 */
+  const lastVideoProgress = ref(0)
+
   // ──────────────────────────────────────────────
   // 定时器引用（非响应式，组件内部使用）
   // ──────────────────────────────────────────────
@@ -126,6 +129,8 @@ export function useStudyTracker(courseId, sectionId = null) {
       if (res.data.code === 0) {
         // 保存会话 ID，后续心跳和结束会话都需要携带
         sessionId.value = res.data.data.session_id
+        // 接收历史视频进度，用于断点续播
+        lastVideoProgress.value = res.data.data.last_video_progress || 0
         // 依次启动三大定时机制
         startHeartbeat()
         startIdleCheck()
@@ -416,6 +421,7 @@ export function useStudyTracker(courseId, sectionId = null) {
     isEffective,
     showVerify,
     requireMinutes,
+    lastVideoProgress,
 
     /**
      * 更新视频当前播放时间

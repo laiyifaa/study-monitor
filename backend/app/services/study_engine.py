@@ -77,11 +77,11 @@ class StudyEngine:
 
     # ─── 有效时长累计上限 ───────────────────────────────────────────
 
-    # 每次心跳的有效增量上限 = HEARTBEAT_INTERVAL + 5（秒）。
-    # 设计原因：正常心跳间隔 30 秒，网络延迟可能导致间隔在 30~35 秒之间波动。
-    # 设置 35 秒上限可以避免因极端网络抖动（比如一次心跳延迟了 60 秒才到）
-    # 导致一次累计过多时长。实际使用中直接用 HEARTBEAT_INTERVAL + 5 计算，
-    # 未定义为常量，此处说明其取值逻辑。
+    # 每次心跳的有效增量上限 = HEARTBEAT_INTERVAL × 2 + 5（秒）。
+    # 设计原因：正常1倍速下，30秒心跳间隔的视频增量为30秒；
+    # 2倍速下同一个间隔为60秒。设置上限 65 秒 = 30×2+5，
+    # 允许2倍速完整计入有效时长，同时防止极端快进或3倍以上速率刷时长。
+    # 网络延迟的额外5秒容差一并包含在内。
 
     @staticmethod
     async def process_heartbeat(
@@ -175,9 +175,10 @@ class StudyEngine:
             # 天然支持倍速：2倍速下30秒墙钟能走60秒视频时间
             # 暂停时 video_delta = 0，不会虚增时长
             video_delta = max(0, video_current_time - float(session.video_progress))
-            # 封顶策略：增量不超过 心跳间隔 + 5秒(35秒)
-            # 防止快进或倍速导致的单次心跳累积过多时长
-            increment = min(video_delta, StudyEngine.HEARTBEAT_INTERVAL + 5)
+            # 封顶策略：增量不超过 心跳间隔 × 2 + 5秒(65秒)
+            # 允许2倍速完整计入有效时长，防止3倍以上速率刷时长
+            # 例如：1倍速30s → 增量30s；2倍速60s → 增量60s；3倍速90s → 增量65s(封顶)
+            increment = min(video_delta, StudyEngine.HEARTBEAT_INTERVAL * 2 + 5)
 
             # 累加有效秒数到会话记录
             if increment > 0:

@@ -72,6 +72,7 @@ class CreateAssignmentRequest(BaseModel):
     description: str = ""
     question_files: List[str] = []
     grading_prompt: str = ""
+    reference_answer: str = ""  # v5.0: 参考答案
     deadline: Optional[str] = None
     grading_mode: str = "auto"
 
@@ -81,6 +82,7 @@ class UpdateAssignmentRequest(BaseModel):
     description: Optional[str] = None
     question_files: Optional[List[str]] = None
     grading_prompt: Optional[str] = None
+    reference_answer: Optional[str] = None  # v5.0: 参考答案
     deadline: Optional[str] = None
     status: Optional[str] = None
     grading_mode: Optional[str] = None
@@ -173,6 +175,7 @@ def _assignment_to_dict(a: Assignment):
         "description": a.description,
         "question_files": json.loads(a.question_files),
         "grading_prompt": a.grading_prompt,
+        "reference_answer": a.reference_answer or "",
         "deadline": a.deadline.isoformat() if a.deadline else None,
         "status": a.status,
         "grading_mode": a.grading_mode,
@@ -267,6 +270,7 @@ async def create_assignment(
         description=req.description,
         question_files=json.dumps(req.question_files),
         grading_prompt=req.grading_prompt,
+        reference_answer=req.reference_answer,
         deadline=deadline_dt,
         status="draft",
         grading_mode=req.grading_mode,
@@ -301,6 +305,8 @@ async def update_assignment(
         assignment.question_files = json.dumps(req.question_files)
     if req.grading_prompt is not None:
         assignment.grading_prompt = req.grading_prompt
+    if req.reference_answer is not None:
+        assignment.reference_answer = req.reference_answer
     if req.deadline is not None:
         try:
             assignment.deadline = datetime.fromisoformat(req.deadline.replace("Z", "+00:00"))
@@ -849,3 +855,117 @@ async def get_grading_task_status(
             } if report else None,
         },
     }
+
+
+# ============================================================
+# 智能体专用接口（API Key 认证）
+# ============================================================
+
+class BatchAssignmentItem(BaseModel):
+    """批量创建作业的单项"""
+    section_id: int
+    title: str
+    description: str = ""
+    question_files: List[str] = []
+    grading_prompt: str = ""
+    reference_answer: str = ""
+    deadline: Optional[str] = None
+    grading_mode: str = "auto"
+
+
+class BatchCreateAssignmentRequest(BaseModel):
+    """批量创建作业请求体"""
+    assignments: List[BatchAssignmentItem]
+
+
+@router.post("/batch-assignments")
+async def batch_create_assignments(
+    req: BatchCreateAssignmentRequest,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    批量创建作业（智能体友好接口）
+
+    一次请求为多个小节创建作业，适合智能体批量导入场景。
+
+    权限要求：【teacher / admin】，支持 X-API-Key 认证
+    """
+    results = []
+    errors = []
+
+    for item in req.assignments:
+        # 校验小节存在
+        section_result = await db.execute(select(Section).where(Section.id == item.section_id))
+        section = section_result.scalar_one_or_none()
+        if not section:
+            errors.append({"section_id": item.section_id, "error": "小节不存在"})
+            continue
+
+        # 检查该小节是否已有作业
+        existing = await db.execute(select(Assignment).where(Assignment.section_id == item.section_id))
+        if existing.scalar_one_or_none():
+            errors.append({"section_id": item.section_id, "error": "该小节已有作业"})
+            continue
+
+        deadline_dt = None
+        if item.deadline:
+            try:
+                deadline_dt = datetime.fromisoformat(item.deadline.replace("Z", "+00:00"))
+            except:
+                errors.append({"section_id": item.section_id, "error": "截止时间格式错误"})
+                continue
+
+        if item.grading_mode not in ["auto", "manual", "hybrid"]:
+            errors.append({"section_id": item.section_id, "error": "批改模式无效"})
+            continue
+
+        assignment = Assignment(
+            section_id=item.section_id,
+            course_id=section.course_id,
+            title=item.title,
+            description=item.description,
+            question_files=json.dumps(item.question_files),
+            grading_prompt=item.grading_prompt,
+            reference_answer=item.reference_answer,
+            deadline=deadline_dt,
+            status="draft",
+            grading_mode=item.grading_mode,
+        )
+        db.add(assignment)
+        results.append({"section_id": item.section_id, "title": item.title})
+
+    await db.commit()
+
+    return {
+        "code": 0,
+        "data": {
+            "created": len(results),
+            "failed": len(errors),
+            "results": results,
+            "errors": errors,
+        },
+    }
+
+
+@router.get("/course/{course_id}/assignment-details")
+async def list_course_assignment_details(
+    course_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取课程下所有作业的完整详情（含参考答案）— 智能体专用
+
+    与 /course/{course_id} 的区别：
+    - 返回 reference_answer 字段
+    - 需 teacher/admin 权限
+    - 适合智能体查看已有作业并据此批改
+
+    权限要求：【teacher / admin】，支持 X-API-Key 认证
+    """
+    result = await db.execute(
+        select(Assignment).where(Assignment.course_id == course_id)
+    )
+    assignments = result.scalars().all()
+    return {"code": 0, "data": [_assignment_to_dict(a) for a in assignments]}

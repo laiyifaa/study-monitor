@@ -109,6 +109,13 @@
       <p>3. 暂停视频时立即停止计时</p>
     </div>
 
+    <!-- ==================== 作业入口 ==================== -->
+    <div class="homework-entry">
+      <router-link :to="`/student-homework/${courseId}`" class="hw-btn">
+        查看课程作业 &rarr;
+      </router-link>
+    </div>
+
     <!-- ==================== 防挂机验证弹窗 ==================== -->
     <!-- 由 useStudyTracker 的 showVerify 控制，长时间无操作时弹出 -->
     <div v-if="showVerify" class="verify-overlay">
@@ -423,6 +430,29 @@ watch(lastVideoProgress, (val) => {
 /* 控制提示文字区域 */
 .controls-hint { padding: 16px; font-size: 13px; color: #999; line-height: 2; }
 
+/* 作业入口按钮 */
+.homework-entry {
+  padding: 16px;
+  text-align: center;
+}
+.hw-btn {
+  display: inline-block;
+  padding: 10px 28px;
+  background: #1890ff;
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+.hw-btn:hover {
+  background: #096dd9;
+}
+.hw-btn:active {
+  background: #0050b3;
+}
+
 /* 防挂机验证弹窗遮罩：全屏半透明黑色覆盖 */
 .verify-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -486,6 +516,10 @@ watch(lastVideoProgress, (val) => {
 
   /* 控制提示 */
   .controls-hint { padding: 12px 10px; font-size: 12px; line-height: 1.8; }
+
+  /* 作业入口 */
+  .homework-entry { padding: 12px; }
+  .hw-btn { padding: 8px 20px; font-size: 13px; }
 
   /* 验证弹窗 */
   .verify-dialog { width: 260px; padding: 24px 18px; }

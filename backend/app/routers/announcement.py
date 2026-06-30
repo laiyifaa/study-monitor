@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.models import Announcement, Course, User
+from app.models.models import Announcement, AnnouncementRead, Course, User
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/announcements", tags=["公告管理"])
@@ -225,3 +225,103 @@ async def delete_announcement(
     await db.delete(announcement)
     await db.commit()
     return {"code": 0, "data": {"id": announcement_id}}
+
+
+@router.get("/unread-count")
+async def get_unread_count(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取当前用户的未读公告数量
+
+    权限要求：需登录
+    逻辑：查询所有对该用户可见的公告，减去已读记录数
+    """
+    # 查询所有可见公告的ID（与列表接口同样的过滤规则）
+    stmt = select(Announcement.id).order_by(Announcement.created_at.desc())
+    result = await db.execute(stmt)
+    all_ids = [row[0] for row in result.all()]
+
+    if not all_ids:
+        return {"code": 0, "data": {"count": 0}}
+
+    # 查询该用户已读的公告ID
+    read_stmt = select(AnnouncementRead.announcement_id).where(
+        AnnouncementRead.user_id == user.id
+    )
+    read_result = await db.execute(read_stmt)
+    read_ids = set(row[0] for row in read_result.all())
+
+    unread_count = len(all_ids) - len(read_ids.intersection(all_ids))
+    return {"code": 0, "data": {"count": unread_count}}
+
+
+@router.post("/{announcement_id}/read")
+async def mark_announcement_read(
+    announcement_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    标记公告为已读
+
+    权限要求：需登录
+    逻辑：幂等操作，重复标记不报错
+    """
+    # 校验公告存在
+    result = await db.execute(select(Announcement).where(Announcement.id == announcement_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="公告不存在")
+
+    # 检查是否已读
+    existing = await db.execute(
+        select(AnnouncementRead).where(
+            (AnnouncementRead.announcement_id == announcement_id)
+            & (AnnouncementRead.user_id == user.id)
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {"code": 0, "data": {"already_read": True}}
+
+    read_record = AnnouncementRead(
+        announcement_id=announcement_id,
+        user_id=user.id,
+    )
+    db.add(read_record)
+    await db.commit()
+
+    return {"code": 0, "data": {"already_read": False}}
+
+
+@router.post("/mark-all-read")
+async def mark_all_announcements_read(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    一键标记所有公告为已读
+
+    权限要求：需登录
+    """
+    # 查询所有可见公告ID
+    stmt = select(Announcement.id)
+    result = await db.execute(stmt)
+    all_ids = [row[0] for row in result.all()]
+
+    # 查询已读的公告ID
+    read_stmt = select(AnnouncementRead.announcement_id).where(
+        AnnouncementRead.user_id == user.id
+    )
+    read_result = await db.execute(read_stmt)
+    read_ids = set(row[0] for row in read_result.all())
+
+    # 批量插入未读公告的已读记录
+    new_count = 0
+    for aid in all_ids:
+        if aid not in read_ids:
+            db.add(AnnouncementRead(announcement_id=aid, user_id=user.id))
+            new_count += 1
+
+    await db.commit()
+    return {"code": 0, "data": {"marked_count": new_count}}

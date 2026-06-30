@@ -289,7 +289,7 @@ class Assignment(Base):
     description = Column(Text, default="")
     question_files = Column(Text, default="[]", comment="题目文件URL数组(JSON)")
     grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
-    reference_answer = Column(Text, default="", comment="参考答案（供智能体批改参考）")
+    reference_answer = Column(Text, default=None, nullable=True, comment="参考答案（供智能体批改参考）")
     deadline = Column(DateTime, nullable=True)
     status = Column(Enum("draft", "published", "closed"), default="draft", nullable=False)
     grading_mode = Column(Enum("auto", "manual", "hybrid"), default="auto", nullable=False, comment="批改模式")

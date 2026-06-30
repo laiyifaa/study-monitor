@@ -289,6 +289,7 @@ class Assignment(Base):
     description = Column(Text, default="")
     question_files = Column(Text, default="[]", comment="题目文件URL数组(JSON)")
     grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
+    reference_answer = Column(Text, default="", comment="参考答案（供智能体批改参考）")
     deadline = Column(DateTime, nullable=True)
     status = Column(Enum("draft", "published", "closed"), default="draft", nullable=False)
     grading_mode = Column(Enum("auto", "manual", "hybrid"), default="auto", nullable=False, comment="批改模式")
@@ -385,6 +386,34 @@ class Announcement(Base):
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class AnnouncementRead(Base):
+    """
+    公告已读记录模型
+
+    用途：记录每个用户对每条公告的已读状态，支撑"未读公告红点"功能。
+         用户查看公告后标记已读，前端根据未读数显示红点。
+
+    字段说明：
+        id               — 自增主键
+        announcement_id  — 公告 ID，外键关联 announcements 表
+        user_id          — 用户 ID，外键关联 users 表
+        read_at          — 标记已读时间
+
+    唯一约束：(announcement_id, user_id) — 同一用户对同一公告只有一条已读记录
+    """
+    __tablename__ = "announcement_reads"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    announcement_id = Column(BigInteger, ForeignKey("announcements.id"), nullable=False, index=True, comment="公告ID")
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True, comment="用户ID")
+    read_at = Column(DateTime, server_default=func.now(), comment="已读时间")
+
+    __table_args__ = (
+        # 同一用户对同一公告只能有一条已读记录
+        {"mysql_charset": "utf8mb4"},
+    )
 
 
 class SectionFeedback(Base):

@@ -90,8 +90,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from './utils/auth'  // 【交互】引用 auth.js 的认证状态管理
 import api from './utils/api'
 
@@ -187,6 +187,16 @@ async function doChangePassword() {
     pwLoading.value = false
   }
 }
+
+const route = useRoute()
+
+/** ============ 路由变化时刷新未读数 ============ */
+// 离开公告页时立即刷新，确保红点及时消失
+watch(() => route.path, (newPath, oldPath) => {
+  if (oldPath === '/announcements' && newPath !== '/announcements') {
+    fetchUnreadCount()
+  }
+})
 
 onMounted(async () => {
   // 应用首次加载/刷新时，检查是否已有有效 token

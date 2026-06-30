@@ -92,6 +92,8 @@ onMounted(async () => {
   try {
     const res = await api.get('/announcements')
     if (res.data.code === 0) list.value = res.data.data
+    // 打开公告页即标记全部已读，使红点消失
+    api.post('/announcements/mark-all-read').catch(() => {})
   } catch (e) {
     console.error('获取公告失败:', e)
   } finally {

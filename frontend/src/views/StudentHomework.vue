@@ -37,30 +37,31 @@
               {{ mySubmissionMap[section.id] ? '修改提交' : '提交作业' }}
             </button>
           </div>
+        </div>
 
-        <div v-if="mySubmission" class="my-submission">
+        <div v-if="mySubmissionMap[section.id]" class="my-submission">
           <h4>我的提交</h4>
           <div class="submission-images">
-            <img v-for="(img, i) in mySubmission.images" :key="i" :src="img" class="preview" />
+            <img v-for="(img, i) in mySubmissionMap[section.id].images" :key="i" :src="img" class="preview" />
           </div>
-          <div v-if="mySubmission.report" class="report">
-            <div class="score">分数：{{ mySubmission.report.score }}</div>
-            <div v-if="getQuestions(mySubmission.report)" class="questions-detail">
-              <div v-for="q in getQuestions(mySubmission.report)" :key="q.index" class="question-item">
+          <div v-if="mySubmissionMap[section.id].report" class="report">
+            <div class="score">分数：{{ mySubmissionMap[section.id].report.score }}</div>
+            <div v-if="getQuestions(mySubmissionMap[section.id].report)" class="questions-detail">
+              <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
                 <span class="q-index">第{{ q.index }}题</span>
                 <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
                 <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
                 <div v-if="q.comment" class="q-comment">{{ q.comment }}</div>
               </div>
             </div>
-            <div v-if="getIssues(mySubmission.report)" class="issues-list">
+            <div v-if="getIssues(mySubmissionMap[section.id].report)" class="issues-list">
               <h5>问题汇总</h5>
               <ul>
-                <li v-for="(issue, i) in getIssues(mySubmission.report)" :key="i">{{ issue }}</li>
+                <li v-for="(issue, i) in getIssues(mySubmissionMap[section.id].report)" :key="i">{{ issue }}</li>
               </ul>
             </div>
-            <div v-else class="pending">等待批改中...</div>
           </div>
+          <div v-else class="pending">等待批改中...</div>
         </div>
       </div>
 

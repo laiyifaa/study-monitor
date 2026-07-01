@@ -42,17 +42,20 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from app.config import get_settings
 from app.database import get_db
 from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, Section, User
+from app.services.agent_caller import parse_answer_file_with_agent
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/homework", tags=["作业管理"])
 settings = get_settings()
 
 HOMEWORK_UPLOAD_DIR = "uploads/homework"
+ANSWER_UPLOAD_DIR = os.path.join(HOMEWORK_UPLOAD_DIR, "answers")
+ANSWER_TYPES = {"choice", "fill", "judge"}
 
 
 async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
@@ -117,6 +120,56 @@ class ManualGradeRequest(BaseModel):
     feedback: str = ""
 
 
+class SaveAnswerRequest(BaseModel):
+    answer: Any
+
+
+def _normalize_answer_json(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+
+    if isinstance(value, str):
+        try:
+            obj = json.loads(value)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="答案 JSON 格式错误")
+    elif isinstance(value, dict):
+        obj = value
+    else:
+        raise HTTPException(status_code=400, detail="答案必须是 JSON 对象")
+
+    items = obj.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="答案 JSON 必须包含 items 数组")
+
+    normalized_items = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail=f"第 {index} 题格式错误")
+        no = str(item.get("no", "")).strip()
+        qtype = str(item.get("type", "")).strip()
+        answer = item.get("answer")
+        if not no:
+            raise HTTPException(status_code=400, detail=f"第 {index} 题缺少题号")
+        if qtype not in ANSWER_TYPES:
+            raise HTTPException(status_code=400, detail=f"第 {index} 题题型无效")
+        if answer is None or str(answer).strip() == "":
+            raise HTTPException(status_code=400, detail=f"第 {index} 题缺少答案")
+        normalized_items.append({"no": no, "type": qtype, "answer": answer})
+
+    normalized = {"version": int(obj.get("version") or 1), "items": normalized_items}
+    return json.dumps(normalized, ensure_ascii=False)
+
+
+def _answer_to_object(raw: str | None) -> dict:
+    if not raw:
+        return {"version": 1, "items": []}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"version": 1, "items": []}
+
+
 @router.post("/upload")
 async def upload_homework_image(
     file: UploadFile = File(...),
@@ -165,9 +218,9 @@ async def upload_question_file(
     return {"code": 0, "data": {"url": f"/uploads/homework/questions/{filename}"}}
 
 
-def _assignment_to_dict(a: Assignment):
+def _assignment_to_dict(a: Assignment, include_answer: bool = False):
     """统一作业序列化函数（v4.0 section 级）"""
-    return {
+    data = {
         "id": a.id,
         "section_id": a.section_id,
         "course_id": a.course_id,
@@ -175,13 +228,15 @@ def _assignment_to_dict(a: Assignment):
         "description": a.description,
         "question_files": json.loads(a.question_files),
         "grading_prompt": a.grading_prompt,
-        "reference_answer": a.reference_answer or "",
         "deadline": a.deadline.isoformat() if a.deadline else None,
         "status": a.status,
         "grading_mode": a.grading_mode,
         "grading_status": a.grading_status,
         "created_at": a.created_at.isoformat(),
     }
+    if include_answer:
+        data["reference_answer"] = a.reference_answer or ""
+    return data
 
 
 @router.get("/course/{course_id}")
@@ -203,7 +258,8 @@ async def list_course_assignments(
         select(Assignment).where(Assignment.course_id == course_id)
     )
     assignments = result.scalars().all()
-    return {"code": 0, "data": [_assignment_to_dict(a) for a in assignments]}
+    include_answer = current_user.role in ["teacher", "admin"]
+    return {"code": 0, "data": [_assignment_to_dict(a, include_answer=include_answer) for a in assignments]}
 
 
 @router.get("/assignments/{section_id}")
@@ -225,7 +281,7 @@ async def get_assignment(
 
     return {
         "code": 0,
-        "data": _assignment_to_dict(assignment),
+        "data": _assignment_to_dict(assignment, include_answer=current_user.role in ["teacher", "admin"]),
     }
 
 
@@ -270,7 +326,7 @@ async def create_assignment(
         description=req.description,
         question_files=json.dumps(req.question_files),
         grading_prompt=req.grading_prompt,
-        reference_answer=req.reference_answer,
+        reference_answer=_normalize_answer_json(req.reference_answer),
         deadline=deadline_dt,
         status="draft",
         grading_mode=req.grading_mode,
@@ -279,7 +335,7 @@ async def create_assignment(
     await db.commit()
     await db.refresh(assignment)
 
-    return {"code": 0, "data": _assignment_to_dict(assignment)}
+    return {"code": 0, "data": _assignment_to_dict(assignment, include_answer=True)}
 
 
 @router.put("/assignments/{section_id}")
@@ -306,7 +362,7 @@ async def update_assignment(
     if req.grading_prompt is not None:
         assignment.grading_prompt = req.grading_prompt
     if req.reference_answer is not None:
-        assignment.reference_answer = req.reference_answer
+        assignment.reference_answer = _normalize_answer_json(req.reference_answer)
     if req.deadline is not None:
         try:
             assignment.deadline = datetime.fromisoformat(req.deadline.replace("Z", "+00:00"))
@@ -323,6 +379,110 @@ async def update_assignment(
 
     await db.commit()
     return {"code": 0, "data": {"id": assignment.id}}
+
+
+@router.get("/assignments/{section_id}/answer")
+async def get_assignment_answer(
+    section_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+
+    return {
+        "code": 0,
+        "data": {
+            "assignment_id": assignment.id,
+            "section_id": section_id,
+            "answer": _answer_to_object(assignment.reference_answer),
+        },
+    }
+
+
+@router.put("/assignments/{section_id}/answer")
+async def save_assignment_answer(
+    section_id: int,
+    req: SaveAnswerRequest,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+
+    assignment.reference_answer = _normalize_answer_json(req.answer)
+    await db.commit()
+    return {"code": 0, "data": {"answer": _answer_to_object(assignment.reference_answer)}}
+
+
+@router.post("/answer/parse")
+async def parse_answer_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("teacher", "admin")),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".pdf", ".doc", ".docx"]:
+        raise HTTPException(status_code=400, detail="仅支持 PDF/DOC/DOCX 格式")
+
+    os.makedirs(ANSWER_UPLOAD_DIR, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(ANSWER_UPLOAD_DIR, filename)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    try:
+        parsed = await parse_answer_file_with_agent(filepath)
+        normalized = _normalize_answer_json(parsed)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"答案解析失败：{str(e)}")
+
+    return {"code": 0, "data": {"answer": _answer_to_object(normalized)}}
+
+
+@router.post("/assignments/{section_id}/answer/parse")
+async def parse_assignment_answer_file(
+    section_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".pdf", ".doc", ".docx"]:
+        raise HTTPException(status_code=400, detail="仅支持 PDF/DOC/DOCX 格式")
+
+    os.makedirs(ANSWER_UPLOAD_DIR, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(ANSWER_UPLOAD_DIR, filename)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    try:
+        parsed = await parse_answer_file_with_agent(filepath)
+        assignment.reference_answer = _normalize_answer_json(parsed)
+        await db.commit()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"答案解析失败：{str(e)}")
+
+    return {"code": 0, "data": {"answer": _answer_to_object(assignment.reference_answer)}}
 
 
 @router.get("/assignments/{section_id}/submissions")
@@ -1050,7 +1210,7 @@ async def batch_create_assignments(
             description=item.description,
             question_files=json.dumps(item.question_files),
             grading_prompt=item.grading_prompt,
-            reference_answer=item.reference_answer,
+            reference_answer=_normalize_answer_json(item.reference_answer),
             deadline=deadline_dt,
             status="draft",
             grading_mode=item.grading_mode,
@@ -1091,4 +1251,4 @@ async def list_course_assignment_details(
         select(Assignment).where(Assignment.course_id == course_id)
     )
     assignments = result.scalars().all()
-    return {"code": 0, "data": [_assignment_to_dict(a) for a in assignments]}
+    return {"code": 0, "data": [_assignment_to_dict(a, include_answer=True) for a in assignments]}

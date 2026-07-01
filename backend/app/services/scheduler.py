@@ -217,6 +217,7 @@ async def _process_submission(submission: Submission, assignment: Assignment) ->
             submission_id=submission.id,
             stitched_image_url=stitched_url,
             prompt=assignment.grading_prompt,
+            answer_json=assignment.reference_answer or "",
         )
         return success
 

@@ -38,28 +38,26 @@
             </button>
           </div>
 
-          <div v-if="mySubmissionMap[section.id]" class="my-submission">
-            <h4>我的提交 <span v-if="mySubmissionMap[section.id].is_late" class="late-badge">迟交</span></h4>
-            <div class="submission-images">
-              <img v-for="(img, i) in mySubmissionMap[section.id].images" :key="i" :src="img" class="preview" />
+        <div v-if="mySubmission" class="my-submission">
+          <h4>我的提交</h4>
+          <div class="submission-images">
+            <img v-for="(img, i) in mySubmission.images" :key="i" :src="img" class="preview" />
+          </div>
+          <div v-if="mySubmission.report" class="report">
+            <div class="score">分数：{{ mySubmission.report.score }}</div>
+            <div v-if="getQuestions(mySubmission.report)" class="questions-detail">
+              <div v-for="q in getQuestions(mySubmission.report)" :key="q.index" class="question-item">
+                <span class="q-index">第{{ q.index }}题</span>
+                <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
+                <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
+                <div v-if="q.comment" class="q-comment">{{ q.comment }}</div>
+              </div>
             </div>
-            <div v-if="mySubmissionMap[section.id].report" class="report">
-              <div class="score">分数：{{ mySubmissionMap[section.id].report.score }}</div>
-              <div v-if="getQuestions(mySubmissionMap[section.id].report)" class="questions-detail">
-                <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
-                  <span class="q-index">第{{ q.index }}题</span>
-                  <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
-                  <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
-                  <div v-if="q.comment" class="q-comment">{{ q.comment }}</div>
-                </div>
-              </div>
-              <div v-if="getIssues(mySubmissionMap[section.id].report)" class="issues-list">
-                <h5>问题汇总</h5>
-                <ul>
-                  <li v-for="(issue, i) in getIssues(mySubmissionMap[section.id].report)" :key="i">{{ issue }}</li>
-                </ul>
-              </div>
-              <div class="feedback">{{ mySubmissionMap[section.id].report.feedback }}</div>
+            <div v-if="getIssues(mySubmission.report)" class="issues-list">
+              <h5>问题汇总</h5>
+              <ul>
+                <li v-for="(issue, i) in getIssues(mySubmission.report)" :key="i">{{ issue }}</li>
+              </ul>
             </div>
             <div v-else class="pending">等待批改中...</div>
           </div>
@@ -226,6 +224,23 @@ function isOverdue(assignment) {
 
 function statusText(status) {
   return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
+}
+
+function getMediaUrl(url) {
+  if (!url) return ''
+  const normalized = typeof url === 'string' ? url.trim() : ''
+  if (!normalized) return ''
+  if (/^https?:\/\//i.test(normalized)) return normalized
+  if (normalized.startsWith('/api/')) return normalized
+  if (normalized.startsWith('/uploads/')) return `/api${normalized}`
+  if (normalized.startsWith('uploads/')) return `/api/${normalized}`
+  if (normalized.startsWith('homework/')) return `/api/${normalized}`
+  if (!normalized.includes('/')) return `/api/uploads/${normalized}`
+  return normalized
+}
+
+function isPdf(file) {
+  return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
 }
 
 function formatDate(dateStr) {

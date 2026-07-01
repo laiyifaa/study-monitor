@@ -41,6 +41,7 @@
               {{ mySubmissionMap[section.id] ? '修改提交' : '提交作业' }}
             </button>
           </div>
+        </div>
 
           <div v-if="mySubmissionMap[section.id]" class="my-submission">
             <h4>我的提交</h4>
@@ -53,7 +54,7 @@
                 <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
                   <span class="q-index">第{{ q.index }}题</span>
                   <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
-                  <span class="q-status">{{ q.correct ? '正确' : '需订正' }}</span>
+                     <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
                   <div v-if="q.comment" class="q-comment">{{ q.comment }}</div>
                 </div>
               </div>
@@ -66,6 +67,7 @@
               <div v-else class="pending">等待批改中...</div>
             </div>
           </div>
+          <div v-else class="pending">等待批改中...</div>
         </div>
       </div>
 

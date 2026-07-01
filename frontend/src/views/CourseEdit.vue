@@ -27,6 +27,9 @@
     </div>
     <!-- 页面标题 -->
     <h2 class="page-title">{{ isEdit ? '编辑课程' : '创建课程' }}</h2>
+    <div v-if="isEdit" class="course-op-actions">
+      <router-link :to="`/homework/${courseId}`" class="btn primary">作业管理</router-link>
+    </div>
 
     <!-- ==================== 课程基本信息表单 ==================== -->
     <div class="form-card">

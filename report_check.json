@@ -1,0 +1,210 @@
+{
+  "code": 0,
+  "data": {
+    "submission_id": 1,
+    "score": 42,
+    "feedback": "得分42/52，正确率80.8%。整体表现优秀，基础概念扎实，选择题全部正确。编程题存在个别小错误，建议在变量命名规范上再多加注意，继续保持！",
+    "detail": {
+      "questions": [
+        {
+          "index": "1",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "2",
+          "score": 0,
+          "max_score": 2,
+          "comment": "答案为A，标准答案为B",
+          "correct": false
+        },
+        {
+          "index": "3",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "4",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "5",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "6",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "7",
+          "score": 0,
+          "max_score": 2,
+          "comment": "答案为B，标准答案为C",
+          "correct": false
+        },
+        {
+          "index": "8",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "9",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "10",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "11",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "12",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "13. (1)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "13. (2)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "13. (3)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "13. (4)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "14. (1)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "14. (2) ①",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "14. (2) ②",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "14. (2) ③",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "14. (3)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "15. (1)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "15. (2) ①",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "15. (2) ②",
+          "score": 0,
+          "max_score": 2,
+          "comment": "答案为A，标准答案为C",
+          "correct": false
+        },
+        {
+          "index": "15. (3)",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        },
+        {
+          "index": "15. (3) ①",
+          "score": 0,
+          "max_score": 2,
+          "comment": "答案为OP = queinfo[k][i]，标准答案为op = queinfo[k][i]，变量名大小写错误",
+          "correct": false
+        },
+        {
+          "index": "15. (3) ②",
+          "score": 2,
+          "max_score": 2,
+          "comment": "正确",
+          "correct": true
+        }
+      ],
+      "confidence": 0.92,
+      "issues": [
+        "第2题选择题答案错误",
+        "第7题选择题答案错误",
+        "第15.(2)②答案错误",
+        "第15.(3)①变量名大小写错误"
+      ]
+    },
+    "generated_by": "星辰智能体",
+    "created_at": "2026-06-18T14:43:16"
+  }
+}

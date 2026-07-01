@@ -58,9 +58,19 @@
       {{ effectiveMinutes }} / {{ requireMinutes }} 分钟
     </div>
 
+    <!-- ==================== 未开播提示（v4.0） ==================== -->
+    <div v-if="sectionLocked" class="locked-overlay">
+      <div class="locked-card">
+        <div class="locked-icon">🔒</div>
+        <h3>课程尚未开播</h3>
+        <p>开播时间：{{ openTimeInfo }}</p>
+        <p class="locked-hint">开播后即可开始学习</p>
+      </div>
+    </div>
+
     <!-- ==================== 视频播放区域 ==================== -->
     <!-- 根据 video_type 切换 iframe / HTML5 video 两种播放方式 -->
-    <div class="video-container">
+    <div v-if="!sectionLocked" class="video-container">
       <!-- 外部链接模式：iframe 嵌入第三方视频播放页 -->
       <iframe
         v-if="videoType === 'url' && videoUrl"
@@ -81,6 +91,7 @@
         @play="onVideoPlay"
         @pause="onVideoPause"
         @timeupdate="onVideoTimeUpdate"
+        @loadedmetadata="onVideoLoaded"
       >
         <source :src="videoSourceUrl" type="video/mp4" />
         您的浏览器不支持视频播放
@@ -95,7 +106,14 @@
     <div class="controls-hint">
       <p>1. 视频播放时自动计时</p>
       <p>2. 切换到其他应用将暂停计时</p>
-      <p>3. 暂停超过5分钟将暂停计时</p>
+      <p>3. 暂停视频时立即停止计时</p>
+    </div>
+
+    <!-- ==================== 作业入口 ==================== -->
+    <div class="homework-entry">
+      <router-link :to="`/student-homework/${courseId}`" class="hw-btn">
+        查看课程作业 &rarr;
+      </router-link>
     </div>
 
     <!-- ==================== 防挂机验证弹窗 ==================== -->
@@ -112,7 +130,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useStudyTracker } from '../composables/useStudyTracker'
 import { useDingTalk } from '../composables/useDingTalk'
@@ -133,6 +151,10 @@ const videoUrl = ref('')
 
 /** CDN 加速地址：后端开启 CDN 时返回，优先使用；为空时降级到原始路径 */
 const videoCdnUrl = ref('')
+
+/** 小节是否未开播（v4.0） */
+const sectionLocked = ref(false)
+const openTimeInfo = ref('')
 
 /** HTML5 video 元素的模板引用，用于读取 currentTime */
 const videoPlayer = ref(null)
@@ -166,7 +188,7 @@ const videoSourceUrl = computed(() => {
  */
 const {
   isPlaying, isEffective, effectiveMinutes, videoProgress,
-  showVerify, requireMinutes, setVideoTime, setPlaying, verifyPass,
+  showVerify, requireMinutes, lastVideoProgress, setVideoTime, setPlaying, verifyPass,
 } = useStudyTracker(courseId, sectionId)
 
 /** 钉钉 API 封装，用于设置 H5 微应用的页面标题 */
@@ -208,6 +230,14 @@ onMounted(async () => {
       videoType.value = section.video_type || 'url'
       videoUrl.value = section.video_url || ''
       videoCdnUrl.value = section.video_cdn_url || ''
+      // v4.0: 检查小节开播时间
+      if (section.open_time) {
+        const openTime = new Date(section.open_time)
+        if (openTime > new Date()) {
+          sectionLocked.value = true
+          openTimeInfo.value = `${openTime.getMonth() + 1}月${openTime.getDate()}日 ${openTime.getHours()}:${String(openTime.getMinutes()).padStart(2, '0')}`
+        }
+      }
     }
     // 从课程获取要求时长和标题
     if (courseRes.data.code === 0) {
@@ -311,6 +341,37 @@ const onVideoTimeUpdate = () => {
     setVideoTime(videoPlayer.value.currentTime)
   }
 }
+
+/**
+ * HTML5 video 元数据加载完成：从历史进度恢复播放位置
+ * 实现断点续播 —— 学生重新进入学习页时，视频从上次观看的位置继续播放
+ */
+const onVideoLoaded = () => {
+  restoreVideoProgress()
+}
+
+/**
+ * 恢复视频播放进度（断点续播）
+ * 当 lastVideoProgress 有值且 video 元素可操作时，跳转到上次观看位置
+ */
+const restoreVideoProgress = () => {
+  if (videoPlayer.value && lastVideoProgress.value > 0) {
+    // 避免跳到超出视频总时长
+    const target = Math.min(lastVideoProgress.value, videoPlayer.value.duration || Infinity)
+    if (target > 0 && Math.abs(videoPlayer.value.currentTime - target) > 1) {
+      videoPlayer.value.currentTime = target
+      setVideoTime(target)
+    }
+  }
+}
+
+// 监听 lastVideoProgress 变化：如果 startSession 返回较晚，
+// 在视频已加载后才拿到历史进度，此时也需要恢复
+watch(lastVideoProgress, (val) => {
+  if (val > 0 && videoPlayer.value && videoPlayer.value.readyState >= 1) {
+    restoreVideoProgress()
+  }
+})
 </script>
 
 <style scoped>
@@ -369,6 +430,29 @@ const onVideoTimeUpdate = () => {
 /* 控制提示文字区域 */
 .controls-hint { padding: 16px; font-size: 13px; color: #999; line-height: 2; }
 
+/* 作业入口按钮 */
+.homework-entry {
+  padding: 16px;
+  text-align: center;
+}
+.hw-btn {
+  display: inline-block;
+  padding: 10px 28px;
+  background: #1890ff;
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+.hw-btn:hover {
+  background: #096dd9;
+}
+.hw-btn:active {
+  background: #0050b3;
+}
+
 /* 防挂机验证弹窗遮罩：全屏半透明黑色覆盖 */
 .verify-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -391,10 +475,65 @@ const onVideoTimeUpdate = () => {
 }
 .verify-btn:active { background: #096dd9; }
 
+/* 未开播锁屏提示（v4.0） */
+.locked-overlay {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 300px; padding: 40px 20px;
+}
+.locked-card {
+  text-align: center; background: #fff; border-radius: 12px; padding: 32px 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.locked-icon { font-size: 48px; margin-bottom: 12px; }
+.locked-card h3 { font-size: 18px; margin-bottom: 8px; color: #333; }
+.locked-card p { font-size: 14px; color: #666; }
+.locked-hint { color: #999; font-size: 13px; margin-top: 8px; }
+
 /* 返回导航栏 */
 .back-nav-bar {
   padding: 10px 16px; background: #fff; border-bottom: 1px solid #eee;
 }
 .back-link { color: #1890ff; font-size: 14px; text-decoration: none; cursor: pointer; }
 .back-link:hover { text-decoration: underline; }
+
+/* ====== 响应式：手机（480px以下） ====== */
+@media (max-width: 480px) {
+  /* 状态栏：4项太挤，缩小字体+隐藏"我的进度"文字链接 */
+  .status-bar {
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .status-item { font-size: 12px; gap: 4px; }
+  .dot { width: 6px; height: 6px; }
+  .label { font-size: 11px; }
+  .value { font-size: 12px; }
+  /* "我的进度"在超小屏上缩小或换行 */
+  .link { font-size: 11px; white-space: nowrap; }
+
+  /* 进度条文字 */
+  .progress-text { font-size: 11px; }
+
+  /* 控制提示 */
+  .controls-hint { padding: 12px 10px; font-size: 12px; line-height: 1.8; }
+
+  /* 作业入口 */
+  .homework-entry { padding: 12px; }
+  .hw-btn { padding: 8px 20px; font-size: 13px; }
+
+  /* 验证弹窗 */
+  .verify-dialog { width: 260px; padding: 24px 18px; }
+  .verify-dialog h3 { font-size: 16px; }
+  .verify-btn { padding: 8px 30px; font-size: 14px; }
+
+  /* 锁屏提示 */
+  .locked-card { padding: 24px 18px; }
+  .locked-icon { font-size: 36px; }
+  .locked-card h3 { font-size: 16px; }
+  .locked-card p { font-size: 13px; }
+
+  /* 返回导航 */
+  .back-nav-bar { padding: 8px 10px; }
+  .back-link { font-size: 13px; }
+}
 </style>

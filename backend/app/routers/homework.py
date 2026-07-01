@@ -5,7 +5,8 @@
     负责作业发布、提交、批改报告的完整流程管理。
     支持教师发布作业、学生上传作业图片、智能体回调批改结果。
 
-    一个课程对应一个作业（1:1 关系）。
+    v4.0: 一个小节对应一个作业（1:1 关系），从课程级迁移到小节级。
+    迟交机制：截止时间后仍可提交，但自动标记 is_late=True。
 
 在系统中的角色：
     作业管理网关 — 协调 assignments、submissions、grading_reports 三张表。
@@ -13,22 +14,23 @@
 
 API 列表：
     教师端：
-        POST   /api/homework/assignments/{course_id}  — 创建课程作业
-        PUT    /api/homework/assignments/{course_id}  — 编辑课程作业
-        GET    /api/homework/assignments/{course_id}  — 获取课程作业
-        GET    /api/homework/assignments/{course_id}/submissions — 查看提交列表
-        GET    /api/homework/reports/{submission_id}  — 查看批改报告
+        POST   /api/homework/assignments/{section_id}  — 创建小节作业
+        PUT    /api/homework/assignments/{section_id}  — 编辑小节作业
+        GET    /api/homework/assignments/{section_id}  — 获取小节作业
+        GET    /api/homework/course/{course_id}         — 获取课程下所有小节作业
+        GET    /api/homework/assignments/{section_id}/submissions — 查看提交列表
+        GET    /api/homework/reports/{submission_id}   — 查看批改报告
 
     学生端：
-        GET    /api/homework/assignments/{course_id}  — 获取课程作业
-        POST   /api/homework/submissions              — 提交作业（上传图片）
-        GET    /api/homework/my-submissions           — 查看我的提交列表
+        GET    /api/homework/assignments/{section_id}  — 获取小节作业
+        POST   /api/homework/submissions               — 提交作业（上传图片）
+        GET    /api/homework/my-submissions            — 查看我的提交列表
 
     智能体回调：
-        POST   /api/homework/grading-callback         — 智能体批改完成回调（需 API Key）
+        POST   /api/homework/grading-callback          — 智能体批改完成回调（需 API Key）
 
     文件上传：
-        POST   /api/homework/upload                   — 上传作业图片
+        POST   /api/homework/upload                    — 上传作业图片
 """
 
 import os
@@ -44,7 +46,7 @@ from typing import Optional, List
 
 from app.config import get_settings
 from app.database import get_db
-from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, User
+from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, Section, User
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/homework", tags=["作业管理"])
@@ -70,6 +72,7 @@ class CreateAssignmentRequest(BaseModel):
     description: str = ""
     question_files: List[str] = []
     grading_prompt: str = ""
+    reference_answer: str = ""  # v5.0: 参考答案
     deadline: Optional[str] = None
     grading_mode: str = "auto"
 
@@ -79,6 +82,7 @@ class UpdateAssignmentRequest(BaseModel):
     description: Optional[str] = None
     question_files: Optional[List[str]] = None
     grading_prompt: Optional[str] = None
+    reference_answer: Optional[str] = None  # v5.0: 参考答案
     deadline: Optional[str] = None
     status: Optional[str] = None
     grading_mode: Optional[str] = None
@@ -161,13 +165,59 @@ async def upload_question_file(
     return {"code": 0, "data": {"url": f"/uploads/homework/questions/{filename}"}}
 
 
-@router.get("/assignments/{course_id}")
-async def get_assignment(
+def _assignment_to_dict(a: Assignment):
+    """统一作业序列化函数（v4.0 section 级）"""
+    return {
+        "id": a.id,
+        "section_id": a.section_id,
+        "course_id": a.course_id,
+        "title": a.title,
+        "description": a.description,
+        "question_files": json.loads(a.question_files),
+        "grading_prompt": a.grading_prompt,
+        "reference_answer": a.reference_answer or "",
+        "deadline": a.deadline.isoformat() if a.deadline else None,
+        "status": a.status,
+        "grading_mode": a.grading_mode,
+        "grading_status": a.grading_status,
+        "created_at": a.created_at.isoformat(),
+    }
+
+
+@router.get("/course/{course_id}")
+async def list_course_assignments(
     course_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Assignment).where(Assignment.course_id == course_id))
+    """
+    获取课程下所有小节的作业列表 — v4.0 新增
+
+    请求参数：
+        path.course_id (int): 课程ID
+
+    返回格式：
+        code=0, data: [assignment_dict, ...]
+    """
+    result = await db.execute(
+        select(Assignment).where(Assignment.course_id == course_id)
+    )
+    assignments = result.scalars().all()
+    return {"code": 0, "data": [_assignment_to_dict(a) for a in assignments]}
+
+
+@router.get("/assignments/{section_id}")
+async def get_assignment(
+    section_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取小节作业 — 按 section_id 查询
+
+    v4.0: 从 course_id 切换到 section_id
+    """
+    result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
     assignment = result.scalar_one_or_none()
 
     if not assignment:
@@ -175,37 +225,33 @@ async def get_assignment(
 
     return {
         "code": 0,
-        "data": {
-            "id": assignment.id,
-            "course_id": assignment.course_id,
-            "title": assignment.title,
-            "description": assignment.description,
-            "question_files": json.loads(assignment.question_files),
-            "grading_prompt": assignment.grading_prompt,
-            "deadline": assignment.deadline.isoformat() if assignment.deadline else None,
-            "status": assignment.status,
-            "grading_mode": assignment.grading_mode,
-            "grading_status": assignment.grading_status,
-            "created_at": assignment.created_at.isoformat(),
-        },
+        "data": _assignment_to_dict(assignment),
     }
 
 
-@router.post("/assignments/{course_id}")
+@router.post("/assignments/{section_id}")
 async def create_assignment(
-    course_id: int,
+    section_id: int,
     req: CreateAssignmentRequest,
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Course).where(Course.id == course_id))
-    course = result.scalar_one_or_none()
-    if not course:
-        raise HTTPException(status_code=404, detail="课程不存在")
+    """
+    创建小节作业 — v4.0: 绑定到 section
 
-    existing = await db.execute(select(Assignment).where(Assignment.course_id == course_id))
+    请求参数：
+        path.section_id: 目标小节ID
+    """
+    # 校验小节存在并获取 course_id
+    section_result = await db.execute(select(Section).where(Section.id == section_id))
+    section = section_result.scalar_one_or_none()
+    if not section:
+        raise HTTPException(status_code=404, detail="小节不存在")
+
+    # 检查该小节是否已有作业
+    existing = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="该课程已有作业")
+        raise HTTPException(status_code=400, detail="该小节已有作业")
 
     deadline_dt = None
     if req.deadline:
@@ -218,11 +264,13 @@ async def create_assignment(
         raise HTTPException(status_code=400, detail="批改模式无效")
 
     assignment = Assignment(
-        course_id=course_id,
+        section_id=section_id,
+        course_id=section.course_id,  # 冗余字段，从 section 自动填入
         title=req.title,
         description=req.description,
         question_files=json.dumps(req.question_files),
         grading_prompt=req.grading_prompt,
+        reference_answer=req.reference_answer,
         deadline=deadline_dt,
         status="draft",
         grading_mode=req.grading_mode,
@@ -231,32 +279,20 @@ async def create_assignment(
     await db.commit()
     await db.refresh(assignment)
 
-    return {
-        "code": 0,
-        "data": {
-            "id": assignment.id,
-            "course_id": assignment.course_id,
-            "title": assignment.title,
-            "description": assignment.description,
-            "question_files": json.loads(assignment.question_files),
-            "grading_prompt": assignment.grading_prompt,
-            "deadline": assignment.deadline.isoformat() if assignment.deadline else None,
-            "status": assignment.status,
-            "grading_mode": assignment.grading_mode,
-            "grading_status": assignment.grading_status,
-            "created_at": assignment.created_at.isoformat(),
-        },
-    }
+    return {"code": 0, "data": _assignment_to_dict(assignment)}
 
 
-@router.put("/assignments/{course_id}")
+@router.put("/assignments/{section_id}")
 async def update_assignment(
-    course_id: int,
+    section_id: int,
     req: UpdateAssignmentRequest,
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Assignment).where(Assignment.course_id == course_id))
+    """
+    编辑小节作业 — v4.0: 按 section_id 查找
+    """
+    result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
     assignment = result.scalar_one_or_none()
     if not assignment:
         raise HTTPException(status_code=404, detail="作业不存在")
@@ -269,6 +305,8 @@ async def update_assignment(
         assignment.question_files = json.dumps(req.question_files)
     if req.grading_prompt is not None:
         assignment.grading_prompt = req.grading_prompt
+    if req.reference_answer is not None:
+        assignment.reference_answer = req.reference_answer
     if req.deadline is not None:
         try:
             assignment.deadline = datetime.fromisoformat(req.deadline.replace("Z", "+00:00"))
@@ -287,13 +325,16 @@ async def update_assignment(
     return {"code": 0, "data": {"id": assignment.id}}
 
 
-@router.get("/assignments/{course_id}/submissions")
+@router.get("/assignments/{section_id}/submissions")
 async def list_submissions(
-    course_id: int,
+    section_id: int,
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    assignment_result = await db.execute(select(Assignment).where(Assignment.course_id == course_id))
+    """
+    查看小节作业的提交列表 — v4.0: 按 section_id 查找
+    """
+    assignment_result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
     assignment = assignment_result.scalar_one_or_none()
     if not assignment:
         return {"code": 0, "data": []}
@@ -323,6 +364,7 @@ async def list_submissions(
             "user": {"id": user.id, "name": user.name} if user else None,
             "images": json.loads(s.images),
             "status": s.status,
+            "is_late": s.is_late,  # v4.0: 迟交标记
             "submitted_at": s.submitted_at.isoformat(),
             "report": {
                 "score": report.score,
@@ -514,8 +556,10 @@ async def create_submission(
     if assignment.status != "published":
         raise HTTPException(status_code=400, detail="作业未发布或已关闭")
 
+    # v4.0: 截止时间后仍可提交，但标记 is_late=True
+    is_late = False
     if assignment.deadline and datetime.utcnow() > assignment.deadline:
-        raise HTTPException(status_code=400, detail="已过截止时间，无法提交")
+        is_late = True  # 迟交但仍允许提交
 
     existing_result = await db.execute(
         select(Submission)
@@ -540,6 +584,7 @@ async def create_submission(
         user_id=current_user.id,
         images=json.dumps(req.images),
         status="pending",
+        is_late=is_late,  # v4.0: 迟交标记
         version=next_version,
         is_latest=True,
     )
@@ -557,6 +602,7 @@ async def create_submission(
             "assignment_id": submission.assignment_id,
             "images": req.images,
             "status": submission.status,
+            "is_late": submission.is_late,  # v4.0
             "version": submission.version,
             "submitted_at": submission.submitted_at.isoformat(),
         },
@@ -592,10 +638,12 @@ async def list_my_submissions(
             "assignment": {
                 "id": assignment.id,
                 "title": assignment.title,
+                "section_id": assignment.section_id,  # v4.0
                 "course_id": assignment.course_id,
             } if assignment else None,
             "images": json.loads(s.images),
             "status": s.status,
+            "is_late": s.is_late,  # v4.0
             "submitted_at": s.submitted_at.isoformat(),
             "report": {
                 "score": report.score,
@@ -930,3 +978,117 @@ async def get_grading_task_status(
             } if report else None,
         },
     }
+
+
+# ============================================================
+# 智能体专用接口（API Key 认证）
+# ============================================================
+
+class BatchAssignmentItem(BaseModel):
+    """批量创建作业的单项"""
+    section_id: int
+    title: str
+    description: str = ""
+    question_files: List[str] = []
+    grading_prompt: str = ""
+    reference_answer: str = ""
+    deadline: Optional[str] = None
+    grading_mode: str = "auto"
+
+
+class BatchCreateAssignmentRequest(BaseModel):
+    """批量创建作业请求体"""
+    assignments: List[BatchAssignmentItem]
+
+
+@router.post("/batch-assignments")
+async def batch_create_assignments(
+    req: BatchCreateAssignmentRequest,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    批量创建作业（智能体友好接口）
+
+    一次请求为多个小节创建作业，适合智能体批量导入场景。
+
+    权限要求：【teacher / admin】，支持 X-API-Key 认证
+    """
+    results = []
+    errors = []
+
+    for item in req.assignments:
+        # 校验小节存在
+        section_result = await db.execute(select(Section).where(Section.id == item.section_id))
+        section = section_result.scalar_one_or_none()
+        if not section:
+            errors.append({"section_id": item.section_id, "error": "小节不存在"})
+            continue
+
+        # 检查该小节是否已有作业
+        existing = await db.execute(select(Assignment).where(Assignment.section_id == item.section_id))
+        if existing.scalar_one_or_none():
+            errors.append({"section_id": item.section_id, "error": "该小节已有作业"})
+            continue
+
+        deadline_dt = None
+        if item.deadline:
+            try:
+                deadline_dt = datetime.fromisoformat(item.deadline.replace("Z", "+00:00"))
+            except:
+                errors.append({"section_id": item.section_id, "error": "截止时间格式错误"})
+                continue
+
+        if item.grading_mode not in ["auto", "manual", "hybrid"]:
+            errors.append({"section_id": item.section_id, "error": "批改模式无效"})
+            continue
+
+        assignment = Assignment(
+            section_id=item.section_id,
+            course_id=section.course_id,
+            title=item.title,
+            description=item.description,
+            question_files=json.dumps(item.question_files),
+            grading_prompt=item.grading_prompt,
+            reference_answer=item.reference_answer,
+            deadline=deadline_dt,
+            status="draft",
+            grading_mode=item.grading_mode,
+        )
+        db.add(assignment)
+        results.append({"section_id": item.section_id, "title": item.title})
+
+    await db.commit()
+
+    return {
+        "code": 0,
+        "data": {
+            "created": len(results),
+            "failed": len(errors),
+            "results": results,
+            "errors": errors,
+        },
+    }
+
+
+@router.get("/course/{course_id}/assignment-details")
+async def list_course_assignment_details(
+    course_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取课程下所有作业的完整详情（含参考答案）— 智能体专用
+
+    与 /course/{course_id} 的区别：
+    - 返回 reference_answer 字段
+    - 需 teacher/admin 权限
+    - 适合智能体查看已有作业并据此批改
+
+    权限要求：【teacher / admin】，支持 X-API-Key 认证
+    """
+    result = await db.execute(
+        select(Assignment).where(Assignment.course_id == course_id)
+    )
+    assignments = result.scalars().all()
+    return {"code": 0, "data": [_assignment_to_dict(a) for a in assignments]}

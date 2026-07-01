@@ -77,11 +77,11 @@ class StudyEngine:
 
     # ─── 有效时长累计上限 ───────────────────────────────────────────
 
-    # 每次心跳的有效增量上限 = HEARTBEAT_INTERVAL + 5（秒）。
-    # 设计原因：正常心跳间隔 30 秒，网络延迟可能导致间隔在 30~35 秒之间波动。
-    # 设置 35 秒上限可以避免因极端网络抖动（比如一次心跳延迟了 60 秒才到）
-    # 导致一次累计过多时长。实际使用中直接用 HEARTBEAT_INTERVAL + 5 计算，
-    # 未定义为常量，此处说明其取值逻辑。
+    # 每次心跳的有效增量上限 = HEARTBEAT_INTERVAL × 2 + 5（秒）。
+    # 设计原因：正常1倍速下，30秒心跳间隔的视频增量为30秒；
+    # 2倍速下同一个间隔为60秒。设置上限 65 秒 = 30×2+5，
+    # 允许2倍速完整计入有效时长，同时防止极端快进或3倍以上速率刷时长。
+    # 网络延迟的额外5秒容差一并包含在内。
 
     @staticmethod
     async def process_heartbeat(
@@ -112,7 +112,7 @@ class StudyEngine:
           - session_id:      会话ID
 
         【核心判定逻辑 —— 四步判定法】
-          Step 1: 计算心跳间隔
+          Step 1: 计算墙钟间隔
             gap_seconds = 当前时间 - 上次心跳时间
             （若为首次心跳，则用 start_time 作为基准）
 
@@ -127,11 +127,14 @@ class StudyEngine:
                暂停时间 ≤ PAUSE_TOLERANCE(300s) → 仍计有效（人性化设计）
                暂停时间 > PAUSE_TOLERANCE       → 无效（视为长时间离开）
 
-          Step 4: 有效增量计算（封顶策略）
-            increment = min(gap_seconds, HEARTBEAT_INTERVAL + 5)
-            → 正常情况 increment ≈ 30s（心跳间隔）
-            → 网络延迟时 increment = gap_seconds（如实延迟 32s）
-            → 异常延迟时 increment = 35s（封顶，防止一次跳太多）
+          Step 4: 有效增量计算（视频时间模式）
+            video_delta = max(0, video_current_time - 上次记录的视频进度)
+            increment = min(video_delta, HEARTBEAT_INTERVAL + 5)  # 封顶35秒
+            → 正常1倍速: increment ≈ 30s（心跳间隔走了30秒视频时间）
+            → 2倍速: increment ≈ 60s → 封顶35s
+            → 暂停中: video_delta=0, increment=0
+            注意：视频时间模式天然支持倍速 —— 2倍速下30秒墙钟走了60秒视频内容，
+            有效时长也会对应增加，体现"学完了更多内容"。
 
         【防刷设计】
           - 切后台检测：is_page_visible === false 时心跳直接无效
@@ -144,7 +147,7 @@ class StudyEngine:
         # 获取上次心跳时间；首次心跳时以会话开始时间作为基准
         last = session.last_heartbeat or session.start_time
 
-        # 计算本次心跳与上次心跳之间的时间间隔（秒）
+        # 计算本次心跳与上次心跳之间的墙钟时间间隔（秒）
         gap_seconds = (now - last).total_seconds()
 
         # ─── 有效性判定 ──────────────────────────────────────────────
@@ -165,16 +168,21 @@ class StudyEngine:
                 # 只要没超过容忍窗口，就不算"离开"，时长继续累计
                 is_effective = True
 
-        # ─── 有效增量计算 ────────────────────────────────────────────
+        # ─── 有效增量计算（视频时间模式） ──────────────────────────────
 
         if is_effective:
-            # 封顶策略：增量不超过 心跳间隔 + 5秒(35秒)
-            # 防止因网络延迟积攒的间隔在一次心跳中被全部计入
-            # 例如：正常间隔30s → 增量30s；延迟到32s → 增量32s；延迟到60s → 增量35s(封顶)
-            increment = min(gap_seconds, StudyEngine.HEARTBEAT_INTERVAL + 5)
+            # 视频时间增量 = 当前视频位置 - 上次记录的视频位置
+            # 天然支持倍速：2倍速下30秒墙钟能走60秒视频时间
+            # 暂停时 video_delta = 0，不会虚增时长
+            video_delta = max(0, video_current_time - float(session.video_progress))
+            # 封顶策略：增量不超过 心跳间隔 × 2 + 5秒(65秒)
+            # 允许2倍速完整计入有效时长，防止3倍以上速率刷时长
+            # 例如：1倍速30s → 增量30s；2倍速60s → 增量60s；3倍速90s → 增量65s(封顶)
+            increment = min(video_delta, StudyEngine.HEARTBEAT_INTERVAL * 2 + 5)
 
             # 累加有效秒数到会话记录
-            session.effective_seconds = int(session.effective_seconds + increment)
+            if increment > 0:
+                session.effective_seconds = int(session.effective_seconds + increment)
 
         # ─── 视频进度更新（去重策略） ────────────────────────────────
 

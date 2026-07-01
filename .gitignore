@@ -38,6 +38,9 @@ redis_data/
 *.log
 logs/
 
+# Test videos (root-level src/ only)
+/src/
+
 # Docker
 docker-compose.override.yml
 backend/uploads/videos/

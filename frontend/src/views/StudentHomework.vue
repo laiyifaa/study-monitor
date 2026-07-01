@@ -5,40 +5,43 @@
     <div v-if="loading" class="loading">加载中...</div>
 
     <template v-else>
-      <div v-if="!assignment" class="empty">
-        <p>暂无作业</p>
-      </div>
-
-      <div v-else class="assignment-detail">
-        <div class="assignment-header">
-          <h3>{{ assignment.title }}</h3>
-          <span class="status-badge" :class="assignment.status">{{ statusText(assignment.status) }}</span>
+      <div v-for="section in sections" :key="section.id" class="section-card">
+        <div class="section-header">
+          <h3>{{ section.title }}</h3>
         </div>
-        <p class="desc">{{ assignment.description || '暂无描述' }}</p>
-        <div v-if="assignment.question_files && assignment.question_files.length > 0" class="question-files">
-          <h4>题目文件</h4>
-          <div class="question-files-list">
-            <div v-for="(file, i) in assignment.question_files" :key="i" class="question-file">
-              <img v-if="!isPdf(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
-              <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">📄 查看 PDF</a>
+        <div v-if="!assignmentMap[section.id]" class="section-empty">
+          <p>暂无作业</p>
+        </div>
+        <div v-else class="assignment-detail">
+          <div class="assignment-header">
+            <h4>{{ assignmentMap[section.id].title }}</h4>
+            <span class="status-badge" :class="assignmentMap[section.id].status">{{ statusText(assignmentMap[section.id].status) }}</span>
+          </div>
+          <p class="desc">{{ assignmentMap[section.id].description || '暂无描述' }}</p>
+          <div v-if="assignmentMap[section.id].question_files && assignmentMap[section.id].question_files.length > 0" class="question-files">
+            <h4>题目文件</h4>
+            <div class="question-files-list">
+              <div v-for="(file, i) in assignmentMap[section.id].question_files" :key="i" class="question-file">
+                <img v-if="!file.endsWith('.pdf')" :src="file" class="question-image" @click="previewImage(file)" />
+                <a v-else :href="file" target="_blank" class="pdf-link">📄 查看 PDF</a>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="meta">
-          <span v-if="assignment.deadline">截止：{{ formatDate(assignment.deadline) }}</span>
-        </div>
+          <div class="meta">
+            <span v-if="assignmentMap[section.id].deadline">截止：{{ formatDate(assignmentMap[section.id].deadline) }}</span>
+            <span v-if="isOverdue(assignmentMap[section.id])" class="overdue-hint">（已截止）</span>
+          </div>
 
-        <div v-if="assignment.status === 'published'" class="submit-section">
-          <button class="btn-primary" @click="showSubmitModal = true">
-            {{ mySubmission ? '修改提交' : '提交作业' }}
-          </button>
-          <button class="btn-secondary" @click="loadMySubmission">查看我的提交</button>
-        </div>
+          <div v-if="assignmentMap[section.id].status === 'published'" class="submit-section">
+            <button class="btn-primary" @click="openSubmitModal(section.id)">
+              {{ mySubmissionMap[section.id] ? '修改提交' : '提交作业' }}
+            </button>
+          </div>
 
         <div v-if="mySubmission" class="my-submission">
           <h4>我的提交</h4>
           <div class="submission-images">
-            <img v-for="(img, i) in mySubmission.images" :key="i" :src="getMediaUrl(img)" class="preview" />
+            <img v-for="(img, i) in mySubmission.images" :key="i" :src="img" class="preview" />
           </div>
           <div v-if="mySubmission.report" class="report">
             <div class="score">分数：{{ mySubmission.report.score }}</div>
@@ -56,11 +59,12 @@
                 <li v-for="(issue, i) in getIssues(mySubmission.report)" :key="i">{{ issue }}</li>
               </ul>
             </div>
-            <div class="feedback">{{ mySubmission.report.feedback }}</div>
+            <div v-else class="pending">等待批改中...</div>
           </div>
-          <div v-else class="pending">等待批改中...</div>
         </div>
       </div>
+
+      <div v-if="sections.length === 0" class="empty">暂无作业</div>
     </template>
 
     <div v-if="showSubmitModal" class="modal-overlay" @click.self="closeSubmitModal">
@@ -97,26 +101,35 @@ const route = useRoute()
 const courseId = route.params.courseId
 
 const loading = ref(false)
-const assignment = ref(null)
-const mySubmission = ref(null)
+const sections = ref([])
+const assignmentMap = ref({})
+const mySubmissionMap = ref({})
 const showSubmitModal = ref(false)
+const currentSectionId = ref(null)
 
 const previewImages = ref([])
 const uploadedUrls = ref([])
 const uploading = ref(false)
 
 onMounted(() => {
-  loadAssignment()
+  loadData()
 })
 
-async function loadAssignment() {
+async function loadData() {
   loading.value = true
   try {
-    const res = await api.get(`/homework/assignments/${courseId}`)
-    assignment.value = res.data.data
-    if (assignment.value) {
-      loadMySubmission()
+    const [sectionsRes, assignmentsRes] = await Promise.all([
+      api.get('/sections', { params: { course_id: courseId } }),
+      api.get(`/homework/course/${courseId}`)
+    ])
+    sections.value = sectionsRes.data.data || []
+    const assignments = assignmentsRes.data.data || []
+    const map = {}
+    for (const a of assignments) {
+      map[a.section_id] = a
     }
+    assignmentMap.value = map
+    await loadMySubmissions()
   } catch (e) {
     console.error(e)
   } finally {
@@ -124,17 +137,34 @@ async function loadAssignment() {
   }
 }
 
-async function loadMySubmission() {
-  if (!assignment.value) return
+async function loadMySubmissions() {
   try {
     const res = await api.get('/homework/my-submissions', {
-      params: { assignment_id: assignment.value.id }
+      params: { course_id: courseId }
     })
     const list = res.data.data || []
-    mySubmission.value = list[0] || null
+    const map = {}
+    for (const s of list) {
+      if (!map[s.assignment_id] || new Date(s.submitted_at) > new Date(map[s.assignment_id].submitted_at)) {
+        map[s.assignment_id] = s
+      }
+    }
+    const subMap = {}
+    for (const [aid, sub] of Object.entries(map)) {
+      const assignment = Object.values(assignmentMap.value).find(a => a.id === Number(aid) || a.id === aid)
+      if (assignment) {
+        subMap[assignment.section_id] = sub
+      }
+    }
+    mySubmissionMap.value = subMap
   } catch (e) {
     console.error(e)
   }
+}
+
+function openSubmitModal(sectionId) {
+  currentSectionId.value = sectionId
+  showSubmitModal.value = true
 }
 
 async function handleFileSelect(e) {
@@ -165,14 +195,16 @@ async function submitHomework() {
     alert('请先上传图片')
     return
   }
+  const assignment = assignmentMap.value[currentSectionId.value]
+  if (!assignment) return
   try {
     await api.post('/homework/submissions', {
-      assignment_id: assignment.value.id,
+      assignment_id: assignment.id,
       images: uploadedUrls.value,
     })
     alert('提交成功')
     closeSubmitModal()
-    loadMySubmission()
+    loadMySubmissions()
   } catch (e) {
     alert('提交失败：' + (e.response?.data?.detail || e.message))
   }
@@ -180,8 +212,14 @@ async function submitHomework() {
 
 function closeSubmitModal() {
   showSubmitModal.value = false
+  currentSectionId.value = null
   previewImages.value = []
   uploadedUrls.value = []
+}
+
+function isOverdue(assignment) {
+  if (!assignment?.deadline) return false
+  return new Date(assignment.deadline) < new Date()
 }
 
 function statusText(status) {
@@ -270,11 +308,34 @@ function getIssues(report) {
   cursor: pointer;
 }
 
-.assignment-detail {
+.section-card {
   background: white;
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  margin-bottom: 16px;
+}
+
+.section-header {
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #333;
+}
+
+.section-empty {
+  text-align: center;
+  padding: 12px 0;
+  color: #999;
+}
+
+.assignment-detail {
+  padding: 0;
 }
 
 .assignment-header {
@@ -293,6 +354,21 @@ function getIssues(report) {
 .status-badge.draft { background: #f0f0f0; color: #666; }
 .status-badge.published { background: #e6f7ff; color: #1890ff; }
 .status-badge.closed { background: #fff7e6; color: #fa8c16; }
+
+.late-badge {
+  background: #fff1f0;
+  color: #ff4d4f;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.overdue-hint {
+  color: #ff4d4f;
+  font-size: 12px;
+}
 
 .desc {
   color: #666;

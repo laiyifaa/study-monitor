@@ -31,11 +31,19 @@
   <!-- 全局顶栏：显示用户信息和退出按钮，登录页不显示 -->
   <header v-if="showHeader" class="app-header">
     <div class="header-left">
-      <span class="app-title">在线学习平台</span>
+      <a href="javascript:void(0)" class="app-title" @click="goHome">在线学习平台</a>
     </div>
     <div v-if="auth.isLoggedIn.value" class="header-right">
-      <!-- 运维面板入口：ops 和 admin 可见 -->
-      <router-link v-if="auth.user.value?.role === 'ops' || auth.user.value?.role === 'admin'" to="/ops" class="btn-ops-link">运维</router-link>
+      <!-- 运维面板入口：管理员可见 -->
+      <router-link v-if="auth.user.value?.role === 'admin'" to="/ops" class="btn-ops-link">运维</router-link>
+      <!-- v4.0: 新功能入口 -->
+      <router-link to="/announcements" class="btn-feature-link announcement-link">
+        公告
+        <span v-if="unreadCount > 0" class="unread-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+      </router-link>
+      <router-link v-if="auth.user.value?.role === 'student'" to="/checkin" class="btn-feature-link">签到</router-link>
+      <router-link to="/study-report" class="btn-feature-link">报告</router-link>
+      <router-link to="/guide" class="btn-feature-link">指南</router-link>
       <!-- 用户角色标签 -->
       <span class="role-tag" :class="auth.user.value?.role">{{ roleLabel }}</span>
       <!-- 用户姓名 -->
@@ -82,14 +90,29 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from './utils/auth'  // 【交互】引用 auth.js 的认证状态管理
 import api from './utils/api'
 
 const router = useRouter()
 // 获取认证 store 的单例实例
 const auth = useAuthStore()
+
+/** ============ 未读公告数 ============ */
+const unreadCount = ref(0)
+
+async function fetchUnreadCount() {
+  if (!auth.isLoggedIn.value) return
+  try {
+    const res = await api.get('/announcements/unread-count')
+    if (res.data.code === 0) {
+      unreadCount.value = res.data.data.count
+    }
+  } catch (e) {
+    // 静默失败，不影响使用
+  }
+}
 
 /** ============ 修改密码弹窗状态 ============ */
 const showChangePw = ref(false)
@@ -113,7 +136,7 @@ const roleLabel = computed(() => {
   const role = auth.user.value?.role
   if (role === 'teacher') return '教师'
   if (role === 'admin') return '管理员'
-  if (role === 'ops') return '运维'
+  if (role === 'admin') return '管理员'
   return '学生'
 })
 
@@ -165,6 +188,16 @@ async function doChangePassword() {
   }
 }
 
+const route = useRoute()
+
+/** ============ 路由变化时刷新未读数 ============ */
+// 离开公告页时立即刷新，确保红点及时消失
+watch(() => route.path, (newPath, oldPath) => {
+  if (oldPath === '/announcements' && newPath !== '/announcements') {
+    fetchUnreadCount()
+  }
+})
+
 onMounted(async () => {
   // 应用首次加载/刷新时，检查是否已有有效 token
   if (!auth.isLoggedIn.value) {
@@ -172,7 +205,26 @@ onMounted(async () => {
     // 如果不在钉钉环境（如本地浏览器调试），此函数会静默跳过
     await auth.tryDingTalkLogin()
   }
+  // 登录后获取未读公告数
+  if (auth.isLoggedIn.value) {
+    fetchUnreadCount()
+    // 每60秒轮询一次未读数
+    setInterval(fetchUnreadCount, 60000)
+  }
 })
+
+/**
+ * 点击标题回到主页
+ * 学生 → /my-progress，教师/管理员 → /teacher
+ */
+function goHome() {
+  const role = auth.user.value?.role
+  if (role === 'student') {
+    router.push('/my-progress')
+  } else {
+    router.push('/teacher')
+  }
+}
 </script>
 
 <style>
@@ -206,6 +258,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
   font-size: 16px;
   font-weight: 600;
   color: #1890ff;
+  text-decoration: none;
+  cursor: pointer;
+}
+.app-title:hover {
+  opacity: 0.8;
 }
 
 .header-right {
@@ -224,7 +281,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .role-tag.student { background: #e6f7ff; color: #1890ff; }
 .role-tag.teacher { background: #f6ffed; color: #52c41a; }
 .role-tag.admin { background: #fff7e6; color: #fa8c16; }
-.role-tag.ops { background: #e6fffb; color: #13c2c2; }
+
 
 /* 用户姓名 */
 .user-name {
@@ -282,6 +339,43 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
   color: #fff;
 }
 
+/* v4.0: 新功能入口按钮 */
+.btn-feature-link {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid #1890ff;
+  border-radius: 4px;
+  color: #1890ff;
+  text-decoration: none;
+  transition: all 0.2s;
+  position: relative;
+}
+.btn-feature-link:hover {
+  background: #1890ff;
+  color: #fff;
+}
+
+/* 公告红点 */
+.announcement-link {
+  position: relative;
+}
+.unread-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
+  background: #ff4d4f;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 8px;
+  text-align: center;
+  pointer-events: none;
+}
+
 /* 修改密码按钮 */
 .btn-changepw {
   font-size: 12px;
@@ -320,4 +414,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .pw-error { color: #ff4d4f; font-size: 13px; margin-bottom: 10px; }
+
+/* ====== 全局响应式：顶栏适配 ====== */
+@media (max-width: 600px) {
+  .app-header { height: 44px; padding: 0 10px; }
+  .app-title { font-size: 14px; }
+  .header-right { gap: 4px; flex-wrap: nowrap; overflow-x: auto; }
+
+  /* 隐藏部分功能链接文字，只保留图标感 */
+  .btn-feature-link { font-size: 11px; padding: 2px 6px; white-space: nowrap; }
+  .user-name { max-width: 50px; font-size: 12px; }
+  .role-tag { font-size: 10px; padding: 1px 5px; }
+  .btn-changepw { display: none; }  /* 手机端隐藏改密按钮，用其他方式访问 */
+  .btn-logout { font-size: 12px; padding: 3px 8px; }
+}
+
+/* 超小屏：进一步精简 */
+@media (max-width: 380px) {
+  .app-header { height: 42px; padding: 0 8px; }
+  .app-title { font-size: 13px; }
+  .btn-feature-link { padding: 2px 4px; font-size: 10px; }
+  .btn-ops-link { display: none; }  /* 超小屏隐藏运维入口 */
+  .user-name { max-width: 36px; font-size: 11px; }
+}
 </style>

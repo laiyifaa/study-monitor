@@ -43,9 +43,9 @@ UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file
 
 class CourseCreate(BaseModel):
     """创建课程请求体"""
-    title: str                       # 课程标题（必填）
-    description: str = ""            # 课程描述
-    require_minutes: int = 60        # 要求学习时长（分钟），默认60分钟
+    title: str                        # 课程标题（必填）
+    description: str = ""             # 课程描述
+    require_minutes: int | None = None  # 要求学习时长（分钟），null或未传=不设要求
     start_date: datetime | None = None  # 学习开始日期
     end_date: datetime | None = None    # 学习截止日期
 
@@ -99,7 +99,7 @@ async def create_course(
     请求参数：
         body.title (str):              课程标题（必填）
         body.description (str):        课程描述
-        body.require_minutes (int):     要求学习时长（分钟），默认60
+        body.require_minutes (int):     要求学习时长（分钟），null=不设要求
         body.start_date (datetime):     学习开始日期
         body.end_date (datetime):       学习截止日期
 

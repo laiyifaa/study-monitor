@@ -17,6 +17,7 @@
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import tempfile
 from datetime import datetime
@@ -37,6 +38,7 @@ async def call_grading_agent(
     submission_id: int,
     stitched_image_url: str,
     prompt: str,
+    answer_json: str = "",
     retry_count: int = 0,
 ) -> bool:
     """
@@ -68,11 +70,11 @@ async def call_grading_agent(
         if not image_path:
             raise Exception("图片下载失败")
 
-        file_id = await _upload_file(agent_url, api_key, image_path)
+        file_id = await _upload_file(agent_url, api_key, image_path, content_type="image/jpeg")
         if not file_id:
             raise Exception("图片上传失败")
 
-        agent_task_id = await _send_chat_message(agent_url, api_key, file_id, prompt, submission_id)
+        agent_task_id = await _send_chat_message(agent_url, api_key, file_id, prompt, submission_id, answer_json)
         if not agent_task_id:
             raise Exception("获取任务ID失败")
 
@@ -107,6 +109,7 @@ async def call_grading_agent(
                 submission_id=submission_id,
                 stitched_image_url=stitched_image_url,
                 prompt=prompt,
+                answer_json=answer_json,
                 retry_count=retry_count + 1,
             )
         else:
@@ -153,7 +156,7 @@ async def _download_image(image_url: str) -> str:
             return f.name
 
 
-async def _upload_file(agent_url: str, api_key: str, file_path: str) -> str:
+async def _upload_file(agent_url: str, api_key: str, file_path: str, content_type: str | None = None) -> str:
     """
     上传文件到智能体平台
 
@@ -167,9 +170,11 @@ async def _upload_file(agent_url: str, api_key: str, file_path: str) -> str:
     """
     upload_url = f"{agent_url}/files/upload"
 
+    media_type = content_type or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
     async with httpx.AsyncClient(timeout=60) as client:
         with open(file_path, "rb") as f:
-            files = {"file": (os.path.basename(file_path), f, "image/jpeg")}
+            files = {"file": (os.path.basename(file_path), f, media_type)}
             headers = {"Authorization": f"Bearer {api_key}"}
             response = await client.post(upload_url, files=files, headers=headers)
             response.raise_for_status()
@@ -180,7 +185,14 @@ async def _upload_file(agent_url: str, api_key: str, file_path: str) -> str:
         return file_id
 
 
-async def _send_chat_message(agent_url: str, api_key: str, file_id: str, prompt: str, submission_id: int = 0) -> str:
+async def _send_chat_message(
+    agent_url: str,
+    api_key: str,
+    file_id: str,
+    prompt: str,
+    submission_id: int = 0,
+    answer_json: str = "",
+) -> str:
     """
     发送批改请求到智能体
 
@@ -196,16 +208,21 @@ async def _send_chat_message(agent_url: str, api_key: str, file_id: str, prompt:
     """
     chat_url = f"{agent_url}/chat-messages"
 
+    query = prompt or "请批改这份作业"
+    if answer_json:
+        query += "\n请先 OCR 识别学生作业图片，再按 inputs.answer_json 中的标准答案 JSON 比对批改。"
+
     body = {
         "inputs": {
             "submission_id": submission_id,
+            "answer_json": answer_json or "",
             "sys_zy": {
                 "type": "image",
                 "transfer_method": "local_file",
                 "upload_file_id": file_id,
             }
         },
-        "query": prompt or "请批改这份作业",
+        "query": query,
         "response_mode": "streaming",
         "conversation_id": "",
         "user": "study-monitor",
@@ -236,3 +253,85 @@ async def _send_chat_message(agent_url: str, api_key: str, file_id: str, prompt:
                         continue
 
     return ""
+
+
+async def parse_answer_file_with_agent(file_path: str) -> dict:
+    """Upload a PDF/Word answer file to the existing grading agent and return answer JSON."""
+    agent_url = settings.GRADING_AGENT_URL
+    api_key = settings.GRADING_AGENT_API_KEY
+    if not agent_url or not api_key:
+        raise RuntimeError("GRADING_AGENT_URL 或 GRADING_AGENT_API_KEY 未配置")
+
+    file_id = await _upload_file(agent_url, api_key, file_path)
+    if not file_id:
+        raise RuntimeError("答案文件上传智能体失败")
+
+    content = await _send_answer_parse_message(agent_url, api_key, file_id)
+    parsed = _extract_json_object(content)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("智能体未返回有效答案 JSON")
+    return parsed
+
+
+async def _send_answer_parse_message(agent_url: str, api_key: str, file_id: str) -> str:
+    chat_url = f"{agent_url}/chat-messages"
+    body = {
+        "inputs": {
+            "sys_answer_file": {
+                "type": "document",
+                "transfer_method": "local_file",
+                "upload_file_id": file_id,
+            }
+        },
+        "query": (
+            "请从答案文件中提取标准答案，只返回严格 JSON，不要输出说明文字。"
+            "格式：{\"version\":1,\"items\":[{\"no\":\"1\",\"type\":\"choice|fill|judge\",\"answer\":\"A\"}]}。"
+            "type 只能是 choice、fill、judge。"
+        ),
+        "response_mode": "streaming",
+        "conversation_id": "",
+        "user": "study-monitor-answer-parser",
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    chunks: list[str] = []
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream("POST", chat_url, json=body, headers=headers) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip() or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                for key in ("answer", "text", "message", "content"):
+                    value = data.get(key)
+                    if isinstance(value, str):
+                        chunks.append(value)
+
+    return "".join(chunks).strip()
+
+
+def _extract_json_object(text: str) -> dict:
+    if not text:
+        raise ValueError("empty answer parser response")
+
+    candidates = [text.strip()]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start:end + 1])
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("answer parser response is not JSON")

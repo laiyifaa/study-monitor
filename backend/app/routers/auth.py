@@ -190,12 +190,15 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
 
     # 从钉钉API响应中提取最新用户信息
     dt_name = user_info.get("name", "")
+    dt_mobile = user_info.get("mobile", "")
     dt_avatar = user_info.get("avatar", "")
 
     if not user:
         user = User(
             dingtalk_user_id=userid,
             name=dt_name or "未知",
+            real_name=dt_name,
+            phone=dt_mobile or "",
             role="student",  # 默认角色为学生，管理员角色需后续手动配置
             avatar=dt_avatar or "",
         )
@@ -203,9 +206,13 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
         await db.flush()       # 获取自增ID，但不提交事务
         await db.refresh(user) # 刷新对象以获取数据库生成的字段
     else:
-        # 已有用户：同步钉钉最新姓名和头像（不覆盖角色，角色由管理员管理）
+        # 已有用户：同步钉钉最新姓名、手机号和头像（不覆盖角色，角色由管理员管理）
         if dt_name and user.name != dt_name:
             user.name = dt_name
+        if dt_name and user.real_name != dt_name:
+            user.real_name = dt_name
+        if dt_mobile and user.phone != dt_mobile:
+            user.phone = dt_mobile
         if dt_avatar and user.avatar != dt_avatar:
             user.avatar = dt_avatar
 
@@ -223,6 +230,8 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
                 "role": user.role,
                 "avatar": user.avatar,
                 "class_name": user.class_name,
+                "real_name": user.real_name,
+                "phone": user.phone,
             },
         },
     }
@@ -249,6 +258,8 @@ async def get_me(user: User = Depends(get_current_user)):
         "role": user.role,
         "avatar": user.avatar,
         "class_name": user.class_name,
+        "real_name": user.real_name,
+        "phone": user.phone,
     }
 
 
@@ -318,6 +329,8 @@ async def browser_login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
                 "role": user.role,
                 "avatar": user.avatar,
                 "class_name": user.class_name,
+                "real_name": user.real_name,
+                "phone": user.phone,
             },
         },
     }

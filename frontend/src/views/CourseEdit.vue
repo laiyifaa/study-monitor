@@ -95,6 +95,18 @@
 
         <!-- 小节视频设置 -->
         <div class="section-video-settings">
+          <!-- v4.0: 开播时间设置 -->
+          <div class="open-time-setting">
+            <label class="open-time-label">开播时间</label>
+            <input
+              v-model="sec.open_time"
+              type="datetime-local"
+              class="open-time-input"
+              @blur="onUpdateSection(sec)"
+            />
+            <button v-if="sec.open_time" class="btn-text" @click="sec.open_time = ''; onUpdateSection(sec)">清除</button>
+            <span v-else class="hint">不设则随时可学</span>
+          </div>
           <!-- 模式切换 -->
           <div class="video-mode-tabs">
             <button :class="['tab', sec.video_type === 'url' ? 'active' : '']" @click="sec.video_type = 'url'">
@@ -223,6 +235,8 @@ onMounted(async () => {
         // 给每个小节加前端临时字段
         sections.value = sectionsRes.data.data.map(s => ({
           ...s,
+          // v4.0: 格式化 open_time 用于 datetime-local input
+          open_time: s.open_time ? s.open_time.slice(0, 16) : '',
           _uploading: false,
           _uploadProgress: 0,
         }))
@@ -317,11 +331,16 @@ const onAddSection = async () => {
  */
 const onUpdateSection = async (sec) => {
   try {
-    await api.put(`/sections/${sec.id}`, {
+    const payload = {
       title: sec.title,
       video_type: sec.video_type,
       video_url: sec.video_type === 'url' ? (sec.video_url || '') : sec.video_url,
-    })
+    }
+    // v4.0: 传递开播时间
+    if (sec.open_time) {
+      payload.open_time = sec.open_time
+    }
+    await api.put(`/sections/${sec.id}`, payload)
   } catch (e) {
     console.warn('更新小节失败:', e)
   }
@@ -480,6 +499,17 @@ const onFileSelect = async (event) => {
 
 /* 小节视频设置区域 */
 .section-video-settings { padding-left: 32px; }
+
+/* v4.0: 开播时间设置 */
+.open-time-setting {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.open-time-label { font-size: 12px; color: #666; white-space: nowrap; }
+.open-time-input {
+  padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px;
+  font-size: 12px; color: #333;
+}
+.open-time-input:focus { border-color: #1890ff; outline: none; }
 
 /* 视频模式切换标签 */
 .video-mode-tabs { display: flex; gap: 8px; margin-bottom: 8px; }

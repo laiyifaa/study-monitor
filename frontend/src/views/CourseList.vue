@@ -150,4 +150,14 @@ const goDetail = (course) => {
   text-decoration: none; color: #999; font-size: 14px;
 }
 .nav-item.active { color: #1890ff; }
+
+/* ====== 响应式：手机（480px以下） ====== */
+@media (max-width: 480px) {
+  .course-list-page { padding: 12px; padding-bottom: 60px; }
+  .page-title { font-size: 17px; margin-bottom: 12px; }
+  .card-body { padding: 12px; }
+  .card-header-row h3 { font-size: 14px; }
+  .meta { flex-wrap: wrap; gap: 8px 12px; }
+  .desc { font-size: 12px; }
+}
 </style>

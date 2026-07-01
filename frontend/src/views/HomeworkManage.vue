@@ -8,17 +8,21 @@
     <div v-if="loading" class="loading">加载中...</div>
 
     <template v-else>
-      <div v-if="!assignment" class="empty">
-        <p>该课程暂无作业</p>
-        <button class="btn-primary" @click="showCreateModal = true">创建作业</button>
-      </div>
-
-      <div v-else class="assignment-detail">
-        <div class="assignment-header">
-          <h3>{{ assignment.title }}</h3>
-          <div class="status-group">
-            <span class="status-badge" :class="assignment.status">{{ statusText(assignment.status) }}</span>
-            <span class="status-badge" :class="assignment.grading_status">{{ gradingStatusText(assignment.grading_status) }}</span>
+      <div v-for="section in sections" :key="section.id" class="section-card">
+        <div class="section-header">
+          <h3>{{ section.title }}</h3>
+        </div>
+        <div v-if="!assignmentMap[section.id]" class="section-empty">
+          <p>该小节暂无作业</p>
+          <button class="btn-primary" @click="openCreateForSection(section)">发布作业</button>
+        </div>
+        <div v-else class="assignment-detail">
+          <div class="assignment-header">
+            <h4>{{ assignmentMap[section.id].title }}</h4>
+            <div class="status-group">
+              <span class="status-badge" :class="assignmentMap[section.id].status">{{ statusText(assignmentMap[section.id].status) }}</span>
+              <span class="status-badge" :class="assignmentMap[section.id].grading_status">{{ gradingStatusText(assignmentMap[section.id].grading_status) }}</span>
+            </div>
           </div>
         </div>
         <p class="desc">{{ assignment.description || '暂无描述' }}</p>
@@ -51,11 +55,17 @@
           </div>
         </div>
       </div>
+
+      <div v-if="sections.length === 0" class="empty">暂无小节数据</div>
     </template>
 
     <div v-if="showCreateModal || showEditModal" class="modal-overlay" @click.self="closeModal">
       <div class="modal modal-lg">
         <h3>{{ showEditModal ? '编辑作业' : '创建作业' }}</h3>
+        <div class="form-group">
+          <label>所属小节</label>
+          <input :value="currentSection?.title" disabled />
+        </div>
         <div class="form-group">
           <label>作业标题</label>
           <input v-model="form.title" type="text" placeholder="请输入作业标题" />
@@ -106,8 +116,11 @@
           <div v-for="s in submissions" :key="s.id" class="submission-item">
             <div class="submission-header">
               <span class="student-name">{{ s.user?.name }}</span>
-              <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
-              <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
+              <div class="status-group">
+                <span v-if="s.is_late" class="status-badge late">迟交</span>
+                <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
+                <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
+              </div>
             </div>
               <div class="submission-images">
                 <img v-for="(img, i) in s.images" :key="i" :src="getMediaUrl(img)" class="thumb" @click="previewImage(getMediaUrl(img))" />
@@ -198,7 +211,8 @@ const route = useRoute()
 const courseId = route.params.courseId
 
 const loading = ref(false)
-const assignment = ref(null)
+const sections = ref([])
+const assignmentMap = ref({})
 const submissions = ref([])
 const summary = ref({
   submitted_count: 0,
@@ -216,6 +230,8 @@ const showGradeModal = ref(false)
 const gradingSubmission = ref(null)
 const gradeForm = ref({ score: '', feedback: '' })
 const gradeSubmitting = ref(false)
+const currentSection = ref(null)
+const currentViewSectionId = ref(null)
 
 const form = ref({
   title: '',
@@ -224,6 +240,7 @@ const form = ref({
   grading_prompt: '',
   grading_mode: 'auto',
   deadline: '',
+  section_id: null,
 })
 
 function getMediaUrl(url) {
@@ -257,14 +274,23 @@ function openEditModal() {
 }
 
 onMounted(() => {
-  Promise.all([loadAssignment(), loadSubmissionSummary()])
+  loadAssignment()
 })
 
-async function loadAssignment() {
+async function loadData() {
   loading.value = true
   try {
-    const res = await api.get(`/homework/assignments/${courseId}`)
-    assignment.value = res.data.data
+    const [sectionsRes, assignmentsRes] = await Promise.all([
+      api.get('/sections', { params: { course_id: courseId } }),
+      api.get(`/homework/course/${courseId}`)
+    ])
+    sections.value = sectionsRes.data.data || []
+    const assignments = assignmentsRes.data.data || []
+    const map = {}
+    for (const a of assignments) {
+      map[a.section_id] = a
+    }
+    assignmentMap.value = map
   } catch (e) {
     console.error(e)
   } finally {
@@ -272,15 +298,32 @@ async function loadAssignment() {
   }
 }
 
-async function loadSubmissions() {
+function openCreateForSection(section) {
+  currentSection.value = section
+  form.value = { title: section.title + ' 作业', description: '', question_files: [], grading_prompt: '', grading_mode: 'auto', deadline: '', section_id: section.id }
+  showCreateModal.value = true
+}
+
+function openEditForSection(section) {
+  const a = assignmentMap.value[section.id]
+  currentSection.value = section
+  form.value = {
+    title: a.title,
+    description: a.description || '',
+    question_files: a.question_files || [],
+    grading_prompt: a.grading_prompt || '',
+    grading_mode: a.grading_mode || 'auto',
+    deadline: a.deadline ? a.deadline.slice(0, 16) : '',
+    section_id: section.id,
+  }
+  showEditModal.value = true
+}
+
+async function loadSubmissions(sectionId) {
+  currentViewSectionId.value = sectionId
   try {
-    const res = await api.get(`/homework/assignments/${courseId}/submissions-summary`)
-    const data = res.data.data || {}
-    submissions.value = data.submissions || []
-    if (submissions.value.length === 0) {
-      const fallback = await api.get(`/homework/assignments/${courseId}/submissions`)
-      submissions.value = fallback.data.data || []
-    }
+    const res = await api.get(`/homework/assignments/${courseId}/submissions`)
+    submissions.value = res.data.data || []
     showSubmissionsModal.value = true
   } catch (e) {
     alert('加载失败')
@@ -305,37 +348,31 @@ async function saveAssignment() {
     return
   }
   try {
+    const payload = {
+      title: form.value.title,
+      description: form.value.description,
+      question_files: form.value.question_files,
+      grading_prompt: form.value.grading_prompt,
+      grading_mode: form.value.grading_mode,
+      deadline: form.value.deadline || null,
+    }
     if (showEditModal.value) {
-      await api.put(`/homework/assignments/${courseId}`, {
-        title: form.value.title,
-        description: form.value.description,
-        question_files: form.value.question_files,
-        grading_prompt: form.value.grading_prompt,
-        grading_mode: form.value.grading_mode,
-        deadline: form.value.deadline || null,
-      })
+      await api.put(`/homework/assignments/${form.value.section_id}`, payload)
     } else {
-      await api.post(`/homework/assignments/${courseId}`, {
-        title: form.value.title,
-        description: form.value.description,
-        question_files: form.value.question_files,
-        grading_prompt: form.value.grading_prompt,
-        grading_mode: form.value.grading_mode,
-        deadline: form.value.deadline || null,
-      })
+      await api.post(`/homework/assignments/${form.value.section_id}`, payload)
     }
     closeModal()
-    await Promise.all([loadAssignment(), loadSubmissionSummary()])
+    loadAssignment()
   } catch (e) {
     alert('保存失败：' + (e.response?.data?.detail || e.message))
   }
 }
 
-async function publishAssignment() {
+async function publishAssignment(sectionId) {
   if (!confirm('确认发布此作业？')) return
   try {
     await api.put(`/homework/assignments/${courseId}`, { status: 'published' })
-    await Promise.all([loadAssignment(), loadSubmissionSummary()])
+    loadAssignment()
   } catch (e) {
     alert('发布失败')
   }
@@ -344,7 +381,8 @@ async function publishAssignment() {
 function closeModal() {
   showCreateModal.value = false
   showEditModal.value = false
-  form.value = { title: '', description: '', question_files: [], grading_prompt: '', grading_mode: 'auto', deadline: '' }
+  currentSection.value = null
+  form.value = { title: '', description: '', question_files: [], grading_prompt: '', grading_mode: 'auto', deadline: '', section_id: null }
 }
 
 async function handleQuestionFileSelect(e) {
@@ -436,7 +474,7 @@ async function submitGrade() {
       feedback: gradeForm.value.feedback,
     })
     showGradeModal.value = false
-    await Promise.all([loadSubmissions(), loadSubmissionSummary()])
+    loadSubmissions()
   } catch (e) {
     alert('批改失败：' + (e.response?.data?.detail || e.message))
   } finally {
@@ -494,11 +532,34 @@ async function submitGrade() {
   border-color: #1890ff;
 }
 
-.assignment-detail {
+.section-card {
   background: white;
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  margin-bottom: 16px;
+}
+
+.section-header {
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #333;
+}
+
+.section-empty {
+  text-align: center;
+  padding: 20px 0;
+  color: #999;
+}
+
+.assignment-detail {
+  padding: 0;
 }
 
 .assignment-header {
@@ -519,6 +580,7 @@ async function submitGrade() {
 .status-badge.closed { background: #fff7e6; color: #fa8c16; }
 .status-badge.pending { background: #fff7e6; color: #fa8c16; }
 .status-badge.graded { background: #f6ffed; color: #52c41a; }
+.status-badge.late { background: #fff1f0; color: #ff4d4f; }
 
 .status-group {
   display: flex;

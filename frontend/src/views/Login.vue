@@ -52,6 +52,13 @@
         </button>
       </form>
 
+      <!-- 快捷填入：点击只填充表单，不提交，不影响钉钉免登 -->
+      <div class="quick-fill">
+        <span class="quick-fill-label">快捷登录</span>
+        <button class="quick-btn teacher" @click="fillAccount('teacher')" :disabled="loading">老师</button>
+        <button class="quick-btn student" @click="fillAccount('student')" :disabled="loading">学生</button>
+      </div>
+
       <!-- 底部提示 -->
       <div class="login-footer">
         <p>钉钉环境打开自动免登，无需手动登录</p>
@@ -75,6 +82,23 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
+
+/**
+ * 快捷填入测试账号（仅填充表单，不触发登录）
+ */
+const quickAccounts = {
+  teacher: { username: '张老师', password: '123456' },
+  student: { username: '王小明', password: '123456' },
+}
+
+function fillAccount(role) {
+  const account = quickAccounts[role]
+  if (account) {
+    username.value = account.username
+    password.value = account.password
+    errorMsg.value = ''
+  }
+}
 
 /**
  * 处理登录表单提交
@@ -233,5 +257,48 @@ async function handleLogin() {
   font-size: 12px;
   color: #bbb;
   line-height: 1.8;
+}
+
+/* 快捷填入区域 */
+.quick-fill {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.quick-fill-label {
+  font-size: 12px;
+  color: #bbb;
+  margin-right: 4px;
+}
+.quick-btn {
+  padding: 4px 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fafafa;
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.quick-btn:hover:not(:disabled) {
+  border-color: #1890ff;
+  color: #1890ff;
+  background: #e6f7ff;
+}
+.quick-btn.teacher:hover:not(:disabled) {
+  border-color: #1890ff;
+  color: #1890ff;
+  background: #e6f7ff;
+}
+.quick-btn.student:hover:not(:disabled) {
+  border-color: #52c41a;
+  color: #52c41a;
+  background: #f6ffed;
+}
+.quick-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

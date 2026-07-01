@@ -44,8 +44,11 @@
 
         <!-- 课程总体信息 -->
         <div class="info-row">
-          <span>有效时长：{{ c.effective_minutes }} / {{ c.require_minutes }} 分钟</span>
+          <span>有效时长：{{ c.effective_minutes }} 分钟<span v-if="c.require_minutes"> / 要求 {{ c.require_minutes }} 分钟</span></span>
           <span v-if="c.sections && c.sections.length > 0">{{ getCompletedSectionCount(c) }}/{{ c.sections.length }} 小节</span>
+        </div>
+        <div v-if="!c.require_minutes && c.total_section_minutes > 0" class="info-row sub">
+          <span>视频总时长：{{ c.total_section_minutes }} 分钟</span>
         </div>
 
         <!-- 截止日期 -->
@@ -53,28 +56,41 @@
           截止日期：{{ c.end_date }}
         </div>
 
-        <!-- 小节级别进度列表 -->
-        <div v-if="c.sections && c.sections.length > 0" class="section-progress-list">
-          <div
-            v-for="sec in c.sections"
-            :key="sec.section_id"
-            class="section-progress-item"
-            @click="goLearn(c.course_id, sec.section_id)"
-          >
-            <div class="spi-left">
-              <span class="spi-dot" :class="sec.is_completed ? 'done' : (sec.effective_minutes > 0 ? 'active' : '')"></span>
-            </div>
-            <div class="spi-body">
-              <div class="spi-title">{{ sec.title }}</div>
-              <div class="spi-bar">
-                <div class="spi-fill" :style="{ width: sec.is_completed ? '100%' : '0%' }"></div>
+        <!-- 小节进度列表（可折叠） -->
+        <div v-if="c.sections && c.sections.length > 0" class="section-collapse-area">
+          <div class="section-toggle" @click="toggleSection(c.course_id)">
+            <span class="toggle-text">{{ expandedSections[c.course_id] ? '收起小节' : '展开小节' }}（{{ c.sections.length }}）</span>
+            <span class="toggle-arrow" :class="{ expanded: expandedSections[c.course_id] }">▶</span>
+          </div>
+          <transition name="slide">
+            <div v-show="expandedSections[c.course_id]" class="section-progress-list">
+              <div
+                v-for="sec in c.sections"
+                :key="sec.section_id"
+                class="section-progress-item"
+                @click="goLearn(c.course_id, sec.section_id)"
+              >
+                <div class="spi-left">
+                  <span class="spi-dot" :class="sec.is_completed ? 'done' : (sec.effective_minutes > 0 ? 'active' : '')"></span>
+                </div>
+                <div class="spi-body">
+                  <div class="spi-title">{{ sec.title }}</div>
+                  <div class="spi-meta">
+                    <span>{{ sec.effective_minutes }}分钟</span>
+                    <span v-if="sec.require_minutes > 0" class="spi-req">/ 要求{{ sec.require_minutes }}分钟</span>
+                  </div>
+                  <div class="spi-bar">
+                    <div class="spi-fill" :style="{ width: getSectionProgress(sec) + '%' }"></div>
+                  </div>
+                </div>
+                <div class="spi-right">
+                  <span v-if="sec.is_completed" class="spi-done">已完成</span>
+                  <span v-else-if="sec.effective_minutes > 0" class="spi-partial">学习中</span>
+                  <span v-else class="spi-notstart">未开始</span>
+                </div>
               </div>
             </div>
-            <div class="spi-right">
-              <span v-if="sec.is_completed" class="spi-done">已完成</span>
-              <span v-else class="spi-min">{{ sec.effective_minutes }}分钟</span>
-            </div>
-          </div>
+          </transition>
         </div>
 
         <!-- 跳转课程详情按钮 -->
@@ -87,7 +103,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../utils/api'
 
@@ -98,6 +114,27 @@ const courses = ref([])
 
 /** 加载状态标识 */
 const loading = ref(true)
+
+/** 记录哪些课程的小节列表已展开 */
+const expandedSections = reactive({})
+
+/**
+ * 切换课程小节列表的展开/收起
+ */
+function toggleSection(courseId) {
+  expandedSections[courseId] = !expandedSections[courseId]
+}
+
+/**
+ * 计算小节进度百分比
+ */
+function getSectionProgress(sec) {
+  if (sec.is_completed) return 100
+  if (sec.require_minutes > 0) {
+    return Math.min(Math.round(sec.effective_minutes / sec.require_minutes * 100), 99)
+  }
+  return 0
+}
 
 /**
  * 统计已完成小节数量
@@ -162,12 +199,43 @@ onMounted(async () => {
 
 /* 详细信息行 */
 .info-row { display: flex; justify-content: space-between; font-size: 13px; color: #666; }
+.info-row.sub { margin-top: 2px; font-size: 12px; color: #999; }
 
 /* 截止日期 */
 .deadline { font-size: 12px; color: #ff4d4f; margin-top: 4px; }
 
+/* 小节折叠区域 */
+.section-collapse-area { margin-top: 12px; border-top: 1px solid #f0f0f0; padding-top: 6px; }
+
+/* 折叠切换按钮 */
+.section-toggle {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; cursor: pointer; user-select: none;
+}
+.section-toggle:active { opacity: 0.7; }
+.toggle-text { font-size: 13px; color: #1890ff; }
+.toggle-arrow {
+  font-size: 10px; color: #999; transition: transform 0.25s;
+  display: inline-block;
+}
+.toggle-arrow.expanded { transform: rotate(90deg); }
+
+/* 折叠动画 */
+.slide-enter-active, .slide-leave-active {
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+.slide-enter-from, .slide-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+.slide-enter-to, .slide-leave-from {
+  opacity: 1;
+  max-height: 500px;
+}
+
 /* 小节进度列表 */
-.section-progress-list { margin-top: 12px; border-top: 1px solid #f0f0f0; padding-top: 10px; }
+.section-progress-list { overflow: hidden; }
 
 .section-progress-item {
   display: flex; align-items: center; gap: 8px; padding: 6px 0;
@@ -184,14 +252,17 @@ onMounted(async () => {
 .spi-dot.active { background: #1890ff; }
 
 .spi-body { flex: 1; min-width: 0; }
-.spi-title { font-size: 13px; color: #333; margin-bottom: 3px; }
+.spi-title { font-size: 13px; color: #333; margin-bottom: 2px; }
+.spi-meta { font-size: 11px; color: #999; margin-bottom: 3px; }
+.spi-req { color: #bbb; }
 /* 小节进度条 */
 .spi-bar { height: 3px; background: #f0f0f0; border-radius: 2px; overflow: hidden; }
 .spi-fill { height: 100%; background: #52c41a; border-radius: 2px; transition: width 0.3s; }
 
 .spi-right { flex-shrink: 0; font-size: 12px; }
 .spi-done { color: #52c41a; }
-.spi-min { color: #999; }
+.spi-partial { color: #1890ff; }
+.spi-notstart { color: #d9d9d9; }
 
 /* 继续学习链接按钮 */
 .continue-btn {

@@ -116,7 +116,56 @@ const routes = [
     path: '/ops',
     name: 'OpsPanel',
     component: () => import('../views/OpsPanel.vue'),
-    meta: { title: '运维监控', role: 'ops' },  // 仅运维/管理员
+    meta: { title: '运维监控', role: 'admin' },  // 仅管理员
+  },
+  {
+    // v4.0: 公告列表
+    path: '/announcements',
+    name: 'AnnouncementList',
+    component: () => import('../views/AnnouncementList.vue'),
+    meta: { title: '通知公告' },
+  },
+  {
+    // v4.0: 发布公告
+    path: '/announcement-create',
+    name: 'AnnouncementCreate',
+    component: () => import('../views/AnnouncementCreate.vue'),
+    meta: { title: '发布公告', role: 'teacher' },
+  },
+  {
+    // v4.0: 学习排行榜
+    path: '/leaderboard/:courseId',
+    name: 'Leaderboard',
+    component: () => import('../views/Leaderboard.vue'),
+    meta: { title: '学习排行榜' },
+  },
+  {
+    // v4.0: 小节评价
+    path: '/feedback/:sectionId',
+    name: 'SectionFeedback',
+    component: () => import('../views/SectionFeedback.vue'),
+    meta: { title: '课程评价' },
+  },
+  {
+    // v4.0: 签到日历
+    path: '/checkin',
+    name: 'CheckInCalendar',
+    component: () => import('../views/CheckInCalendar.vue'),
+    meta: { title: '学习签到', role: 'student' },
+  },
+  {
+    // v4.0: 学习报告
+    path: '/study-report',
+    name: 'StudyReport',
+    component: () => import('../views/StudyReport.vue'),
+    meta: { title: '学习报告' },
+  },
+  {
+    // v4.0: 使用指南
+    path: '/guide',
+    name: 'UserGuide',
+    component: () => import('../views/UserGuide.vue'),
+    meta: { title: '使用指南' },
   },
   {
     // 404 兜底路由：匹配所有未定义的路径
@@ -172,17 +221,12 @@ router.beforeEach((to, from, next) => {
       if (user.role === 'admin') {
         return next()
       }
-      // ops 专属页面：仅 ops 角色可访问
-      if (requiredRole === 'ops' && user.role !== 'ops') {
+      // teacher 专属页面：仅 teacher 角色可访问
+      if (requiredRole === 'teacher' && user.role !== 'teacher') {
         return next('/')
       }
-      // teacher 专属页面：ops 也能访问教师页面
-      if (requiredRole === 'teacher' && user.role !== 'teacher' && user.role !== 'ops') {
-        return next('/')
-      }
-      // student 专属页面：teacher 和 ops 也能访问学生页面
-      // 原因：教师/运维可能需要预览学生视角、查看学习内容
-      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher' && user.role !== 'ops') {
+      // student 专属页面：teacher 也能访问学生页面（预览学生视角）
+      if (requiredRole === 'student' && user.role !== 'student' && user.role !== 'teacher') {
         return next('/')
       }
     } catch {

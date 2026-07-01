@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from app.config import get_settings
 from app.database import init_db
 from app.database_redis import close_redis
-from app.routers import auth, heartbeat, course, stats, notify, admin, homework, ops, section
+from app.routers import auth, heartbeat, course, stats, notify, admin, homework, ops, section, announcement, feedback, agent
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -119,15 +119,17 @@ async def serve_upload(file_path: str):
     raise HTTPException(status_code=404, detail="文件不存在")
 
 # 注册各业务路由模块
-# auth     — 钉钉免登认证，获取 JWT 令牌
-# heartbeat — 学习心跳上报，防刷课核心
-# course   — 课程 CRUD（元数据级）
-# section  — 小节 CRUD + 视频上传（v3.0 课程-小节两级结构）
-# stats    — 教师统计看板数据聚合
-# notify   — 钉钉消息推送（学习提醒、每日报告）
-# admin    — 管理后台（用户管理、班级管理）
-# homework — 作业管理（发布、提交、批改）
-# ops      — 运维监控（服务器资源、容器状态、业务数据、存储信息）
+# auth        — 钉钉免登认证，获取 JWT 令牌
+# heartbeat   — 学习心跳上报，防刷课核心
+# course      — 课程 CRUD（元数据级）
+# section     — 小节 CRUD + 视频上传（v3.0 课程-小节两级结构）
+# stats       — 教师统计看板数据聚合 + 排行榜 + 签到日历 + 学习报告
+# notify      — 钉钉消息推送（学习提醒、每日报告）
+# admin       — 管理后台（用户管理、班级管理）
+# homework    — 作业管理（发布、提交、批改，v4.0 小节级）
+# ops         — 运维监控（服务器资源、容器状态、业务数据、存储信息）
+# announcement — 公告管理（教师/管理员发布通知，v4.0 新增）
+# feedback    — 小节评价反馈（学生评分留言，v4.0 新增）
 app.include_router(auth.router)
 app.include_router(heartbeat.router)
 app.include_router(course.router)
@@ -137,6 +139,9 @@ app.include_router(notify.router)
 app.include_router(admin.router)
 app.include_router(homework.router)
 app.include_router(ops.router)
+app.include_router(announcement.router)
+app.include_router(feedback.router)
+app.include_router(agent.router)
 
 
 @app.get("/api/health")

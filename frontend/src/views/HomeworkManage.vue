@@ -1,8 +1,11 @@
 <template>
   <div class="homework-manage-page">
     <div class="page-header">
-      <h2>作业管理</h2>
-      <router-link :to="`/teacher`" class="btn-secondary">← 返回统计看板</router-link>
+      <div class="title-block">
+        <h2>作业管理</h2>
+        <p>按小节整理题目、标准答案与学生提交</p>
+      </div>
+      <router-link to="/teacher" class="btn-secondary">返回统计看板</router-link>
     </div>
 
     <div v-if="loading" class="loading">加载中...</div>
@@ -12,46 +15,43 @@
         <div class="section-header">
           <h3>{{ section.title }}</h3>
         </div>
-        <div v-if="!assignmentMap[section.id]" class="section-empty">
+
+        <div v-if="!getAssignment(section.id)" class="section-empty">
           <p>该小节暂无作业</p>
           <button class="btn-primary" @click="openCreateForSection(section)">发布作业</button>
         </div>
+
         <div v-else class="assignment-detail">
           <div class="assignment-header">
-            <h4>{{ assignmentMap[section.id].title }}</h4>
+            <h4>{{ getAssignment(section.id).title }}</h4>
             <div class="status-group">
-              <span class="status-badge" :class="assignmentMap[section.id].status">{{ statusText(assignmentMap[section.id].status) }}</span>
-              <span class="status-badge" :class="assignmentMap[section.id].grading_status">{{ gradingStatusText(assignmentMap[section.id].grading_status) }}</span>
+              <span class="status-badge" :class="getAssignment(section.id).status">{{ statusText(getAssignment(section.id).status) }}</span>
+              <span class="status-badge grading" :class="getAssignment(section.id).grading_status">{{ gradingStatusText(getAssignment(section.id).grading_status) }}</span>
             </div>
           </div>
-        </div>
-        <p class="desc">{{ assignment.description || '暂无描述' }}</p>
-        <div class="meta">
-          <span v-if="assignment.deadline">截止：{{ formatDate(assignment.deadline) }}</span>
-        </div>
-        <div v-if="assignment.question_files && assignment.question_files.length > 0" class="question-files-preview">
-          <h4>题目文件</h4>
-          <div class="question-files-list">
-            <div v-for="(file, i) in assignment.question_files" :key="`qf-${i}`" class="question-file-item">
-              <img v-if="!isPdf(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
-              <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">📄 查看 PDF</a>
+
+          <p class="desc">{{ getAssignment(section.id).description || '暂无描述' }}</p>
+          <div class="meta">
+            <span v-if="getAssignment(section.id).deadline">截止时间：{{ formatDate(getAssignment(section.id).deadline) }}</span>
+            <span class="answer-state" :class="{ ready: hasAnswer(getAssignment(section.id)) }">答案：{{ hasAnswer(getAssignment(section.id)) ? '已录入' : '未录入' }}</span>
+          </div>
+
+          <div v-if="getAssignment(section.id).question_files?.length" class="question-files-preview card-preview">
+            <h4>题目文件</h4>
+            <div class="question-files-list">
+              <div v-for="(file, i) in getAssignment(section.id).question_files" :key="`qf-${i}`" class="question-file-item">
+                <img v-if="!isPdf(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
+                <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">查看 PDF</a>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="assignment-actions">
-          <button class="btn-sm" @click="openEditModal">编辑</button>
-          <button v-if="assignment.status === 'draft'" class="btn-sm primary" @click="publishAssignment">发布</button>
-          <button class="btn-sm" @click="loadSubmissions">查看提交 ({{ summary.submitted_count || submissions.length }})</button>
-          <button class="btn-sm" @click="showUnsubmittedModal = true">未交名单 ({{ summary.unsubmitted_count }})</button>
-        </div>
-        <div class="submission-summary">
-          <h4>提交概况</h4>
-          <div class="summary-grid">
-            <span>全体学生：{{ summary.total_students }}</span>
-            <span>已交：{{ summary.submitted_count }}</span>
-            <span>未交：{{ summary.unsubmitted_count }}</span>
-            <span>已批改：{{ summary.graded_count }}</span>
-            <span>待批改：{{ summary.pending_count }}</span>
+
+          <div class="assignment-actions">
+            <button class="btn-sm" @click="openEditForSection(section)">编辑</button>
+            <button class="btn-sm answer-action" @click="openAnswerForSection(section)">答案管理</button>
+            <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
+            <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
+            <button class="btn-sm" @click="openUnsubmittedModal">未交名单</button>
           </div>
         </div>
       </div>
@@ -79,12 +79,52 @@
           <input type="file" multiple accept="image/*,.pdf" @change="handleQuestionFileSelect" />
           <div v-if="form.question_files.length > 0" class="question-files-preview">
             <div v-for="(file, i) in form.question_files" :key="i" class="question-file-item">
-              <span v-if="isPdf(file)" class="file-icon">📄</span>
+              <span v-if="isPdf(file)" class="file-icon">PDF</span>
               <img v-else :src="getMediaUrl(file)" class="question-thumb" />
-              <button class="remove-btn" @click="removeQuestionFile(i)">×</button>
+              <button type="button" class="remove-btn" @click="removeQuestionFile(i)">x</button>
             </div>
           </div>
         </div>
+
+        <div class="form-group answer-module">
+          <div class="answer-header">
+            <label>答案模块</label>
+            <div class="answer-actions">
+            <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+              <label class="btn-sm file-button">
+                {{ answerParsing ? '解析中...' : '上传答案文件' }}
+                <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
+              </label>
+            </div>
+          </div>
+          <div v-if="form.answer_items.length === 0" class="empty small">暂无答案</div>
+          <table v-else class="answer-table">
+            <thead>
+              <tr>
+                <th>题号</th>
+                <th>题型</th>
+                <th>答案</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item, index) in form.answer_items" :key="index">
+                <td><input v-model="item.no" placeholder="1" /></td>
+                <td>
+                  <select v-model="item.type">
+                    <option value="choice">选择题</option>
+                    <option value="fill">填空题</option>
+                    <option value="judge">判断题</option>
+                  </select>
+                </td>
+                <td><input v-model="item.answer" placeholder="标准答案" /></td>
+                <td><button type="button" class="remove-btn" @click="removeAnswerItem(index)">移除</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <pre v-if="form.answer_items.length > 0" class="answer-json">{{ answerJsonPreview }}</pre>
+        </div>
+
         <div class="form-group">
           <label>评分标准（传给智能体）</label>
           <textarea v-model="form.grading_prompt" placeholder="请输入评分标准/批改提示词"></textarea>
@@ -108,6 +148,54 @@
       </div>
     </div>
 
+    <div v-if="showAnswerModal" class="modal-overlay" @click.self="closeAnswerModal">
+      <div class="modal modal-lg answer-manage-modal">
+        <h3>答案管理 - {{ currentSection?.title }}</h3>
+        <div class="answer-module standalone">
+          <div class="answer-header">
+            <label>标准答案</label>
+            <div class="answer-actions">
+              <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+              <label class="btn-sm file-button">
+                {{ answerParsing ? '解析中...' : '上传答案文件' }}
+                <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
+              </label>
+            </div>
+          </div>
+          <div v-if="form.answer_items.length === 0" class="empty small">暂无答案</div>
+          <table v-else class="answer-table">
+            <thead>
+              <tr>
+                <th>题号</th>
+                <th>题型</th>
+                <th>答案</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item, index) in form.answer_items" :key="index">
+                <td><input v-model="item.no" placeholder="1" /></td>
+                <td>
+                  <select v-model="item.type">
+                    <option value="choice">选择题</option>
+                    <option value="fill">填空题</option>
+                    <option value="judge">判断题</option>
+                  </select>
+                </td>
+                <td><input v-model="item.answer" placeholder="标准答案" /></td>
+                <td><button type="button" class="remove-btn" @click="removeAnswerItem(index)">移除</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <pre v-if="form.answer_items.length > 0" class="answer-json">{{ answerJsonPreview }}</pre>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeAnswerModal">取消</button>
+          <button class="btn-primary" @click="saveAnswer">保存答案</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showSubmissionsModal" class="modal-overlay" @click.self="showSubmissionsModal = false">
       <div class="modal modal-lg">
         <h3>提交列表</h3>
@@ -122,35 +210,18 @@
                 <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
               </div>
             </div>
-              <div class="submission-images">
-                <img v-for="(img, i) in s.images" :key="i" :src="getMediaUrl(img)" class="thumb" @click="previewImage(getMediaUrl(img))" />
-              </div>
+            <div class="submission-images">
+              <img v-for="(img, i) in s.images" :key="i" :src="getMediaUrl(img)" class="thumb" @click="previewImage(getMediaUrl(img))" />
+            </div>
             <div v-if="s.report" class="report-preview">
               <div class="score">分数：{{ s.report.score }}</div>
-              <div v-if="getConfidence(s.report)" class="confidence">
-                置信度：{{ (getConfidence(s.report) * 100).toFixed(0) }}%
-                <span v-if="getConfidence(s.report) < 0.8" class="low-confidence">（较低）</span>
-              </div>
-              <div v-if="getQuestions(s.report)" class="questions-detail">
-                <div v-for="q in getQuestions(s.report)" :key="q.index" class="question-item">
-                  <span class="q-index">第{{ q.index }}题</span>
-                  <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
-                  <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
-                </div>
-              </div>
-              <div v-if="getIssues(s.report)" class="issues-list">
-                <span class="issues-label">问题：</span>
-                <span v-for="(issue, i) in getIssues(s.report)" :key="i">{{ issue }}{{ i < getIssues(s.report).length - 1 ? '；' : '' }}</span>
-              </div>
               <div class="feedback">{{ s.report.feedback }}</div>
             </div>
             <div v-if="s.task && s.task.status === 'failed'" class="task-error">
               <span class="error-label">批改失败：</span>{{ s.task.error_message || '未知错误' }}
               <span v-if="s.task.retry_count > 0" class="retry-info">(已重试 {{ s.task.retry_count }} 次)</span>
             </div>
-            <div v-if="s.task && s.task.status === 'sent'" class="task-info">
-              已发送给智能体，等待回调...
-            </div>
+            <div v-if="s.task && s.task.status === 'sent'" class="task-info">已发送给智能体，等待回调...</div>
             <div class="submission-actions">
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
             </div>
@@ -183,7 +254,7 @@
 
     <div v-if="showGradeModal" class="modal-overlay" @click.self="showGradeModal = false">
       <div class="modal">
-        <h3>手动批改 — {{ gradingSubmission?.user?.name }}</h3>
+        <h3>手动批改 - {{ gradingSubmission?.user?.name }}</h3>
         <div class="form-group">
           <label>分数（0-100）</label>
           <input v-model.number="gradeForm.score" type="number" min="0" max="100" placeholder="请输入分数" />
@@ -203,7 +274,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../utils/api.js'
 
@@ -214,34 +285,44 @@ const loading = ref(false)
 const sections = ref([])
 const assignmentMap = ref({})
 const submissions = ref([])
-const summary = ref({
-  submitted_count: 0,
-  unsubmitted_count: 0,
-  total_students: 0,
-  pending_count: 0,
-  graded_count: 0,
-})
 const unsubmittedStudents = ref([])
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
+const showAnswerModal = ref(false)
 const showSubmissionsModal = ref(false)
 const showUnsubmittedModal = ref(false)
 const showGradeModal = ref(false)
 const gradingSubmission = ref(null)
 const gradeForm = ref({ score: '', feedback: '' })
 const gradeSubmitting = ref(false)
+const answerParsing = ref(false)
 const currentSection = ref(null)
 const currentViewSectionId = ref(null)
 
-const form = ref({
-  title: '',
-  description: '',
-  question_files: [],
-  grading_prompt: '',
-  grading_mode: 'auto',
-  deadline: '',
-  section_id: null,
+function emptyForm() {
+  return {
+    title: '',
+    description: '',
+    question_files: [],
+    grading_prompt: '',
+    grading_mode: 'auto',
+    deadline: '',
+    section_id: null,
+    answer_items: [],
+  }
+}
+
+const form = ref(emptyForm())
+
+const answerJsonPreview = computed(() => JSON.stringify(buildAnswerObject(), null, 2))
+
+onMounted(() => {
+  loadData()
 })
+
+function getAssignment(sectionId) {
+  return assignmentMap.value[sectionId]
+}
 
 function getMediaUrl(url) {
   if (!url) return ''
@@ -260,39 +341,68 @@ function isPdf(file) {
   return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
 }
 
-function openEditModal() {
-  if (!assignment.value) return
-  form.value = {
-    title: assignment.value.title || '',
-    description: assignment.value.description || '',
-    question_files: assignment.value.question_files ? [...assignment.value.question_files] : [],
-    grading_prompt: assignment.value.grading_prompt || '',
-    grading_mode: assignment.value.grading_mode || 'auto',
-    deadline: assignment.value.deadline ? assignment.value.deadline.slice(0, 16).replace(' ', 'T') : '',
+function parseAnswerItems(raw) {
+  if (!raw) return []
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return Array.isArray(obj.items)
+      ? obj.items.map(item => ({
+        no: String(item.no || ''),
+        type: item.type || 'choice',
+        answer: String(item.answer ?? ''),
+      }))
+      : []
+  } catch {
+    return []
   }
-  showEditModal.value = true
 }
 
-onMounted(() => {
-  loadAssignment()
-})
+function buildAnswerItems() {
+  return form.value.answer_items
+    .map(item => ({
+      no: String(item.no || '').trim(),
+      type: item.type || 'choice',
+      answer: String(item.answer || '').trim(),
+    }))
+    .filter(item => item.no && item.answer)
+}
+
+function buildAnswerObject() {
+  return { version: 1, items: buildAnswerItems() }
+}
+
+function buildAnswerJson() {
+  const items = buildAnswerItems()
+  return items.length ? JSON.stringify({ version: 1, items }) : ''
+}
+
+function hasAnswer(assignment) {
+  return parseAnswerItems(assignment?.reference_answer).length > 0
+}
+
+function addAnswerItem() {
+  form.value.answer_items.push({ no: String(form.value.answer_items.length + 1), type: 'choice', answer: '' })
+}
+
+function removeAnswerItem(index) {
+  form.value.answer_items.splice(index, 1)
+}
 
 async function loadData() {
   loading.value = true
   try {
     const [sectionsRes, assignmentsRes] = await Promise.all([
       api.get('/sections', { params: { course_id: courseId } }),
-      api.get(`/homework/course/${courseId}`)
+      api.get(`/homework/course/${courseId}`),
     ])
     sections.value = sectionsRes.data.data || []
-    const assignments = assignmentsRes.data.data || []
     const map = {}
-    for (const a of assignments) {
-      map[a.section_id] = a
+    for (const assignment of assignmentsRes.data.data || []) {
+      map[assignment.section_id] = assignment
     }
     assignmentMap.value = map
   } catch (e) {
-    console.error(e)
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
   } finally {
     loading.value = false
   }
@@ -300,69 +410,65 @@ async function loadData() {
 
 function openCreateForSection(section) {
   currentSection.value = section
-  form.value = { title: section.title + ' 作业', description: '', question_files: [], grading_prompt: '', grading_mode: 'auto', deadline: '', section_id: section.id }
+  form.value = {
+    ...emptyForm(),
+    title: `${section.title} 作业`,
+    section_id: section.id,
+  }
   showCreateModal.value = true
 }
 
 function openEditForSection(section) {
-  const a = assignmentMap.value[section.id]
+  const assignment = assignmentMap.value[section.id]
+  if (!assignment) return
   currentSection.value = section
   form.value = {
-    title: a.title,
-    description: a.description || '',
-    question_files: a.question_files || [],
-    grading_prompt: a.grading_prompt || '',
-    grading_mode: a.grading_mode || 'auto',
-    deadline: a.deadline ? a.deadline.slice(0, 16) : '',
+    title: assignment.title || '',
+    description: assignment.description || '',
+    question_files: assignment.question_files ? [...assignment.question_files] : [],
+    grading_prompt: assignment.grading_prompt || '',
+    grading_mode: assignment.grading_mode || 'auto',
+    deadline: assignment.deadline ? assignment.deadline.slice(0, 16) : '',
     section_id: section.id,
+    answer_items: parseAnswerItems(assignment.reference_answer),
   }
   showEditModal.value = true
 }
 
-async function loadSubmissions(sectionId) {
-  currentViewSectionId.value = sectionId
-  try {
-    const res = await api.get(`/homework/assignments/${courseId}/submissions`)
-    submissions.value = res.data.data || []
-    showSubmissionsModal.value = true
-  } catch (e) {
-    alert('加载失败')
+function openAnswerForSection(section) {
+  const assignment = assignmentMap.value[section.id]
+  if (!assignment) return
+  currentSection.value = section
+  form.value = {
+    ...emptyForm(),
+    section_id: section.id,
+    answer_items: parseAnswerItems(assignment.reference_answer),
   }
-}
-
-async function loadSubmissionSummary() {
-  try {
-    const res = await api.get(`/homework/assignments/${courseId}/submissions-summary`)
-    const data = res.data.data || {}
-    summary.value = data.summary || summary.value
-    submissions.value = data.submissions || []
-    unsubmittedStudents.value = data.unsubmitted_students || []
-  } catch {
-    // 保留旧接口以降低失败影响，后续由现有 list 接口兜底
-  }
+  showAnswerModal.value = true
 }
 
 async function saveAssignment() {
-  if (!form.value.title) {
+  if (!form.value.title.trim()) {
     alert('请输入作业标题')
     return
   }
+  const payload = {
+    title: form.value.title.trim(),
+    description: form.value.description,
+    question_files: form.value.question_files,
+    grading_prompt: form.value.grading_prompt,
+    reference_answer: buildAnswerJson(),
+    grading_mode: form.value.grading_mode,
+    deadline: form.value.deadline || null,
+  }
   try {
-    const payload = {
-      title: form.value.title,
-      description: form.value.description,
-      question_files: form.value.question_files,
-      grading_prompt: form.value.grading_prompt,
-      grading_mode: form.value.grading_mode,
-      deadline: form.value.deadline || null,
-    }
     if (showEditModal.value) {
       await api.put(`/homework/assignments/${form.value.section_id}`, payload)
     } else {
       await api.post(`/homework/assignments/${form.value.section_id}`, payload)
     }
     closeModal()
-    loadAssignment()
+    await loadData()
   } catch (e) {
     alert('保存失败：' + (e.response?.data?.detail || e.message))
   }
@@ -371,10 +477,10 @@ async function saveAssignment() {
 async function publishAssignment(sectionId) {
   if (!confirm('确认发布此作业？')) return
   try {
-    await api.put(`/homework/assignments/${courseId}`, { status: 'published' })
-    loadAssignment()
+    await api.put(`/homework/assignments/${sectionId}`, { status: 'published' })
+    await loadData()
   } catch (e) {
-    alert('发布失败')
+    alert('发布失败：' + (e.response?.data?.detail || e.message))
   }
 }
 
@@ -382,27 +488,87 @@ function closeModal() {
   showCreateModal.value = false
   showEditModal.value = false
   currentSection.value = null
-  form.value = { title: '', description: '', question_files: [], grading_prompt: '', grading_mode: 'auto', deadline: '', section_id: null }
+  form.value = emptyForm()
+}
+
+function closeAnswerModal() {
+  showAnswerModal.value = false
+  currentSection.value = null
+  form.value = emptyForm()
+}
+
+async function saveAnswer() {
+  if (!form.value.section_id) return
+  try {
+    await api.put(`/homework/assignments/${form.value.section_id}/answer`, {
+      answer: buildAnswerJson() || '',
+    })
+    closeAnswerModal()
+    await loadData()
+  } catch (e) {
+    alert('保存答案失败：' + (e.response?.data?.detail || e.message))
+  }
 }
 
 async function handleQuestionFileSelect(e) {
-  const files = Array.from(e.target.files)
+  const files = Array.from(e.target.files || [])
   for (const file of files) {
     const formData = new FormData()
     formData.append('file', file)
     try {
       const res = await api.post('/homework/upload-question', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
       })
       form.value.question_files.push(res.data.data.url)
     } catch (err) {
-      alert('上传失败：' + err.message)
+      alert('上传失败：' + (err.response?.data?.detail || err.message))
     }
+  }
+  e.target.value = ''
+}
+
+async function handleAnswerFileSelect(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  answerParsing.value = true
+  const formData = new FormData()
+  formData.append('file', file)
+  try {
+    const res = await api.post('/homework/answer/parse', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    form.value.answer_items = parseAnswerItems(res.data.data.answer)
+  } catch (err) {
+    alert('答案解析失败：' + (err.response?.data?.detail || err.message))
+  } finally {
+    answerParsing.value = false
+    e.target.value = ''
   }
 }
 
 function removeQuestionFile(index) {
   form.value.question_files.splice(index, 1)
+}
+
+async function loadSubmissions(sectionId) {
+  currentViewSectionId.value = sectionId
+  try {
+    const res = await api.get(`/homework/assignments/${sectionId}/submissions`)
+    submissions.value = res.data.data || []
+    showSubmissionsModal.value = true
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function openUnsubmittedModal() {
+  try {
+    const res = await api.get(`/homework/assignments/${courseId}/submissions-summary`)
+    unsubmittedStudents.value = res.data.data?.unsubmitted_students || []
+  } catch {
+    unsubmittedStudents.value = []
+  }
+  showUnsubmittedModal.value = true
 }
 
 function statusText(status) {
@@ -415,36 +581,6 @@ function gradingStatusText(status) {
 
 function taskStatusText(status) {
   return { pending: '待发送', sent: '已发送', graded: '已批改', failed: '失败' }[status] || status
-}
-
-function getQuestions(report) {
-  if (!report?.detail) return null
-  try {
-    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    return detail.questions || null
-  } catch {
-    return null
-  }
-}
-
-function getIssues(report) {
-  if (!report?.detail) return null
-  try {
-    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    return detail.issues || null
-  } catch {
-    return null
-  }
-}
-
-function getConfidence(report) {
-  if (!report?.detail) return null
-  try {
-    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    return detail.confidence || null
-  } catch {
-    return null
-  }
 }
 
 function formatDate(dateStr) {
@@ -474,7 +610,7 @@ async function submitGrade() {
       feedback: gradeForm.value.feedback,
     })
     showGradeModal.value = false
-    loadSubmissions()
+    if (currentViewSectionId.value) await loadSubmissions(currentViewSectionId.value)
   } catch (e) {
     alert('批改失败：' + (e.response?.data?.detail || e.message))
   } finally {
@@ -485,77 +621,124 @@ async function submitGrade() {
 
 <style scoped>
 .homework-manage-page {
-  max-width: 900px;
+  min-height: 100vh;
+  max-width: 1040px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 24px;
+  color: #263238;
+  background: linear-gradient(180deg, #f4f8f6 0%, #eef4f7 100%);
 }
 
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
+  gap: 16px;
   margin-bottom: 20px;
 }
 
-.btn-primary {
-  background: #1890ff;
-  color: white;
+.title-block h2 {
+  margin: 0;
+  font-size: 26px;
+  color: #17324d;
+}
+
+.title-block p {
+  margin: 6px 0 0;
+  color: #687681;
+  font-size: 14px;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-sm {
   border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.btn-primary:hover,
+.btn-secondary:hover,
+.btn-sm:hover {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: white;
+  padding: 9px 18px;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18);
 }
 
 .btn-secondary {
-  background: #f0f0f0;
-  color: #333;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
+  background: #ffffff;
+  color: #375266;
+  border: 1px solid #d9e4ea;
+  padding: 9px 16px;
   text-decoration: none;
 }
 
 .btn-sm {
-  background: #e6f7ff;
-  color: #1890ff;
-  border: 1px solid #91d5ff;
-  padding: 4px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-right: 8px;
+  background: #edf6f3;
+  color: #166154;
+  border: 1px solid #c8ded7;
+  padding: 6px 12px;
+  margin: 0;
 }
 
 .btn-sm.primary {
-  background: #1890ff;
+  background: #2563eb;
   color: white;
-  border-color: #1890ff;
+  border-color: #2563eb;
+}
+
+.btn-sm.answer-action {
+  background: #fff4df;
+  border-color: #f8ddb0;
+  color: #a16207;
 }
 
 .section-card {
-  background: white;
+  position: relative;
+  overflow: hidden;
+  background: #fffefa;
+  border: 1px solid #dfe9e5;
   border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  padding: 18px 20px 18px 28px;
+  box-shadow: 0 10px 28px rgba(42, 62, 79, 0.08);
   margin-bottom: 16px;
 }
 
+.section-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  background: linear-gradient(180deg, #16a085, #f59e0b);
+}
+
 .section-header {
-  border-bottom: 1px solid #f0f0f0;
-  padding-bottom: 8px;
-  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px dashed #d6e1dc;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 .section-header h3 {
   margin: 0;
-  font-size: 16px;
-  color: #333;
+  font-size: 17px;
+  color: #17324d;
 }
 
 .section-empty {
   text-align: center;
-  padding: 20px 0;
-  color: #999;
+  padding: 22px 0;
+  color: #7b8790;
 }
 
 .assignment-detail {
@@ -565,123 +748,116 @@ async function submitGrade() {
 .assignment-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
-.status-badge {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
+.assignment-header h4 {
+  margin: 0;
+  font-size: 18px;
+  color: #22313f;
 }
-
-.status-badge.draft { background: #f0f0f0; color: #666; }
-.status-badge.published { background: #e6f7ff; color: #1890ff; }
-.status-badge.closed { background: #fff7e6; color: #fa8c16; }
-.status-badge.pending { background: #fff7e6; color: #fa8c16; }
-.status-badge.graded { background: #f6ffed; color: #52c41a; }
-.status-badge.late { background: #fff1f0; color: #ff4d4f; }
 
 .status-group {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.task-badge {
-  padding: 2px 8px;
-  border-radius: 4px;
+.status-badge,
+.task-badge,
+.answer-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
   font-size: 12px;
-  margin-left: 6px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.task-badge.pending { background: #f0f0f0; color: #666; }
-.task-badge.sent { background: #e6f7ff; color: #1890ff; }
-.task-badge.graded { background: #f6ffed; color: #52c41a; }
-.task-badge.failed { background: #fff1f0; color: #ff4d4f; }
+.status-badge.draft { background: #eef2f7; color: #607080; }
+.status-badge.published { background: #e8f2ff; color: #2563eb; }
+.status-badge.closed { background: #fff4df; color: #a16207; }
+.status-badge.pending { background: #fff4df; color: #a16207; }
+.status-badge.graded { background: #e8f7ef; color: #15803d; }
+.status-badge.late { background: #fee8e7; color: #b42318; }
+.status-badge.grading { border: 1px solid rgba(0, 0, 0, 0.04); }
 
-.task-error {
-  background: #fff1f0;
-  border: 1px solid #ffa39e;
-  padding: 8px;
-  border-radius: 4px;
-  margin: 8px 0;
-  font-size: 13px;
-  color: #ff4d4f;
-}
-
-.error-label {
-  font-weight: 500;
-}
-
-.retry-info {
-  color: #999;
-  font-size: 12px;
-  margin-left: 8px;
-}
-
-.task-info {
-  background: #e6f7ff;
-  padding: 8px;
-  border-radius: 4px;
-  margin: 8px 0;
-  font-size: 13px;
-  color: #1890ff;
-}
+.task-badge.pending { background: #eef2f7; color: #607080; }
+.task-badge.sent { background: #e8f2ff; color: #2563eb; }
+.task-badge.graded { background: #e8f7ef; color: #15803d; }
+.task-badge.failed { background: #fee8e7; color: #b42318; }
 
 .desc {
-  color: #666;
-  margin-bottom: 8px;
+  color: #566573;
+  line-height: 1.65;
+  margin: 0 0 10px;
 }
 
 .meta {
-  font-size: 12px;
-  color: #999;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 13px;
+  color: #687681;
   margin-bottom: 12px;
+}
+
+.answer-state {
+  color: #b42318;
+  background: #fff1ee;
+}
+
+.answer-state.ready {
+  color: #166154;
+  background: #e7f6ef;
+}
+
+.assignment-actions,
+.answer-actions,
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .assignment-actions {
   margin-top: 16px;
 }
 
-.submission-summary {
-  margin-top: 16px;
-  border-top: 1px solid #f0f0f0;
-  padding-top: 12px;
-}
-
-.summary-grid {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-  color: #555;
-  font-size: 13px;
-}
-
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0,0,0,0.5);
+  inset: 0;
+  background: rgba(20, 32, 43, 0.48);
   display: flex;
   justify-content: center;
   align-items: center;
+  padding: 20px;
   z-index: 1000;
 }
 
 .modal {
-  background: white;
+  background: #fffefa;
   border-radius: 8px;
   padding: 24px;
-  width: 500px;
-  max-height: 80vh;
+  width: min(500px, 100%);
+  max-height: 84vh;
   overflow-y: auto;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.22);
 }
 
 .modal-lg {
-  width: 700px;
+  width: min(780px, 100%);
+}
+
+.modal h3 {
+  margin: 0 0 18px;
+  color: #17324d;
 }
 
 .form-group {
@@ -690,216 +866,319 @@ async function submitGrade() {
 
 .form-group label {
   display: block;
-  margin-bottom: 4px;
-  font-weight: 500;
+  margin-bottom: 6px;
+  font-weight: 700;
+  color: #2f3c48;
 }
 
 .form-group input,
-.form-group textarea {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-}
-
-.form-group textarea {
-  min-height: 80px;
-}
-
+.form-group textarea,
 .form-group select {
   width: 100%;
-  padding: 8px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
+  box-sizing: border-box;
+  padding: 10px 11px;
+  border: 1px solid #cfdce3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #263238;
+  font-size: 14px;
 }
 
-.form-group input[type="file"] {
-  padding: 4px;
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  border-color: #16a085;
+  box-shadow: 0 0 0 3px rgba(22, 160, 133, 0.12);
+  outline: none;
+}
+
+.form-group textarea {
+  min-height: 92px;
+  resize: vertical;
 }
 
 .question-files-preview {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.question-files-preview h4 {
+  flex-basis: 100%;
+  margin: 0;
+  color: #40515f;
+  font-size: 14px;
 }
 
 .question-file-item {
   position: relative;
-  width: 80px;
-  height: 80px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
+  width: 88px;
+  height: 88px;
+  border: 1px solid #d6e1dc;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: #ffffff;
 }
 
 .question-thumb {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
-.pdf-link {
+.pdf-link,
+.file-icon {
   display: flex;
   width: 100%;
   height: 100%;
   align-items: center;
   justify-content: center;
-  background: #1890ff;
-  color: #fff;
+  background: #eef5ff;
+  color: #2563eb;
   text-decoration: none;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 12px;
-}
-
-.file-icon {
-  font-size: 32px;
+  font-weight: 700;
 }
 
 .remove-btn {
   position: absolute;
   top: -8px;
   right: -8px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #ff4d4f;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #b42318;
   color: white;
   border: none;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
 }
 
 .modal-actions {
-  display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  margin-top: 18px;
+}
+
+.answer-module {
+  border: 1px solid #d6e1dc;
+  border-radius: 8px;
+  padding: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
+}
+
+.answer-manage-modal .answer-module.standalone {
+  margin-top: 4px;
+}
+
+.answer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.file-button input {
+  display: none;
+}
+
+.answer-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 8px;
+  table-layout: fixed;
+}
+
+.answer-table th {
+  color: #657582;
+  font-size: 12px;
+  text-align: left;
+  padding: 0 8px;
+}
+
+.answer-table td {
+  background: #ffffff;
+  border-top: 1px solid #dfe9e5;
+  border-bottom: 1px solid #dfe9e5;
+  padding: 8px;
+}
+
+.answer-table td:first-child {
+  border-left: 1px solid #dfe9e5;
+  border-radius: 6px 0 0 6px;
+}
+
+.answer-table td:last-child {
+  border-right: 1px solid #dfe9e5;
+  border-radius: 0 6px 6px 0;
+}
+
+.answer-table input,
+.answer-table select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.answer-table .remove-btn {
+  position: static;
+  width: auto;
+  height: auto;
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+.answer-json {
+  background: #182734;
+  color: #dce8ea;
+  border-radius: 6px;
+  padding: 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .submissions-list {
-  max-height: 400px;
+  max-height: 440px;
   overflow-y: auto;
 }
 
 .submission-item {
-  border-bottom: 1px solid #f0f0f0;
-  padding: 12px 0;
+  border: 1px solid #dfe9e5;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: #ffffff;
 }
 
 .submission-header {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .student-name {
-  font-weight: 500;
+  font-weight: 700;
+  color: #17324d;
 }
 
 .submission-images {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .thumb {
-  width: 60px;
-  height: 60px;
+  width: 64px;
+  height: 64px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 6px;
+  border: 1px solid #dfe9e5;
   cursor: pointer;
 }
 
 .report-preview {
-  background: #f6ffed;
-  padding: 8px;
-  border-radius: 4px;
+  background: #edf9f1;
+  border: 1px solid #c8ecd4;
+  padding: 10px;
+  border-radius: 6px;
   margin-bottom: 8px;
 }
 
-.confidence {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 4px;
-}
-
-.low-confidence {
-  color: #fa8c16;
-  font-weight: 500;
-}
-
-.questions-detail {
-  margin: 8px 0;
-  padding: 8px;
-  background: white;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-.question-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-
-.q-index {
-  font-weight: 500;
-  min-width: 40px;
-}
-
-.q-score {
-  min-width: 50px;
-  color: #ff4d4f;
-}
-
-.q-score.correct {
-  color: #52c41a;
-}
-
-.q-status {
-  font-size: 14px;
-}
-
-.issues-list {
-  margin: 8px 0;
-  font-size: 12px;
-  color: #fa8c16;
-}
-
-.issues-label {
-  font-weight: 500;
-}
-
 .score {
-  font-weight: 500;
-  color: #52c41a;
+  font-weight: 800;
+  color: #15803d;
 }
 
 .feedback {
   margin-top: 4px;
   font-size: 13px;
+  color: #40515f;
+}
+
+.task-error,
+.task-info {
+  padding: 9px 10px;
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.task-error {
+  background: #fff1ee;
+  border: 1px solid #fecaca;
+  color: #b42318;
+}
+
+.task-info {
+  background: #eef5ff;
+  color: #2563eb;
+}
+
+.error-label {
+  font-weight: 700;
+}
+
+.retry-info,
+.submission-time {
+  color: #7b8790;
+  font-size: 12px;
 }
 
 .submission-actions {
   margin-top: 8px;
 }
 
-.submission-time {
-  font-size: 12px;
-  color: #999;
-  margin-top: 4px;
-}
-
-.loading, .empty {
+.loading,
+.empty {
   text-align: center;
   padding: 40px;
-  color: #999;
+  color: #7b8790;
+}
+
+.empty.small {
+  padding: 14px;
+  background: #ffffff;
+  border: 1px dashed #cfdce3;
+  border-radius: 6px;
+}
+
+@media (max-width: 720px) {
+  .homework-manage-page {
+    padding: 16px;
+  }
+
+  .page-header,
+  .assignment-header,
+  .answer-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .status-group {
+    justify-content: flex-start;
+  }
+
+  .answer-table {
+    min-width: 560px;
+  }
+
+  .answer-module {
+    overflow-x: auto;
+  }
 }
 </style>

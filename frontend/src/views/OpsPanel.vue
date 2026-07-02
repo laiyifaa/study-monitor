@@ -84,6 +84,41 @@
       </div>
     </div>
 
+    <!-- ====== 智能体联通 ====== -->
+    <div class="section">
+      <div class="sec-head sec-head-split">
+        <span><span class="sec-icon">&#128279;</span> 智能体联通</span>
+        <button class="agent-action" @click="checkAgentConnectivity" :disabled="agentLoading">
+          {{ agentLoading ? '检测中...' : '重新检测' }}
+        </button>
+      </div>
+      <div class="agent-card" :class="'agent-' + getAgentTone(agent.status)">
+        <div class="agent-main">
+          <div class="agent-state">
+            <span class="agent-dot" :class="'dot-' + getAgentTone(agent.status)"></span>
+            <span class="agent-state-text">{{ getAgentStatusLabel(agent.status) }}</span>
+          </div>
+          <div class="agent-endpoint">{{ agent.endpoint || '-' }}</div>
+          <div class="agent-message">{{ agent.message || '-' }}</div>
+          <div v-if="agent.error" class="agent-error">{{ agent.error }}</div>
+        </div>
+        <div class="agent-meta">
+          <div class="agent-meta-item">
+            <span class="agent-meta-label">响应</span>
+            <span class="agent-meta-value">{{ formatAgentStatusCode(agent.status_code) }}</span>
+          </div>
+          <div class="agent-meta-item">
+            <span class="agent-meta-label">耗时</span>
+            <span class="agent-meta-value">{{ formatAgentLatency(agent.latency_ms) }}</span>
+          </div>
+          <div class="agent-meta-item">
+            <span class="agent-meta-label">检测</span>
+            <span class="agent-meta-value">{{ formatAgentCheckedAt(agent.checked_at) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ====== 业务数据 ====== -->
     <div class="section">
       <div class="sec-head"><span class="sec-icon">&#9782;</span> 业务数据</div>
@@ -259,6 +294,7 @@ const defaultData = {
   services: { api: { status: 'error', version: '' }, redis: { status: 'error' }, mysql: { status: 'error' } },
   business: { online_teachers: 0, online_students: 0, active_sessions: 0, active_videos: 0, heartbeat_qps: 0, today_study_users: 0, today_effective_minutes: 0 },
   storage: { video_total_size: 0, video_total_human: '-', video_count: 0, disk_total: 0, disk_total_human: '-', disk_used: 0, disk_used_human: '-', disk_free: 0, disk_free_human: '-', disk_percent: 0, disk_alert: 'ok', mysql_size: 0, mysql_size_human: '-' },
+  agent: { configured: false, status: 'unknown', reachable: false, endpoint: '', status_code: null, latency_ms: null, checked_at: null, message: '尚未检测', error: '', age_seconds: null },
   all_alerts: [],
   alert_count: 0,
   timestamp: '',
@@ -268,9 +304,11 @@ const data = ref(defaultData)
 const currentTime = ref('')
 const lastUpdateTime = ref('-')
 const refreshing = ref(false)
+const agentLoading = ref(false)
 let timer = null
 let clockTimer = null
 
+const agent = computed(() => data.value.agent || defaultData.agent)
 const alerts = computed(() => data.value.all_alerts || [])
 
 // ==================== 数据刷新 ====================
@@ -302,10 +340,75 @@ function formatContainerName(name) {
   return name.replace(/^study-monitor-/, '')
 }
 
+function getAgentTone(status) {
+  if (status === 'ok') return 'ok'
+  if (status === 'degraded') return 'degraded'
+  if (status === 'down') return 'down'
+  if (status === 'unconfigured') return 'unconfigured'
+  return 'unknown'
+}
+
+function getAgentStatusLabel(status) {
+  const labels = {
+    ok: '联通',
+    degraded: '响应异常',
+    down: '不可达',
+    unconfigured: '未配置',
+    unknown: '未检测',
+  }
+  return labels[status] || '未检测'
+}
+
+function formatAgentStatusCode(value) {
+  return value === null || value === undefined ? '-' : `HTTP ${value}`
+}
+
+function formatAgentLatency(value) {
+  return value === null || value === undefined ? '-' : `${value} ms`
+}
+
+function formatAgentCheckedAt(value) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (!Number.isNaN(d.getTime())) {
+    return d.toLocaleString('zh-CN', { hour12: false })
+  }
+  return String(value).replace('T', ' ').slice(0, 19)
+}
+
+function syncAgentAlert(agentState) {
+  const nextAlerts = (data.value.all_alerts || []).filter((item) => item.metric !== 'agent')
+  if (agentState?.configured && ['down', 'degraded'].includes(agentState.status)) {
+    nextAlerts.push({
+      metric: 'agent',
+      message: `智能体联通异常: ${agentState.message || '未知错误'}`,
+    })
+  }
+  data.value.all_alerts = nextAlerts
+  data.value.alert_count = nextAlerts.length
+}
+
+async function checkAgentConnectivity() {
+  if (agentLoading.value) return
+  agentLoading.value = true
+  try {
+    const res = await api.post('/ops/agent/check')
+    if (res.data.code === 0) {
+      data.value.agent = res.data.data
+      syncAgentAlert(res.data.data)
+    }
+  } catch (e) {
+    console.error('检测智能体联通性失败:', e)
+  } finally {
+    agentLoading.value = false
+  }
+}
+
 // ==================== 生命周期 ====================
 
-onMounted(() => {
-  fetchData()
+onMounted(async () => {
+  await fetchData()
+  await checkAgentConnectivity()
   updateTime()
   timer = setInterval(fetchData, 5000)
   clockTimer = setInterval(updateTime, 1000)
@@ -469,6 +572,129 @@ onUnmounted(() => {
 }
 .svc-detail { font-size: 11px; color: #bbb; }
 
+/* ====== 智能体联通 ====== */
+.sec-head-split {
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.agent-action {
+  border: 1px solid #d9d9d9;
+  background: #fff;
+  color: #333;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+.agent-action:hover:not(:disabled) {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+.agent-action:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.agent-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #f0f0f0;
+}
+.agent-ok {
+  background: linear-gradient(135deg, #f6ffed 0%, #fcffe6 100%);
+  border-left: 3px solid #52c41a;
+  border-color: #d9f7be;
+}
+.agent-degraded {
+  background: linear-gradient(135deg, #fffbe6 0%, #fff7e6 100%);
+  border-left: 3px solid #faad14;
+  border-color: #ffe58f;
+}
+.agent-down {
+  background: linear-gradient(135deg, #fff2f0 0%, #fff1f0 100%);
+  border-left: 3px solid #ff4d4f;
+  border-color: #ffccc7;
+}
+.agent-unconfigured,
+.agent-unknown {
+  background: linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%);
+  border-left: 3px solid #8c8c8c;
+  border-color: #e8e8e8;
+}
+.agent-main {
+  flex: 1;
+  min-width: 0;
+}
+.agent-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-ok { background: #52c41a; box-shadow: 0 0 6px rgba(82, 196, 26, 0.35); }
+.dot-degraded { background: #faad14; box-shadow: 0 0 6px rgba(250, 173, 20, 0.35); }
+.dot-down { background: #ff4d4f; box-shadow: 0 0 6px rgba(255, 77, 79, 0.35); }
+.dot-unconfigured,
+.dot-unknown { background: #8c8c8c; }
+.agent-state-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+.agent-endpoint {
+  font-size: 11px;
+  color: #999;
+  word-break: break-all;
+  margin-bottom: 4px;
+}
+.agent-message {
+  font-size: 12px;
+  color: #666;
+  word-break: break-all;
+  line-height: 1.6;
+}
+.agent-error {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #cf1322;
+  word-break: break-all;
+}
+.agent-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 260px;
+}
+.agent-meta-item {
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.agent-meta-label {
+  display: block;
+  font-size: 11px;
+  color: #999;
+}
+.agent-meta-value {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
 /* ====== 业务数据 ====== */
 .biz-card-row {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px;
@@ -548,6 +774,10 @@ onUnmounted(() => {
   /* 服务健康：3列保持但缩小内边距 */
   .svc-card { padding: 10px 8px; }
   .svc-dot { font-size: 18px; }
+
+  /* 智能体联通：纵向排列 */
+  .agent-card { flex-direction: column; padding: 10px; }
+  .agent-meta { min-width: 0; }
 }
 
 /* ====== 响应式：手机（480px以下） ====== */
@@ -578,6 +808,10 @@ onUnmounted(() => {
   /* 服务健康：允许换行 */
   .svc-row { grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .svc-detail-row { flex-direction: column; align-items: center; gap: 4px; }
+
+  /* 智能体联通：单列 */
+  .agent-meta { grid-template-columns: 1fr; gap: 6px; }
+  .agent-state-text { font-size: 13px; }
 
   /* 业务数据：2列 */
   .biz-card-row { grid-template-columns: 1fr 1fr; gap: 6px; }

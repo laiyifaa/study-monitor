@@ -56,6 +56,60 @@
       <!-- v4.0: 全局功能入口 -->
       <router-link to="/announcements" class="btn">公告管理</router-link>
       <router-link to="/study-report" class="btn">学习报告</router-link>
+      <button v-if="isTeacherOrAdmin" type="button" class="btn info agent-toggle" @click="toggleAgentDrawer">
+        <span>智能体联通</span>
+        <span class="btn-chevron">{{ agentDrawerOpen ? '▴' : '▾' }}</span>
+      </button>
+    </div>
+
+    <!-- 智能体联通抽屉：教师/管理员可见 -->
+    <div v-if="isTeacherOrAdmin" id="agent-connectivity" class="agent-drawer-shell" :class="{ open: agentDrawerOpen }">
+      <div class="agent-drawer-panel">
+        <div class="agent-header">
+          <div>
+            <div class="agent-title-row">
+              <span class="agent-title">智能体联通</span>
+              <span class="agent-pill" :class="agentToneClass(agentInfo.status)">{{ agentStatusLabel(agentInfo.status) }}</span>
+            </div>
+            <div class="agent-hint">查看批改智能体的联通状态和最近一次检测结果。</div>
+          </div>
+          <div class="agent-header-actions">
+            <button class="btn-sm primary" @click="checkAgentConnectivity" :disabled="agentLoading">
+              {{ agentLoading ? '检测中...' : '重新检测' }}
+            </button>
+            <button class="agent-close" type="button" @click="toggleAgentDrawer" aria-label="收起智能体联通">
+              ▴
+            </button>
+          </div>
+        </div>
+        <div class="agent-card" :class="agentToneClass(agentInfo.status)">
+          <div class="agent-row">
+            <div class="agent-kv">
+              接口
+              <strong>{{ agentInfo.endpoint || '-' }}</strong>
+            </div>
+            <div class="agent-kv">
+              响应
+              <strong>{{ formatAgentStatusCode(agentInfo.status_code) }}</strong>
+            </div>
+            <div class="agent-kv">
+              耗时
+              <strong>{{ formatAgentLatency(agentInfo.latency_ms) }}</strong>
+            </div>
+          </div>
+          <div class="agent-row agent-row-bottom">
+            <div class="agent-kv">
+              最近检测
+              <strong>{{ formatAgentCheckedAt(agentInfo.checked_at) }}</strong>
+            </div>
+            <div class="agent-kv agent-kv-grow">
+              提示
+              <strong>{{ agentInfo.message || '-' }}</strong>
+            </div>
+          </div>
+          <div v-if="agentInfo.error" class="agent-error">{{ agentInfo.error }}</div>
+        </div>
+      </div>
     </div>
 
     <!-- 课程选择下拉框：切换课程后触发 loadData 重新获取统计数据 -->
@@ -219,6 +273,22 @@ const apiKeyInfo = ref({ has_key: false, masked: '' })
 const apiKeyFull = ref('')       // 仅在新生成时临时保存完整值
 const apiKeyNewlyGenerated = ref(false)
 const generatingKey = ref(false)
+const agentDrawerOpen = ref(false)
+
+const defaultAgentInfo = {
+  configured: false,
+  status: 'unknown',
+  reachable: false,
+  endpoint: '',
+  status_code: null,
+  latency_ms: null,
+  checked_at: null,
+  message: '尚未检测',
+  error: '',
+  age_seconds: null,
+}
+const agentInfo = ref(defaultAgentInfo)
+const agentLoading = ref(false)
 
 /** 课程列表 */
 const courses = ref([])
@@ -283,7 +353,10 @@ onMounted(async () => {
     }
   }
   // 加载 API Key 状态
-  if (isTeacherOrAdmin.value) loadApiKeyStatus()
+  if (isTeacherOrAdmin.value) {
+    await loadApiKeyStatus()
+    await loadAgentConnectivityStatus()
+  }
 })
 
 watch(selectedCourseId, () => loadData())
@@ -374,6 +447,72 @@ function renderChart() {
       barWidth: '50%',
     }],
   })
+}
+
+function toggleAgentDrawer() {
+  agentDrawerOpen.value = !agentDrawerOpen.value
+}
+
+function agentToneClass(status) {
+  if (status === 'ok') return 'tone-ok'
+  if (status === 'degraded') return 'tone-warn'
+  if (status === 'down') return 'tone-down'
+  if (status === 'unconfigured') return 'tone-muted'
+  return 'tone-muted'
+}
+
+function agentStatusLabel(status) {
+  const map = {
+    ok: '联通',
+    degraded: '响应异常',
+    down: '不可达',
+    unconfigured: '未配置',
+    unknown: '未检测',
+  }
+  return map[status] || '未检测'
+}
+
+function formatAgentStatusCode(value) {
+  return value === null || value === undefined ? '-' : `HTTP ${value}`
+}
+
+function formatAgentLatency(value) {
+  return value === null || value === undefined ? '-' : `${value} ms`
+}
+
+function formatAgentCheckedAt(value) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (!Number.isNaN(d.getTime())) {
+    return d.toLocaleString('zh-CN', { hour12: false })
+  }
+  return String(value).replace('T', ' ').slice(0, 19)
+}
+
+async function loadAgentConnectivityStatus() {
+  try {
+    const res = await api.get('/ops/agent')
+    if (res.data.code === 0) {
+      agentInfo.value = res.data.data
+    }
+  } catch (e) {
+    console.error('加载智能体联通状态失败:', e)
+  }
+}
+
+async function checkAgentConnectivity() {
+  if (agentLoading.value) return
+  agentLoading.value = true
+  try {
+    const res = await api.post('/ops/agent/check')
+    if (res.data.code === 0) {
+      agentInfo.value = res.data.data
+    }
+  } catch (e) {
+    alert('检测智能体联通失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    agentLoading.value = false
+  }
 }
 
 /** 删除课程 */
@@ -550,12 +689,120 @@ tr.incomplete { background: #fff7e6; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn.success { background: #52c41a; color: #fff; border-color: #52c41a; }
+.btn.info { background: #722ed1; color: #fff; border-color: #722ed1; }
+.btn.info:hover { background: #531dab; }
 .btn.danger { color: #ff4d4f; border-color: #ffccc7; }
 .btn.danger:hover { background: #fff1f0; }
 
 .empty { text-align: center; padding: 40px; color: #999; }
 .top-actions { margin-bottom: 16px; }
 .top-actions .btn { text-decoration: none; display: inline-block; }
+
+/* 智能体联通入口 */
+.agent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-chevron {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* 智能体联通抽屉 */
+.agent-drawer-shell {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-8px);
+  margin-bottom: 0;
+  transition: max-height 0.28s ease, opacity 0.2s ease, transform 0.28s ease, margin-bottom 0.28s ease;
+}
+.agent-drawer-shell.open {
+  max-height: 420px;
+  opacity: 1;
+  transform: translateY(0);
+  margin-bottom: 16px;
+}
+.agent-drawer-panel {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  border: 1px solid #f0f0f0;
+}
+.agent-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.agent-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+}
+.agent-close:hover {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+
+.agent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.agent-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.agent-title { font-size: 16px; font-weight: 600; color: #333; }
+.agent-hint { margin-top: 4px; font-size: 12px; color: #999; }
+.agent-pill {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.tone-ok { background: #f6ffed; color: #52c41a; }
+.tone-warn { background: #fff7e6; color: #faad14; }
+.tone-down { background: #fff1f0; color: #ff4d4f; }
+.tone-muted { background: #f5f5f5; color: #8c8c8c; }
+.agent-card {
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 12px;
+}
+.agent-card.tone-ok { background: #f6ffed; border-color: #d9f7be; }
+.agent-card.tone-warn { background: #fffbe6; border-color: #ffe58f; }
+.agent-card.tone-down { background: #fff2f0; border-color: #ffccc7; }
+.agent-card.tone-muted { background: #fafafa; border-color: #e8e8e8; }
+.agent-row {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.agent-row-bottom { margin-top: 10px; }
+.agent-kv { font-size: 12px; color: #999; min-width: 140px; }
+.agent-kv strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: #333;
+  word-break: break-all;
+}
+.agent-kv-grow { flex: 1; min-width: 220px; }
+.agent-error { margin-top: 8px; font-size: 12px; color: #cf1322; word-break: break-all; }
 
 /* 今日概况 */
 .today-section { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
@@ -591,6 +838,9 @@ tr.not-started { background: #fafafa; }
   .card-num { font-size: 22px; }
   .top-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .top-actions .btn { font-size: 13px; padding: 7px 14px; }
+  .agent-header { flex-direction: column; align-items: stretch; }
+  .agent-header-actions { justify-content: flex-end; }
+  .agent-drawer-panel { padding: 14px; }
   .today-cards { gap: 12px; }
   .chart-container { height: 220px; }
 }
@@ -614,6 +864,12 @@ tr.not-started { background: #fafafa; }
   .top-actions .btn {
     font-size: 12px; padding: 6px 10px;
   }
+
+  .agent-drawer-shell.open { margin-bottom: 12px; }
+  .agent-drawer-panel { padding: 12px; }
+  .agent-header-actions { width: 100%; justify-content: space-between; }
+  .agent-row { flex-direction: column; gap: 8px; }
+  .agent-kv { min-width: 0; }
 
   /* 今日概况卡片：纵向堆叠或紧凑排列 */
   .today-cards {

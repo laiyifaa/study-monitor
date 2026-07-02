@@ -69,8 +69,6 @@
           </div>
           <div v-else class="pending">等待批改中...</div>
         </div>
-      </div>
-
       <div v-if="sections.length === 0" class="empty">暂无作业</div>
     </template>
 

@@ -15,9 +15,11 @@ API 列表：
     GET /api/ops/services    — 服务健康：API、Redis、MySQL
     GET /api/ops/business    — 业务数据：在线人数、活跃会话、视频流、心跳QPS
     GET /api/ops/storage     — 存储信息：视频大小、磁盘剩余、MySQL 大小
+    GET /api/ops/agent       — 智能体联通状态（缓存）
+    POST /api/ops/agent/check — 立即检测智能体联通性并刷新缓存
     GET /api/ops/overview    — 全量聚合（一次请求获取所有数据，前端面板用）
 
-权限要求：admin 角色
+权限要求：admin 角色（智能体联通子接口额外允许 teacher）
 
 告警阈值说明：
     CPU 使用率 > 80%       → warning
@@ -27,6 +29,7 @@ API 列表：
     API/Redis/MySQL 不可用  → warning
 """
 
+import asyncio
 import os
 import time
 import json
@@ -71,6 +74,99 @@ def _human_size(bytes_val: float) -> str:
             return f"{bytes_val:.1f}{unit}"
         bytes_val /= 1024
     return f"{bytes_val:.1f}PB"
+
+
+def _agent_connectivity_template() -> dict:
+    """智能体联通状态的默认结构。"""
+    endpoint = settings.GRADING_AGENT_URL.strip().rstrip("/")
+    configured = bool(endpoint and settings.GRADING_AGENT_API_KEY.strip())
+    return {
+        "configured": configured,
+        "status": "unconfigured" if not configured else "unknown",
+        "reachable": False,
+        "endpoint": endpoint,
+        "status_code": None,
+        "latency_ms": None,
+        "checked_at": None,
+        "message": "GRADING_AGENT_URL 或 GRADING_AGENT_API_KEY 未配置" if not configured else "尚未检测",
+        "error": "",
+    }
+
+
+_AGENT_CONNECTIVITY_CACHE = _agent_connectivity_template()
+_AGENT_CONNECTIVITY_LOCK = None
+_AGENT_CONNECTIVITY_TIMEOUT = 5
+
+
+def _agent_connectivity_snapshot() -> dict:
+    """返回当前缓存的智能体联通状态，并补充状态年龄。"""
+    snapshot = dict(_AGENT_CONNECTIVITY_CACHE)
+    checked_at = snapshot.get("checked_at")
+    age_seconds = None
+    if checked_at:
+        try:
+            checked_dt = datetime.fromisoformat(checked_at)
+            age_seconds = max(0, int((datetime.now() - checked_dt).total_seconds()))
+        except Exception:
+            age_seconds = None
+    snapshot["age_seconds"] = age_seconds
+    return snapshot
+
+
+async def _refresh_agent_connectivity() -> dict:
+    """主动探测智能体联通性并刷新缓存。"""
+    global _AGENT_CONNECTIVITY_CACHE, _AGENT_CONNECTIVITY_LOCK
+
+    snapshot = _agent_connectivity_template()
+    snapshot["checked_at"] = datetime.now().isoformat()
+
+    if not snapshot["configured"]:
+        _AGENT_CONNECTIVITY_CACHE = snapshot
+        return _agent_connectivity_snapshot()
+
+    import httpx
+
+    headers = {
+        "Authorization": f"Bearer {settings.GRADING_AGENT_API_KEY.strip()}",
+        "Accept": "application/json",
+    }
+    started = time.perf_counter()
+
+    if _AGENT_CONNECTIVITY_LOCK is None:
+        _AGENT_CONNECTIVITY_LOCK = asyncio.Lock()
+
+    async with _AGENT_CONNECTIVITY_LOCK:
+        try:
+            async with httpx.AsyncClient(timeout=_AGENT_CONNECTIVITY_TIMEOUT, follow_redirects=True) as client:
+                response = await client.get(snapshot["endpoint"], headers=headers)
+                latency_ms = round((time.perf_counter() - started) * 1000)
+                snapshot.update({
+                    "reachable": True,
+                    "status_code": response.status_code,
+                    "latency_ms": latency_ms,
+                    "status": "degraded" if response.status_code >= 500 else "ok",
+                    "message": f"HTTP {response.status_code}",
+                    "error": "",
+                })
+        except httpx.TimeoutException as e:
+            snapshot.update({
+                "status": "down",
+                "message": "请求超时",
+                "error": str(e),
+                "latency_ms": round((time.perf_counter() - started) * 1000),
+            })
+        except httpx.RequestError as e:
+            snapshot.update({
+                "status": "down",
+                "message": "连接失败",
+                "error": str(e),
+                "latency_ms": round((time.perf_counter() - started) * 1000),
+            })
+
+        snapshot["checked_at"] = datetime.now().isoformat()
+        _AGENT_CONNECTIVITY_CACHE = snapshot
+
+    return _agent_connectivity_snapshot()
 
 
 # ============================================================
@@ -532,6 +628,28 @@ async def storage_stats(
 
 
 # ============================================================
+# 智能体联通性
+# ============================================================
+
+@router.get("/agent")
+async def agent_connectivity(user: User = Depends(require_role("teacher", "admin"))):
+    """返回缓存的智能体联通状态。"""
+    return {
+        "code": 0,
+        "data": _agent_connectivity_snapshot(),
+    }
+
+
+@router.post("/agent/check")
+async def agent_connectivity_check(user: User = Depends(require_role("teacher", "admin"))):
+    """立即检测智能体联通性并刷新缓存。"""
+    return {
+        "code": 0,
+        "data": await _refresh_agent_connectivity(),
+    }
+
+
+# ============================================================
 # 全量聚合 — 前端面板一次拉取
 # ============================================================
 
@@ -546,7 +664,7 @@ async def overview(
     用途：前端运维面板定时轮询此接口（建议 5~10 秒间隔），
     避免发起 5 个独立请求的开销。
 
-    返回格式：{ server, containers, services, business, storage }
+    返回格式：{ server, containers, services, business, storage, agent }
     """
     # 复用各子接口的逻辑
     server_data = await server_stats(user)
@@ -554,12 +672,19 @@ async def overview(
     service_data = await service_health(user, db)
     business_data = await business_stats(user, db)
     storage_data = await storage_stats(user, db)
+    agent_data = _agent_connectivity_snapshot()
 
     # 合并所有告警
     all_alerts = []
     for d in [server_data, container_data, service_data, business_data, storage_data]:
         if d.get("code") == 0 and "alerts" in d.get("data", {}):
             all_alerts.extend(d["data"]["alerts"])
+
+    if agent_data.get("configured") and agent_data.get("status") in {"down", "degraded"}:
+        all_alerts.append({
+            "metric": "agent",
+            "message": f"智能体联通异常: {agent_data.get('message', '未知错误')}",
+        })
 
     return {
         "code": 0,
@@ -569,6 +694,7 @@ async def overview(
             "services": service_data["data"],
             "business": business_data["data"],
             "storage": storage_data["data"],
+            "agent": agent_data,
             "all_alerts": all_alerts,
             "alert_count": len(all_alerts),
             "timestamp": datetime.now().isoformat(),

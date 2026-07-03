@@ -3,13 +3,12 @@
 =============================
 功能：调用外部智能体 API 进行作业批改。
 
-调用流程：
+流程：
     1. 下载拼接后的长图到本地临时文件
     2. POST /files/upload 上传图片 → 获取 file_id
-    3. POST /chat-messages (streaming) → 接收 SSE 事件
-    4. 解析第一个 SSE 事件获取 task_id
-    5. 立即关闭连接
-    6. 更新 GradingTask: agent_task_id, status=sent
+    3. POST /chat-messages (streaming) → 接收完整 SSE 流
+    4. 解析最终批改结果 JSON（新格式）
+    5. 写入 GradingReport + 更新 Submission / GradingTask 状态
 
 智能体平台：TeleAI Agent
 """
@@ -27,7 +26,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import async_session
-from app.models.models import GradingTask
+from app.models.models import GradingTask, Submission, GradingReport, Assignment
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -42,18 +41,19 @@ async def call_grading_agent(
     retry_count: int = 0,
 ) -> bool:
     """
-    调用智能体批改作业
+    调用智能体批改作业（同步等待完整流式响应，直接落库）
 
     参数：
         task_id            — GradingTask ID
-        submission_id      — 提交 ID
+        submission_id      — 提交 ID（内部使用，不传给智能体）
         stitched_image_url — 拼接后的作业图片 URL
         prompt             — 评分标准/批改提示词
+        answer_json        — 参考答案 JSON 字符串
         retry_count        — 当前重试次数
 
     返回值：
-        True  — 调用成功（已发送给智能体）
-        False — 调用失败
+        True  — 批改成功（结果已写入数据库）
+        False — 批改失败
     """
     agent_url = settings.GRADING_AGENT_URL
     api_key = settings.GRADING_AGENT_API_KEY
@@ -74,29 +74,73 @@ async def call_grading_agent(
         if not file_id:
             raise Exception("图片上传失败")
 
-        agent_task_id = await _send_chat_message(agent_url, api_key, file_id, prompt, submission_id, answer_json)
-        if not agent_task_id:
-            raise Exception("获取任务ID失败")
+        response_text = await _send_chat_message(agent_url, api_key, file_id, prompt, answer_json)
+        if not response_text:
+            raise Exception("智能体未返回有效响应")
+
+        result = _parse_grading_result(response_text)
 
         async with async_session() as db:
-            result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
-            task = result.scalar_one_or_none()
+            submission_result = await db.execute(select(Submission).where(Submission.id == submission_id))
+            submission = submission_result.scalar_one_or_none()
+            if not submission:
+                raise Exception(f"提交 {submission_id} 不存在")
+
+            assignment_result = await db.execute(
+                select(Assignment).where(Assignment.id == submission.assignment_id)
+            )
+            assignment = assignment_result.scalar_one_or_none()
+
+            review_status = "confirmed"
+            if assignment and assignment.grading_mode == "hybrid":
+                review_status = "pending_review"
+
+            detail_json = json.dumps(result, ensure_ascii=False)
+            review_qs = json.dumps(result.get("review", []), ensure_ascii=False)
+            summary = result.get("summary", {})
+            details = result.get("details", [])
+            status = result.get("status", "failed")
+
+            correct_count = sum(1 for d in details if d.get("ok"))
+            wrong_count = sum(1 for d in details if not d.get("ok"))
+
+            report = GradingReport(
+                submission_id=submission_id,
+                score=summary.get("score", 0),
+                full_score=summary.get("full_score", 0),
+                accuracy=summary.get("accuracy", 0.0),
+                correct_count=correct_count,
+                wrong_count=wrong_count,
+                feedback="",
+                detail=detail_json,
+                status=status,
+                review_questions=review_qs,
+                generated_by="wukong",
+                review_status=review_status,
+            )
+            db.add(report)
+
+            if review_status == "confirmed":
+                submission.status = "graded"
+
+            task_result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
+            task = task_result.scalar_one_or_none()
             if task:
-                task.agent_task_id = agent_task_id
-                task.status = "sent"
-                task.sent_at = datetime.utcnow()
-                task.retry_count = retry_count
-                await db.commit()
+                task.status = "graded"
+                task.graded_at = datetime.utcnow()
+
+            await _refresh_grading_status(submission.assignment_id, db)
+            await db.commit()
 
         logger.info(
-            f"智能体调用成功: task_id={task_id}, submission_id={submission_id}, "
-            f"agent_task_id={agent_task_id}"
+            f"智能体批改成功: task_id={task_id}, submission_id={submission_id}, "
+            f"score={summary.get('score', 0)}/{summary.get('full_score', 0)}"
         )
         return True
 
     except Exception as e:
         logger.error(
-            f"智能体调用失败: task_id={task_id}, submission_id={submission_id}, "
+            f"智能体批改失败: task_id={task_id}, submission_id={submission_id}, "
             f"retry_count={retry_count}, error={str(e)}"
         )
 
@@ -123,10 +167,24 @@ async def call_grading_agent(
                     await db.commit()
 
             logger.error(
-                f"智能体调用最终失败（超过最大重试次数）: "
+                f"智能体批改最终失败（超过最大重试次数）: "
                 f"task_id={task_id}, submission_id={submission_id}"
             )
             return False
+
+
+def _parse_grading_result(text: str) -> dict:
+    """从智能体响应文本中提取批改结果 JSON"""
+    text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        raise Exception(f"无法解析智能体响应为 JSON: {text[:200]}")
 
 
 async def _download_image(image_url: str) -> str:
@@ -190,32 +248,34 @@ async def _send_chat_message(
     api_key: str,
     file_id: str,
     prompt: str,
-    submission_id: int = 0,
     answer_json: str = "",
 ) -> str:
     """
-    发送批改请求到智能体
+    发送批改请求到智能体并收集完整流式响应
 
     参数：
-        agent_url      — 智能体基础 URL
-        api_key        — API Key
-        file_id        — 上传的文件 ID
-        prompt         — 评分标准
-        submission_id  — 提交 ID，传给智能体用于回调
+        agent_url   — 智能体基础 URL
+        api_key     — API Key
+        file_id     — 上传的文件 ID
+        prompt      — 评分标准
+        answer_json — 参考答案 JSON
 
     返回值：
-        task_id
+        智能体返回的完整响应文本
     """
     chat_url = f"{agent_url}/chat-messages"
 
     query = prompt or "请批改这份作业"
     if answer_json:
-        query += "\n请先 OCR 识别学生作业图片，再按 inputs.answer_json 中的标准答案 JSON 比对批改。"
+        query += (
+            "\n请先 OCR 识别学生作业图片，再按 sys_da 中的标准答案 JSON 比对批改。"
+            "\nsys_da 的格式是题号键名对象，例如：{\"1\":{\"answer\":\"D\",\"type\":\"option_letter\",\"score\":2}}。"
+            "\ntype 取值为 option_letter、true_false、fill_blank。"
+        )
 
     body = {
         "inputs": {
-            "submission_id": submission_id,
-            "answer_json": answer_json or "",
+            "sys_da": answer_json or "",
             "sys_zy": {
                 "type": "image",
                 "transfer_method": "local_file",
@@ -233,7 +293,8 @@ async def _send_chat_message(
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    chunks: list[str] = []
+    async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream("POST", chat_url, json=body, headers=headers) as response:
             response.raise_for_status()
 
@@ -243,16 +304,36 @@ async def _send_chat_message(
 
                 if line.startswith("data:"):
                     data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
                     try:
                         data = json.loads(data_str)
-                        task_id = data.get("task_id")
-                        if task_id:
-                            logger.info(f"获取到任务ID: task_id={task_id}")
-                            return task_id
                     except json.JSONDecodeError:
                         continue
 
-    return ""
+                    for key in ("answer", "text", "message", "content"):
+                        value = data.get(key)
+                        if isinstance(value, str):
+                            chunks.append(value)
+                            break
+
+    full_text = "".join(chunks).strip()
+    logger.info(f"智能体流式响应收集完成: {len(full_text)} 字符")
+    return full_text
+
+
+async def _refresh_grading_status(assignment_id: int, db):
+    """刷新作业的批改状态"""
+    from sqlalchemy import func, and_
+    pending_count = await db.scalar(
+        select(func.count()).select_from(Submission).where(
+            and_(Submission.assignment_id == assignment_id, Submission.status == "pending")
+        )
+    )
+    if pending_count == 0:
+        assignment = (await db.execute(select(Assignment).where(Assignment.id == assignment_id))).scalar_one_or_none()
+        if assignment and assignment.grading_status != "graded":
+            assignment.grading_status = "graded"
 
 
 async def parse_answer_file_with_agent(file_path: str) -> dict:

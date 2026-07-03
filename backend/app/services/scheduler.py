@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func, select, text, and_
+from sqlalchemy import func, select, text, and_, or_
 
 from app.config import get_settings
 from app.database import async_session
@@ -121,6 +121,10 @@ async def trigger_auto_grading():
                         Assignment.status == "published",
                         Assignment.deadline <= now,
                         Assignment.grading_triggered == False,
+                        or_(
+                            Assignment.auto_grade_at == None,
+                            Assignment.auto_grade_at <= now,
+                        ),
                     )
                 )
             )

@@ -269,9 +269,10 @@ class Assignment(Base):
         title             — 作业标题
         description       — 题目描述/要求（Markdown 或纯文本）
         question_files    — 题目文件 URL 列表（图片/PDF，JSON 数组）
-        grading_prompt    — 评分标准/批改提示词（传递给智能体）
-        deadline          — 截止时间（迟交仍可提交，但标记 is_late=True）
-        status            — 作业状态：draft=草稿/published=已发布/closed=已关闭
+    grading_prompt    — 评分标准/批改提示词（传递给智能体）
+    deadline          — 提交截止时间（迟交仍可提交，但标记 is_late=True）
+    auto_grade_at     — 智能体自动批改时间（null=截止时间到即触发）
+    status            — 作业状态：draft=草稿/published=已发布/closed=已关闭
         grading_mode      — 批改模式：auto=自动/manual=人工/hybrid=混合
         grading_status    — 批改状态：pending=待批改/graded=已批改
         grading_triggered — 是否已触发智能体批改（防重复触发）
@@ -291,6 +292,7 @@ class Assignment(Base):
     grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
     reference_answer = Column(Text, default=None, nullable=True, comment="参考答案（供智能体批改参考）")
     deadline = Column(DateTime, nullable=True)
+    auto_grade_at = Column(DateTime, nullable=True, comment="智能体自动批改时间(null=截止时间到时触发)")
     status = Column(Enum("draft", "published", "closed"), default="draft", nullable=False)
     grading_mode = Column(Enum("auto", "manual", "hybrid"), default="auto", nullable=False, comment="批改模式")
     grading_status = Column(Enum("pending", "graded"), default="pending", nullable=False, comment="批改状态")
@@ -337,22 +339,34 @@ class GradingReport(Base):
     用途：智能体生成的批改报告，一对一关联到提交。
 
     字段说明：
-        id              — 自增主键
-        submission_id   — 关联的提交 ID，外键唯一约束
-        score           — 分数（0-100）
-        feedback        — 总评（Markdown 或纯文本）
-        detail          — 各题详细批改（JSON 格式）
-        generated_by    — 智能体标识（如 "wukong", "gpt-4o", "custom"）
-        review_status   — 复核状态：pending_review=待复核/confirmed=已确认/modified=已修改
-        created_at      — 生成时间
+        id                — 自增主键
+        submission_id     — 关联的提交 ID，外键唯一约束
+        score             — 分数
+        full_score        — 满分
+        accuracy          — 正确率
+        correct_count     — 正确题数
+        wrong_count       — 错误题数
+        feedback          — 总评（Markdown 或纯文本）
+        detail            — 各题详细批改原始 JSON（含 details 数组、review 等）
+        status            — 智能体状态：success/partial/degraded/failed
+        review_questions  — 需人工复核的题号列表（JSON 数组）
+        generated_by      — 智能体标识（如 "wukong", "gpt-4o", "custom"）
+        review_status     — 复核状态：pending_review=待复核/confirmed=已确认/modified=已修改
+        created_at        — 生成时间
     """
     __tablename__ = "grading_reports"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     submission_id = Column(BigInteger, ForeignKey("submissions.id"), unique=True, nullable=False, index=True)
-    score = Column(Integer, default=0, comment="分数0-100")
+    score = Column(Integer, default=0, comment="分数")
+    full_score = Column(Integer, default=0, comment="满分")
+    accuracy = Column(Float, default=0.0, comment="正确率")
+    correct_count = Column(Integer, default=0, comment="正确题数")
+    wrong_count = Column(Integer, default=0, comment="错误题数")
     feedback = Column(Text, default="")
-    detail = Column(Text, default="{}", comment="各题详细批改(JSON)")
+    detail = Column(Text, default="{}", comment="批改详情原始JSON")
+    status = Column(String(20), default="", comment="智能体状态: success/partial/degraded/failed")
+    review_questions = Column(Text, default="[]", comment="需复核题号JSON数组")
     generated_by = Column(String(50), default="", comment="智能体标识")
     review_status = Column(Enum("pending_review", "confirmed", "modified"), default="confirmed", nullable=False, comment="复核状态")
     created_at = Column(DateTime, server_default=func.now())

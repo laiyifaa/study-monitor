@@ -49,7 +49,12 @@
               <img v-for="(img, i) in mySubmissionMap[section.id].images" :key="i" :src="getMediaUrl(img)" class="preview" />
             </div>
             <div v-if="mySubmissionMap[section.id].report" class="report">
-              <div class="score">分数：{{ mySubmissionMap[section.id].report.score }}</div>
+              <div class="score">
+                分数：{{ mySubmissionMap[section.id].report.score }}
+                <span v-if="mySubmissionMap[section.id].report.full_score">/ {{ mySubmissionMap[section.id].report.full_score }}</span>
+                <span v-if="mySubmissionMap[section.id].report.accuracy" class="accuracy">（正确率 {{ (mySubmissionMap[section.id].report.accuracy * 100).toFixed(0) }}%）</span>
+                <span v-if="mySubmissionMap[section.id].report.status" class="status-tag" :class="mySubmissionMap[section.id].report.status">{{ mySubmissionMap[section.id].report.status }}</span>
+              </div>
               <div v-if="getQuestions(mySubmissionMap[section.id].report)" class="questions-detail">
                 <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
                   <span class="q-index">第{{ q.index }}题</span>
@@ -261,7 +266,17 @@ function getQuestions(report) {
   if (!report?.detail) return null
   try {
     const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    return detail.questions || null
+    if (detail.questions) return detail.questions
+    if (Array.isArray(detail.details)) {
+      return detail.details.map(d => ({
+        index: d.qid,
+        correct: d.ok,
+        score: d.s,
+        max_score: d.fs,
+        comment: '',
+      }))
+    }
+    return null
   } catch {
     return null
   }
@@ -271,7 +286,15 @@ function getIssues(report) {
   if (!report?.detail) return null
   try {
     const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    return detail.issues || null
+    if (detail.issues) return detail.issues
+    const issues = []
+    if (Array.isArray(detail.review) && detail.review.length > 0) {
+      issues.push(`需人工复核题号：${detail.review.join('、')}`)
+    }
+    if (detail.error) {
+      issues.push(`批改异常：${detail.error}`)
+    }
+    return issues.length > 0 ? issues : null
   } catch {
     return null
   }
@@ -524,7 +547,31 @@ function getIssues(report) {
   font-weight: 800;
   color: #15803d;
   font-size: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
+
+.score .accuracy {
+  font-weight: 600;
+  font-size: 14px;
+  color: #607080;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-tag.success { background: #e8f7ef; color: #15803d; }
+.status-tag.partial { background: #fff4df; color: #a16207; }
+.status-tag.degraded { background: #fff1ee; color: #b42318; }
+.status-tag.failed { background: #fee8e7; color: #b42318; }
 
 .questions-detail {
   margin: 12px 0;

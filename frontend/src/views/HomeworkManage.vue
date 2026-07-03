@@ -52,6 +52,21 @@
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
             <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
             <button class="btn-sm" @click="openUnsubmittedModal">未交名单</button>
+            <button
+              v-if="getAssignment(section.id).status === 'published' && getAssignment(section.id).grading_mode !== 'manual'"
+              class="btn-sm ai-grade-btn"
+              :disabled="triggeringSection === section.id"
+              @click="triggerAiGrading(section.id)"
+            >
+              {{ triggeringSection === section.id ? '批改中...' : '触发智能批改' }}
+            </button>
+          </div>
+          <div v-if="triggeringSection === section.id && triggerStatus" class="trigger-progress">
+            <span class="progress-text">
+              批改进度：{{ triggerStatus.graded + triggerStatus.failed }} / {{ triggerStatus.total }}
+              <span v-if="triggerStatus.processing > 0">（处理中 {{ triggerStatus.processing }}）</span>
+              <span v-if="triggerStatus.failed > 0" class="fail-count">失败 {{ triggerStatus.failed }}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -90,7 +105,8 @@
           <div class="answer-header">
             <label>答案模块</label>
             <div class="answer-actions">
-            <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+              <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+              <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
               <label class="btn-sm file-button">
                 {{ answerParsing ? '解析中...' : '上传答案文件' }}
                 <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
@@ -104,6 +120,7 @@
                 <th>题号</th>
                 <th>题型</th>
                 <th>答案</th>
+                <th>分数</th>
                 <th></th>
               </tr>
             </thead>
@@ -112,12 +129,16 @@
                 <td><input v-model="item.no" placeholder="1" /></td>
                 <td>
                   <select v-model="item.type">
-                    <option value="choice">选择题</option>
-                    <option value="fill">填空题</option>
-                    <option value="judge">判断题</option>
+                    <option value="option_letter">选项字母</option>
+                    <option value="true_false">判断题</option>
+                    <option value="fill_blank">填空题</option>
                   </select>
                 </td>
-                <td><input v-model="item.answer" placeholder="标准答案" /></td>
+                <td>
+                  <textarea v-if="item.type === 'fill_blank'" v-model="item.answer" class="answer-textarea" rows="2" placeholder="标准答案"></textarea>
+                  <input v-else v-model="item.answer" placeholder="标准答案" />
+                </td>
+                <td><input v-model.number="item.score" type="number" min="0" step="1" placeholder="分数" /></td>
                 <td><button type="button" class="remove-btn" @click="removeAnswerItem(index)">移除</button></td>
               </tr>
             </tbody>
@@ -138,8 +159,13 @@
           </select>
         </div>
         <div class="form-group">
-          <label>截止时间</label>
+          <label>截止时间（学生提交截止）</label>
           <input v-model="form.deadline" type="datetime-local" />
+        </div>
+        <div v-if="form.grading_mode !== 'manual'" class="form-group">
+          <label>自动批改时间</label>
+          <input v-model="form.auto_grade_at" type="datetime-local" />
+          <p class="form-hint">不设置则在截止时间到后立即触发智能体批改</p>
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="closeModal">取消</button>
@@ -156,6 +182,7 @@
             <label>标准答案</label>
             <div class="answer-actions">
               <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+              <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
               <label class="btn-sm file-button">
                 {{ answerParsing ? '解析中...' : '上传答案文件' }}
                 <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
@@ -169,6 +196,7 @@
                 <th>题号</th>
                 <th>题型</th>
                 <th>答案</th>
+                <th>分数</th>
                 <th></th>
               </tr>
             </thead>
@@ -177,12 +205,16 @@
                 <td><input v-model="item.no" placeholder="1" /></td>
                 <td>
                   <select v-model="item.type">
-                    <option value="choice">选择题</option>
-                    <option value="fill">填空题</option>
-                    <option value="judge">判断题</option>
+                    <option value="option_letter">选项字母</option>
+                    <option value="true_false">判断题</option>
+                    <option value="fill_blank">填空题</option>
                   </select>
                 </td>
-                <td><input v-model="item.answer" placeholder="标准答案" /></td>
+                <td>
+                  <textarea v-if="item.type === 'fill_blank'" v-model="item.answer" class="answer-textarea" rows="2" placeholder="标准答案"></textarea>
+                  <input v-else v-model="item.answer" placeholder="标准答案" />
+                </td>
+                <td><input v-model.number="item.score" type="number" min="0" step="1" placeholder="分数" /></td>
                 <td><button type="button" class="remove-btn" @click="removeAnswerItem(index)">移除</button></td>
               </tr>
             </tbody>
@@ -192,6 +224,50 @@
         <div class="modal-actions">
           <button class="btn-secondary" @click="closeAnswerModal">取消</button>
           <button class="btn-primary" @click="saveAnswer">保存答案</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showBatchAnswerModal" class="modal-overlay" @click.self="closeBatchAnswerModal">
+      <div class="modal modal-lg batch-answer-modal">
+        <h3>批量新增答案</h3>
+        <div class="batch-hint">逐行填写题号、题型、答案和分数，确认后会追加到当前答案列表。</div>
+        <div class="batch-actions-bar">
+          <button type="button" class="btn-sm" @click="addBatchAnswerRow">添加一行</button>
+          <button type="button" class="btn-sm" @click="resetBatchAnswerRows">清空</button>
+        </div>
+        <table class="answer-table batch-answer-table">
+          <thead>
+            <tr>
+              <th>题号</th>
+              <th>题型</th>
+              <th>答案</th>
+              <th>分数</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(item, index) in batchAnswerRows" :key="`batch-${index}`">
+              <td><input v-model="item.no" placeholder="13(1)" /></td>
+              <td>
+                <select v-model="item.type">
+                  <option value="option_letter">选项字母</option>
+                  <option value="true_false">判断题</option>
+                  <option value="fill_blank">填空题</option>
+                </select>
+              </td>
+              <td>
+                <textarea v-if="item.type === 'fill_blank'" v-model="item.answer" class="answer-textarea" rows="2" placeholder="标准答案"></textarea>
+                <input v-else v-model="item.answer" placeholder="标准答案" />
+              </td>
+              <td><input v-model.number="item.score" type="number" min="0" step="1" placeholder="分数" /></td>
+              <td><button type="button" class="remove-btn" @click="removeBatchAnswerRow(index)">移除</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeBatchAnswerModal">取消</button>
+          <button class="btn-primary" @click="appendBatchAnswers">追加到答案</button>
         </div>
       </div>
     </div>
@@ -214,14 +290,19 @@
               <img v-for="(img, i) in s.images" :key="i" :src="getMediaUrl(img)" class="thumb" @click="previewImage(getMediaUrl(img))" />
             </div>
             <div v-if="s.report" class="report-preview">
-              <div class="score">分数：{{ s.report.score }}</div>
+              <div class="score">
+                分数：{{ s.report.score }}<span v-if="s.report.full_score"> / {{ s.report.full_score }}</span>
+                <span v-if="s.report.status" class="status-tag" :class="s.report.status">{{ s.report.status }}</span>
+              </div>
+              <div v-if="s.report.accuracy" class="report-meta">正确率：{{ (s.report.accuracy * 100).toFixed(0) }}% &nbsp; 对{{ s.report.correct_count }} / 错{{ s.report.wrong_count }}</div>
               <div class="feedback">{{ s.report.feedback }}</div>
             </div>
             <div v-if="s.task && s.task.status === 'failed'" class="task-error">
               <span class="error-label">批改失败：</span>{{ s.task.error_message || '未知错误' }}
               <span v-if="s.task.retry_count > 0" class="retry-info">(已重试 {{ s.task.retry_count }} 次)</span>
             </div>
-            <div v-if="s.task && s.task.status === 'sent'" class="task-info">已发送给智能体，等待回调...</div>
+            <div v-if="s.task && s.task.status === 'sent'" class="task-info">智能体批改中...</div>
+            <div v-if="s.task && s.task.status === 'pending'" class="task-info">等待批改...</div>
             <div class="submission-actions">
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
             </div>
@@ -286,9 +367,15 @@ const sections = ref([])
 const assignmentMap = ref({})
 const submissions = ref([])
 const unsubmittedStudents = ref([])
+const ANSWER_TYPE_DEFAULT_SCORE = {
+  option_letter: 2,
+  true_false: 1,
+  fill_blank: 2,
+}
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showAnswerModal = ref(false)
+const showBatchAnswerModal = ref(false)
 const showSubmissionsModal = ref(false)
 const showUnsubmittedModal = ref(false)
 const showGradeModal = ref(false)
@@ -296,8 +383,12 @@ const gradingSubmission = ref(null)
 const gradeForm = ref({ score: '', feedback: '' })
 const gradeSubmitting = ref(false)
 const answerParsing = ref(false)
+const batchAnswerRows = ref([])
 const currentSection = ref(null)
 const currentViewSectionId = ref(null)
+const triggeringSection = ref(null)
+const triggerStatus = ref(null)
+let pollTimer = null
 
 function emptyForm() {
   return {
@@ -307,6 +398,7 @@ function emptyForm() {
     grading_prompt: '',
     grading_mode: 'auto',
     deadline: '',
+    auto_grade_at: '',
     section_id: null,
     answer_items: [],
   }
@@ -314,7 +406,7 @@ function emptyForm() {
 
 const form = ref(emptyForm())
 
-const answerJsonPreview = computed(() => JSON.stringify(buildAnswerObject(), null, 2))
+const answerJsonPreview = computed(() => JSON.stringify(serializeAnswerItems(collectAnswerItems(form.value.answer_items).items), null, 2))
 
 onMounted(() => {
   loadData()
@@ -341,39 +433,153 @@ function isPdf(file) {
   return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
 }
 
+function normalizeAnswerType(type) {
+  const normalized = String(type ?? '').trim().toLowerCase()
+  if (['choice', 'single_choice', 'multiple_choice', 'option_letter'].includes(normalized)) return 'option_letter'
+  if (['judge', 'true_false'].includes(normalized)) return 'true_false'
+  if (['fill', 'fill_blank'].includes(normalized)) return 'fill_blank'
+  return 'option_letter'
+}
+
+function normalizeAnswerText(type, value) {
+  const text = String(value ?? '')
+  if (type === 'option_letter') {
+    return text.replace(/[\s,，、]+/g, '').toUpperCase()
+  }
+  if (type === 'true_false') {
+    const cleaned = text.trim().toUpperCase()
+    if (['T', 'TRUE', '1', 'Y', 'YES', '对', '正确', '√'].includes(cleaned)) return 'T'
+    if (['F', 'FALSE', '0', 'N', 'NO', '错', '错误', '×'].includes(cleaned)) return 'F'
+    return cleaned
+  }
+  return text.replace(/\r\n/g, '\n').trim()
+}
+
+function normalizeAnswerScore(type, value) {
+  if (value === null || value === undefined || value === '') {
+    return ANSWER_TYPE_DEFAULT_SCORE[type] ?? 2
+  }
+  const normalized = Number(value)
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    return ANSWER_TYPE_DEFAULT_SCORE[type] ?? 2
+  }
+  return Math.trunc(normalized)
+}
+
+function createAnswerItem(overrides = {}) {
+  const type = normalizeAnswerType(overrides.type)
+  return {
+    no: String(overrides.no ?? '').trim(),
+    type,
+    answer: normalizeAnswerText(type, overrides.answer),
+    score: normalizeAnswerScore(type, overrides.score),
+  }
+}
+
+function extractAnswerEntries(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map(item => [item?.no, item]).filter(([, item]) => item && typeof item === 'object')
+  }
+  if (!raw || typeof raw !== 'object') return []
+  if (Array.isArray(raw.items)) {
+    return raw.items.map(item => [item?.no, item]).filter(([, item]) => item && typeof item === 'object')
+  }
+  return Object.entries(raw).filter(([key]) => key !== 'version' && key !== 'items')
+}
+
 function parseAnswerItems(raw) {
   if (!raw) return []
   try {
     const obj = typeof raw === 'string' ? JSON.parse(raw) : raw
-    return Array.isArray(obj.items)
-      ? obj.items.map(item => ({
-        no: String(item.no || ''),
-        type: item.type || 'choice',
-        answer: String(item.answer ?? ''),
-      }))
-      : []
+    return extractAnswerEntries(obj)
+      .map(([no, item]) => {
+        const source = item && typeof item === 'object' ? item : {}
+        const type = normalizeAnswerType(source.type ?? source.question_type)
+        return createAnswerItem({
+          no: String(no ?? source.no ?? '').trim(),
+          type,
+          answer: source.answer,
+          score: source.score,
+        })
+      })
+      .filter(item => item.no || item.answer)
   } catch {
     return []
   }
 }
 
-function buildAnswerItems() {
-  return form.value.answer_items
-    .map(item => ({
-      no: String(item.no || '').trim(),
-      type: item.type || 'choice',
-      answer: String(item.answer || '').trim(),
-    }))
-    .filter(item => item.no && item.answer)
+function collectAnswerItems(rows) {
+  const items = []
+  const errors = []
+  const seenNos = new Set()
+
+  rows.forEach((item, index) => {
+    const no = String(item.no ?? '').trim()
+    const type = normalizeAnswerType(item.type)
+    const rawAnswer = String(item.answer ?? '')
+    const answer = normalizeAnswerText(type, rawAnswer)
+    const hasContent = no || rawAnswer.trim()
+
+    if (!hasContent) {
+      return
+    }
+
+    if (!no) {
+      errors.push(`第 ${index + 1} 行缺少题号`)
+      return
+    }
+
+    if (!rawAnswer.trim()) {
+      errors.push(`第 ${index + 1} 行缺少答案`)
+      return
+    }
+
+    if (seenNos.has(no)) {
+      errors.push(`第 ${index + 1} 行题号 ${no} 重复`)
+      return
+    }
+
+    if (type === 'option_letter' && !/^[A-Z]+$/.test(answer)) {
+      errors.push(`第 ${index + 1} 行选项字母答案格式无效`)
+      return
+    }
+
+    if (type === 'true_false' && !['T', 'F'].includes(answer)) {
+      errors.push(`第 ${index + 1} 行判断题答案只能是 T 或 F`)
+      return
+    }
+
+    items.push({
+      no,
+      type,
+      answer,
+      score: normalizeAnswerScore(type, item.score),
+    })
+    seenNos.add(no)
+  })
+
+  return { items, errors }
 }
 
-function buildAnswerObject() {
-  return { version: 1, items: buildAnswerItems() }
+function serializeAnswerItems(items) {
+  return items.reduce((acc, item) => {
+    acc[item.no] = {
+      answer: item.answer,
+      type: item.type,
+      score: item.score,
+    }
+    return acc
+  }, {})
 }
 
-function buildAnswerJson() {
-  const items = buildAnswerItems()
-  return items.length ? JSON.stringify({ version: 1, items }) : ''
+function buildAnswerObject(rows = form.value.answer_items) {
+  return serializeAnswerItems(collectAnswerItems(rows).items)
+}
+
+function buildAnswerJson(rows = form.value.answer_items) {
+  const { items } = collectAnswerItems(rows)
+  const payload = serializeAnswerItems(items)
+  return Object.keys(payload).length ? JSON.stringify(payload) : ''
 }
 
 function hasAnswer(assignment) {
@@ -381,11 +587,59 @@ function hasAnswer(assignment) {
 }
 
 function addAnswerItem() {
-  form.value.answer_items.push({ no: String(form.value.answer_items.length + 1), type: 'choice', answer: '' })
+  form.value.answer_items.push(createAnswerItem({
+    no: String(form.value.answer_items.length + 1),
+  }))
 }
 
 function removeAnswerItem(index) {
   form.value.answer_items.splice(index, 1)
+}
+
+function resetBatchAnswerRows(count = 3) {
+  batchAnswerRows.value = Array.from({ length: count }, () => createAnswerItem())
+}
+
+function openBatchAnswerModal() {
+  resetBatchAnswerRows()
+  showBatchAnswerModal.value = true
+}
+
+function closeBatchAnswerModal() {
+  showBatchAnswerModal.value = false
+  batchAnswerRows.value = []
+}
+
+function addBatchAnswerRow() {
+  batchAnswerRows.value.push(createAnswerItem())
+}
+
+function removeBatchAnswerRow(index) {
+  batchAnswerRows.value.splice(index, 1)
+}
+
+function appendBatchAnswers() {
+  const { items, errors } = collectAnswerItems(batchAnswerRows.value)
+  if (errors.length) {
+    alert(errors[0])
+    return
+  }
+  if (items.length === 0) {
+    alert('请至少填写一行完整答案')
+    return
+  }
+
+  const existingNos = new Set(form.value.answer_items.map(item => String(item.no ?? '').trim()).filter(Boolean))
+  for (const item of items) {
+    if (existingNos.has(item.no)) {
+      alert(`题号 ${item.no} 已存在，请先修改后再追加`)
+      return
+    }
+    existingNos.add(item.no)
+  }
+
+  form.value.answer_items.push(...items.map(createAnswerItem))
+  closeBatchAnswerModal()
 }
 
 async function loadData() {
@@ -429,6 +683,7 @@ function openEditForSection(section) {
     grading_prompt: assignment.grading_prompt || '',
     grading_mode: assignment.grading_mode || 'auto',
     deadline: assignment.deadline ? assignment.deadline.slice(0, 16) : '',
+    auto_grade_at: assignment.auto_grade_at ? assignment.auto_grade_at.slice(0, 16) : '',
     section_id: section.id,
     answer_items: parseAnswerItems(assignment.reference_answer),
   }
@@ -452,14 +707,20 @@ async function saveAssignment() {
     alert('请输入作业标题')
     return
   }
+  const { items, errors } = collectAnswerItems(form.value.answer_items)
+  if (errors.length) {
+    alert(errors[0])
+    return
+  }
   const payload = {
     title: form.value.title.trim(),
     description: form.value.description,
     question_files: form.value.question_files,
     grading_prompt: form.value.grading_prompt,
-    reference_answer: buildAnswerJson(),
+    reference_answer: items.length ? JSON.stringify(serializeAnswerItems(items)) : '',
     grading_mode: form.value.grading_mode,
     deadline: form.value.deadline || null,
+    auto_grade_at: form.value.auto_grade_at || null,
   }
   try {
     if (showEditModal.value) {
@@ -487,21 +748,28 @@ async function publishAssignment(sectionId) {
 function closeModal() {
   showCreateModal.value = false
   showEditModal.value = false
+  showBatchAnswerModal.value = false
   currentSection.value = null
   form.value = emptyForm()
 }
 
 function closeAnswerModal() {
   showAnswerModal.value = false
+  showBatchAnswerModal.value = false
   currentSection.value = null
   form.value = emptyForm()
 }
 
 async function saveAnswer() {
   if (!form.value.section_id) return
+  const { items, errors } = collectAnswerItems(form.value.answer_items)
+  if (errors.length) {
+    alert(errors[0])
+    return
+  }
   try {
     await api.put(`/homework/assignments/${form.value.section_id}/answer`, {
-      answer: buildAnswerJson() || '',
+      answer: items.length ? JSON.stringify(serializeAnswerItems(items)) : '',
     })
     closeAnswerModal()
     await loadData()
@@ -617,6 +885,63 @@ async function submitGrade() {
     gradeSubmitting.value = false
   }
 }
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function triggerAiGrading(sectionId) {
+  const assignment = getAssignment(sectionId)
+  if (!assignment) return
+
+  stopPolling()
+  triggeringSection.value = sectionId
+  triggerStatus.value = null
+
+  try {
+    const res = await api.post(`/homework/trigger-grading/${assignment.id}`)
+    const data = res.data.data
+    if (data.submission_count === 0) {
+      alert('无待批改的提交')
+      triggeringSection.value = null
+      return
+    }
+    triggerStatus.value = {
+      total: data.submission_count,
+      pending: data.submission_count,
+      processing: 0,
+      graded: 0,
+      failed: 0,
+      done: 0,
+    }
+    pollTimer = setInterval(() => pollGradingStatus(assignment.id), 3000)
+  } catch (e) {
+    alert('触发失败：' + (e.response?.data?.detail || e.message))
+    triggeringSection.value = null
+  }
+}
+
+async function pollGradingStatus(assignmentId) {
+  try {
+    const res = await api.get(`/homework/trigger-status/${assignmentId}`)
+    triggerStatus.value = res.data.data
+
+    if (triggerStatus.value.done >= triggerStatus.value.total) {
+      stopPolling()
+      triggeringSection.value = null
+      triggerStatus.value = null
+      await loadData()
+      if (currentViewSectionId.value) await loadSubmissions(currentViewSectionId.value)
+    }
+  } catch (e) {
+    console.error('轮询失败', e)
+    stopPolling()
+    triggeringSection.value = null
+  }
+}
 </script>
 
 <style scoped>
@@ -698,6 +1023,44 @@ async function submitGrade() {
   background: #fff4df;
   border-color: #f8ddb0;
   color: #a16207;
+}
+
+.btn-sm.batch-action {
+  background: #e8f2ff;
+  border-color: #c9ddff;
+  color: #1d4ed8;
+}
+
+.btn-sm.ai-grade-btn {
+  background: #7c3aed;
+  color: white;
+  border-color: #7c3aed;
+}
+
+.btn-sm.ai-grade-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.trigger-progress {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: #f0e7ff;
+  border: 1px solid #d4c4f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #5b21b6;
+}
+
+.progress-text {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.fail-count {
+  color: #b42318;
+  font-weight: 700;
 }
 
 .section-card {
@@ -897,6 +1260,13 @@ async function submitGrade() {
   resize: vertical;
 }
 
+.form-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #7b8790;
+}
+
+
 .question-files-preview {
   display: flex;
   flex-wrap: wrap;
@@ -1014,6 +1384,7 @@ async function submitGrade() {
   border-top: 1px solid #dfe9e5;
   border-bottom: 1px solid #dfe9e5;
   padding: 8px;
+  vertical-align: top;
 }
 
 .answer-table td:first-child {
@@ -1027,9 +1398,15 @@ async function submitGrade() {
 }
 
 .answer-table input,
-.answer-table select {
+.answer-table select,
+.answer-table textarea {
   width: 100%;
   box-sizing: border-box;
+}
+
+.answer-table textarea {
+  min-height: 62px;
+  resize: vertical;
 }
 
 .answer-table .remove-btn {
@@ -1048,6 +1425,27 @@ async function submitGrade() {
   overflow-x: auto;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.batch-answer-modal {
+  width: min(920px, 100%);
+}
+
+.batch-hint {
+  margin: -6px 0 12px;
+  color: #687681;
+  font-size: 13px;
+}
+
+.batch-actions-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.batch-answer-table {
+  margin-bottom: 8px;
 }
 
 .submissions-list {
@@ -1102,6 +1500,30 @@ async function submitGrade() {
 .score {
   font-weight: 800;
   color: #15803d;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-tag.success { background: #e8f7ef; color: #15803d; }
+.status-tag.partial { background: #fff4df; color: #a16207; }
+.status-tag.degraded { background: #fff1ee; color: #b42318; }
+.status-tag.failed { background: #fee8e7; color: #b42318; }
+
+.report-meta {
+  font-size: 12px;
+  color: #607080;
+  margin-top: 4px;
 }
 
 .feedback {

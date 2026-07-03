@@ -20,19 +20,18 @@ API 列表：
         GET    /api/homework/course/{course_id}         — 获取课程下所有小节作业
         GET    /api/homework/assignments/{section_id}/submissions — 查看提交列表
         GET    /api/homework/reports/{submission_id}   — 查看批改报告
+        POST   /api/homework/trigger-grading/{assignment_id} — 手动触发智能体批改
 
     学生端：
         GET    /api/homework/assignments/{section_id}  — 获取小节作业
         POST   /api/homework/submissions               — 提交作业（上传图片）
         GET    /api/homework/my-submissions            — 查看我的提交列表
 
-    智能体回调：
-        POST   /api/homework/grading-callback          — 智能体批改完成回调（需 API Key）
-
     文件上传：
         POST   /api/homework/upload                    — 上传作业图片
 """
 
+import asyncio
 import os
 import re
 import json
@@ -47,7 +46,8 @@ from typing import Any, Optional, List
 from app.config import get_settings
 from app.database import get_db
 from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, Section, User
-from app.services.agent_caller import parse_answer_file_with_agent
+from app.services.agent_caller import parse_answer_file_with_agent, call_grading_agent
+from app.services.image_stitcher import stitch_images, image_url_to_local_path
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/homework", tags=["作业管理"])
@@ -55,7 +55,22 @@ settings = get_settings()
 
 HOMEWORK_UPLOAD_DIR = "uploads/homework"
 ANSWER_UPLOAD_DIR = os.path.join(HOMEWORK_UPLOAD_DIR, "answers")
-ANSWER_TYPES = {"choice", "fill", "judge"}
+ANSWER_TYPES = {"option_letter", "true_false", "fill_blank"}
+ANSWER_TYPE_ALIASES = {
+    "choice": "option_letter",
+    "single_choice": "option_letter",
+    "multiple_choice": "option_letter",
+    "option_letter": "option_letter",
+    "judge": "true_false",
+    "true_false": "true_false",
+    "fill": "fill_blank",
+    "fill_blank": "fill_blank",
+}
+ANSWER_DEFAULT_SCORES = {
+    "option_letter": 2,
+    "true_false": 1,
+    "fill_blank": 2,
+}
 
 
 async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
@@ -77,6 +92,7 @@ class CreateAssignmentRequest(BaseModel):
     grading_prompt: str = ""
     reference_answer: str = ""  # v5.0: 参考答案
     deadline: Optional[str] = None
+    auto_grade_at: Optional[str] = None
     grading_mode: str = "auto"
 
 
@@ -87,6 +103,7 @@ class UpdateAssignmentRequest(BaseModel):
     grading_prompt: Optional[str] = None
     reference_answer: Optional[str] = None  # v5.0: 参考答案
     deadline: Optional[str] = None
+    auto_grade_at: Optional[str] = None
     status: Optional[str] = None
     grading_mode: Optional[str] = None
 
@@ -96,78 +113,136 @@ class CreateSubmissionRequest(BaseModel):
     images: List[str]
 
 
-class GradingCallbackData(BaseModel):
-    submission_id: int
-    score: int
-    feedback: str = ""
-    detail: str = "{}"
-    generated_by: str = "unknown"
-
-    @field_validator("detail", mode="before")
-    @classmethod
-    def normalize_detail(cls, v):
-        if isinstance(v, dict):
-            return json.dumps(v, ensure_ascii=False)
-        return v
-
-
-class GradingCallbackRequest(BaseModel):
-    data: GradingCallbackData
-
-
 class ManualGradeRequest(BaseModel):
     score: int
     feedback: str = ""
 
 
 class SaveAnswerRequest(BaseModel):
-    answer: Any
+    answer: Any  # 支持新旧答案 JSON 结构
 
 
-def _normalize_answer_json(value: Any) -> str:
+def _normalize_answer_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return ANSWER_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_answer_text(answer_type: str, value: Any) -> str:
+    text = str(value if value is not None else "")
+    if answer_type == "option_letter":
+        return re.sub(r"[\s,，、]+", "", text).upper()
+    if answer_type == "true_false":
+        cleaned = text.strip().upper()
+        if cleaned in {"T", "TRUE", "1", "Y", "YES", "对", "正确"}:
+            return "T"
+        if cleaned in {"F", "FALSE", "0", "N", "NO", "错", "错误"}:
+            return "F"
+        return cleaned
+    return text.replace("\r\n", "\n").strip()
+
+
+def _normalize_answer_score(answer_type: str, value: Any) -> int:
+    if value is None:
+        return ANSWER_DEFAULT_SCORES.get(answer_type, 2)
+
+    if isinstance(value, str) and not value.strip():
+        return ANSWER_DEFAULT_SCORES.get(answer_type, 2)
+
+    try:
+        score = int(float(value))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="答案分数格式错误")
+
+    if score < 0:
+        raise HTTPException(status_code=400, detail="答案分数不能小于 0")
+    return score
+
+
+def _iter_answer_entries(obj: Any):
+    if isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, dict):
+                yield str(item.get("no", "")).strip(), item
+        return
+
+    if not isinstance(obj, dict):
+        raise HTTPException(status_code=400, detail="答案必须是 JSON 对象")
+
+    items = obj.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                yield str(item.get("no", "")).strip(), item
+        return
+
+    for key, value in obj.items():
+        if key in {"version", "items"}:
+            continue
+        yield str(key).strip(), value
+
+
+def _normalize_answer_object(value: Any) -> dict:
     if value is None or value == "":
-        return ""
+        return {}
 
     if isinstance(value, str):
         try:
             obj = json.loads(value)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="答案 JSON 格式错误")
-    elif isinstance(value, dict):
-        obj = value
     else:
+        obj = value
+
+    if not isinstance(obj, (dict, list)):
         raise HTTPException(status_code=400, detail="答案必须是 JSON 对象")
 
-    items = obj.get("items")
-    if not isinstance(items, list):
-        raise HTTPException(status_code=400, detail="答案 JSON 必须包含 items 数组")
-
-    normalized_items = []
-    for index, item in enumerate(items, start=1):
+    normalized = {}
+    seen_nos = set()
+    for index, (no, item) in enumerate(_iter_answer_entries(obj), start=1):
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail=f"第 {index} 题格式错误")
-        no = str(item.get("no", "")).strip()
-        qtype = str(item.get("type", "")).strip()
-        answer = item.get("answer")
-        if not no:
-            raise HTTPException(status_code=400, detail=f"第 {index} 题缺少题号")
-        if qtype not in ANSWER_TYPES:
-            raise HTTPException(status_code=400, detail=f"第 {index} 题题型无效")
-        if answer is None or str(answer).strip() == "":
-            raise HTTPException(status_code=400, detail=f"第 {index} 题缺少答案")
-        normalized_items.append({"no": no, "type": qtype, "answer": answer})
 
-    normalized = {"version": int(obj.get("version") or 1), "items": normalized_items}
-    return json.dumps(normalized, ensure_ascii=False)
+        entry_no = no or str(item.get("no", "")).strip()
+        if not entry_no:
+            raise HTTPException(status_code=400, detail=f"第 {index} 题缺少题号")
+        if entry_no in seen_nos:
+            raise HTTPException(status_code=400, detail=f"第 {entry_no} 题重复")
+
+        qtype = _normalize_answer_type(item.get("type") or item.get("question_type"))
+        if qtype not in ANSWER_TYPES:
+            raise HTTPException(status_code=400, detail=f"第 {entry_no} 题题型无效")
+
+        answer = _normalize_answer_text(qtype, item.get("answer"))
+        if not answer:
+            raise HTTPException(status_code=400, detail=f"第 {entry_no} 题缺少答案")
+        if qtype == "option_letter" and not re.fullmatch(r"[A-Z]+", answer):
+            raise HTTPException(status_code=400, detail=f"第 {entry_no} 题选项字母答案格式无效")
+        if qtype == "true_false" and answer not in {"T", "F"}:
+            raise HTTPException(status_code=400, detail=f"第 {entry_no} 题判断题答案只能是 T 或 F")
+
+        score = _normalize_answer_score(qtype, item.get("score"))
+        normalized[entry_no] = {
+            "answer": answer,
+            "type": qtype,
+            "score": score,
+        }
+        seen_nos.add(entry_no)
+
+    return normalized
+
+
+def _normalize_answer_json(value: Any) -> str:
+    normalized = _normalize_answer_object(value)
+    return json.dumps(normalized, ensure_ascii=False) if normalized else ""
 
 
 def _answer_to_object(raw: str | None) -> dict:
     if not raw:
-        return {"version": 1, "items": []}
+        return {}
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"version": 1, "items": []}
+        return _normalize_answer_object(raw)
+    except (HTTPException, json.JSONDecodeError, TypeError, ValueError):
+        return {}
 
 
 @router.post("/upload")
@@ -229,6 +304,7 @@ def _assignment_to_dict(a: Assignment, include_answer: bool = False):
         "question_files": json.loads(a.question_files),
         "grading_prompt": a.grading_prompt,
         "deadline": a.deadline.isoformat() if a.deadline else None,
+        "auto_grade_at": a.auto_grade_at.isoformat() if a.auto_grade_at else None,
         "status": a.status,
         "grading_mode": a.grading_mode,
         "grading_status": a.grading_status,
@@ -316,6 +392,13 @@ async def create_assignment(
         except:
             raise HTTPException(status_code=400, detail="截止时间格式错误")
 
+    auto_grade_dt = None
+    if req.auto_grade_at:
+        try:
+            auto_grade_dt = datetime.fromisoformat(req.auto_grade_at.replace("Z", "+00:00"))
+        except:
+            raise HTTPException(status_code=400, detail="自动批改时间格式错误")
+
     if req.grading_mode not in ["auto", "manual", "hybrid"]:
         raise HTTPException(status_code=400, detail="批改模式无效")
 
@@ -328,6 +411,7 @@ async def create_assignment(
         grading_prompt=req.grading_prompt,
         reference_answer=_normalize_answer_json(req.reference_answer),
         deadline=deadline_dt,
+        auto_grade_at=auto_grade_dt,
         status="draft",
         grading_mode=req.grading_mode,
     )
@@ -368,6 +452,14 @@ async def update_assignment(
             assignment.deadline = datetime.fromisoformat(req.deadline.replace("Z", "+00:00"))
         except:
             raise HTTPException(status_code=400, detail="截止时间格式错误")
+    if req.auto_grade_at is not None:
+        if req.auto_grade_at == "":
+            assignment.auto_grade_at = None
+        else:
+            try:
+                assignment.auto_grade_at = datetime.fromisoformat(req.auto_grade_at.replace("Z", "+00:00"))
+            except:
+                raise HTTPException(status_code=400, detail="自动批改时间格式错误")
     if req.status is not None:
         if req.status not in ["draft", "published", "closed"]:
             raise HTTPException(status_code=400, detail="状态值无效")
@@ -528,6 +620,11 @@ async def list_submissions(
             "submitted_at": s.submitted_at.isoformat(),
             "report": {
                 "score": report.score,
+                "full_score": report.full_score,
+                "status": report.status,
+                "accuracy": report.accuracy,
+                "correct_count": report.correct_count,
+                "wrong_count": report.wrong_count,
                 "feedback": report.feedback,
                 "generated_by": report.generated_by,
                 "created_at": report.created_at.isoformat(),
@@ -615,6 +712,11 @@ async def list_submissions_summary(
             "submitted_at": s.submitted_at.isoformat(),
             "report": {
                 "score": report.score,
+                "full_score": report.full_score,
+                "status": report.status,
+                "accuracy": report.accuracy,
+                "correct_count": report.correct_count,
+                "wrong_count": report.wrong_count,
                 "feedback": report.feedback,
                 "generated_by": report.generated_by,
                 "created_at": report.created_at.isoformat(),
@@ -694,8 +796,14 @@ async def get_grading_report(
         "data": {
             "submission_id": submission_id,
             "score": report.score,
+            "full_score": report.full_score,
+            "status": report.status,
+            "accuracy": report.accuracy,
+            "correct_count": report.correct_count,
+            "wrong_count": report.wrong_count,
             "feedback": report.feedback,
             "detail": json.loads(report.detail),
+            "review_questions": json.loads(report.review_questions) if report.review_questions else [],
             "generated_by": report.generated_by,
             "created_at": report.created_at.isoformat(),
         },
@@ -807,6 +915,11 @@ async def list_my_submissions(
             "submitted_at": s.submitted_at.isoformat(),
             "report": {
                 "score": report.score,
+                "full_score": report.full_score,
+                "status": report.status,
+                "accuracy": report.accuracy,
+                "correct_count": report.correct_count,
+                "wrong_count": report.wrong_count,
                 "feedback": report.feedback,
             } if report else None,
         })
@@ -855,188 +968,7 @@ async def manual_grade(
     return {"code": 0, "data": {"report_id": report.id}}
 
 
-# ── 不安全 JSON 的兼容解析 ──
-# 智能体平台发送的回调 body 可能包含未转义控制字符、不可见空白、单引号等
-_INVISIBLE_WS = re.compile(
-    r'[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f'
-    r'\u00a0\u200b\u200c\u200d\u200e\u200f\ufeff\u3000]'
-)
-_TRAILING_COMMA = re.compile(r',\s*([}\]])')
 
-
-def _try_json(text: str) -> dict | None:
-    """用 strict=False 尝试解析（允许未转义的控制字符）"""
-    try:
-        return json.loads(text, strict=False)
-    except json.JSONDecodeError:
-        return None
-
-
-def _sanitize_text(text: str) -> str:
-    """移除不可见控制字符和特殊空白，保留合法换行和制表符"""
-    return _INVISIBLE_WS.sub('', text)
-
-
-def _fix_single_quotes(text: str) -> str:
-    """将单引号替换为双引号（仅在 JSON 结构区域操作）"""
-    return text.replace("'", '"')
-
-
-def _fix_trailing_commas(text: str) -> str:
-    """去除数组/对象末尾多余逗号"""
-    return _TRAILING_COMMA.sub(r'\1', text)
-
-
-def _unwrap_double_encoded_data(obj: dict) -> dict:
-    """如果 data 字段是 JSON 字符串，二次解码"""
-    d = obj.get("data")
-    if isinstance(d, str):
-        try:
-            obj["data"] = json.loads(d, strict=False)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return obj
-
-
-def parse_callback_body(raw: bytes) -> dict:
-    """
-    解析智能体回调请求体，最大程度兼容各种不规范的 JSON。
-
-    处理顺序：
-      1. UTF-8 解码 + 移除 BOM
-      2. 移除不可见控制字符和特殊空白
-      3. 依次尝试多种修复策略
-    """
-    text = raw.decode("utf-8-sig").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="回调请求体为空")
-
-    # 先清理特殊字符
-    text = _sanitize_text(text)
-
-    steps = [
-        ("原始 body", lambda t: t),
-        ("单引号→双引号", _fix_single_quotes),
-        ("去尾部逗号", _fix_trailing_commas),
-        ("单引号→双引号 + 去尾部逗号",
-         lambda t: _fix_trailing_commas(_fix_single_quotes(t))),
-    ]
-
-    for label, fix in steps:
-        result = _try_json(fix(text))
-        if result:
-            result = _unwrap_double_encoded_data(result)
-            return result
-
-    # 全部策略都失败，尝试按行分段提取关键字段（最坏情况）
-    try:
-        fields = {}
-        for key in ("submission_id", "score", "feedback", "detail", "generated_by"):
-            m = re.search(rf'["\']?{key}["\']?\s*[:=]\s*["\']?([^"\'}}\]]+)["\']?', text)
-            if m:
-                fields[key] = m.group(1).strip()
-        if fields.get("submission_id") and fields.get("score"):
-            return {
-                "data": {
-                    "submission_id": int(fields["submission_id"]),
-                    "score": int(fields["score"]),
-                    "feedback": fields.get("feedback", ""),
-                    "detail": fields.get("detail", "{}"),
-                    "generated_by": fields.get("generated_by", "unknown"),
-                }
-            }
-    except (ValueError, TypeError):
-        pass
-
-    raise HTTPException(
-        status_code=400,
-        detail=f"回调 JSON 解析失败，已尝试所有兼容策略。前200字符: {text[:200]}"
-    )
-
-
-@router.post("/grading-callback")
-async def grading_callback(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    raw = await request.body()
-    print("=" * 60)
-    print("[GRADING CALLBACK] 收到回调请求")
-    print("-" * 60)
-    print(f"[HEADERS]:")
-    for k, v in request.headers.items():
-        print(f"  {k}: {v}")
-    print("-" * 60)
-    print(f"[QUERY PARAMS]: {dict(request.query_params)}")
-    print("-" * 60)
-    print(f"[RAW BODY] ({len(raw)} bytes):")
-    print(raw.decode("utf-8", errors="replace"))
-    print("-" * 60)
-    parsed = parse_callback_body(raw)
-    print(f"[PARSED RESULT]: {json.dumps(parsed, ensure_ascii=False, indent=2)}")
-    print("=" * 60)
-    body = GradingCallbackData(**parsed["data"])
-
-    result = await db.execute(select(Submission).where(Submission.id == body.submission_id))
-    submission = result.scalar_one_or_none()
-    if not submission:
-        raise HTTPException(status_code=404, detail="提交不存在")
-
-    existing_report = await db.execute(
-        select(GradingReport).where(GradingReport.submission_id == body.submission_id)
-    )
-    if existing_report.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="该提交已有批改报告")
-
-    if body.score < 0 or body.score > 100:
-        raise HTTPException(status_code=400, detail="分数必须在 0-100 之间")
-
-    assignment_result = await db.execute(
-        select(Assignment).where(Assignment.id == submission.assignment_id)
-    )
-    assignment = assignment_result.scalar_one_or_none()
-
-    review_status = "confirmed"
-    feedback = body.feedback
-
-    if assignment and assignment.grading_mode == "hybrid":
-        review_status = "pending_review"
-        try:
-            detail_obj = json.loads(body.detail) if isinstance(body.detail, str) else body.detail
-            confidence = detail_obj.get("confidence", 1.0)
-            if confidence < 0.8:
-                feedback += f"\n\n[系统提示：智能体置信度 {confidence:.0%}，建议人工复核]"
-        except:
-            pass
-
-    report = GradingReport(
-        submission_id=body.submission_id,
-        score=body.score,
-        feedback=feedback,
-        detail=body.detail,
-        generated_by=body.generated_by,
-        review_status=review_status,
-    )
-    db.add(report)
-
-    if review_status == "confirmed":
-        submission.status = "graded"
-
-    task_result = await db.execute(
-        select(GradingTask).where(GradingTask.submission_id == body.submission_id)
-    )
-    task = task_result.scalar_one_or_none()
-    if task:
-        task.status = "graded"
-        task.graded_at = datetime.utcnow()
-
-    await _refresh_grading_status(submission.assignment_id, db)
-
-    await db.commit()
-    await db.refresh(report)
-
-    return {"code": 0, "data": {"report_id": report.id}}
 
 
 class ReviewGradeRequest(BaseModel):
@@ -1133,9 +1065,152 @@ async def get_grading_task_status(
             "retry_count": task.retry_count if task else 0,
             "report": {
                 "score": report.score,
+                "full_score": report.full_score,
+                "status": report.status,
+                "accuracy": report.accuracy,
+                "correct_count": report.correct_count,
+                "wrong_count": report.wrong_count,
                 "feedback": report.feedback,
                 "generated_by": report.generated_by,
             } if report else None,
+        },
+    }
+
+
+@router.post("/trigger-grading/{assignment_id}")
+async def trigger_grading(
+    assignment_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    手动触发智能体批改 — 异步执行
+    对作业下所有 pending 且 is_latest=True 的提交进行 AI 批改。
+
+    权限要求：teacher / admin
+    """
+    assignment = await db.get(Assignment, assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+
+    if assignment.status != "published":
+        raise HTTPException(status_code=400, detail="作业未发布")
+
+    sub_result = await db.execute(
+        select(Submission).where(
+            and_(
+                Submission.assignment_id == assignment_id,
+                Submission.status == "pending",
+                Submission.is_latest == True,
+            )
+        )
+    )
+    submissions = sub_result.scalars().all()
+
+    if not submissions:
+        return {"code": 0, "data": {"message": "无待批改的提交", "submission_count": 0}}
+
+    assignment.grading_triggered = True
+    await db.commit()
+
+    async def _run_grading():
+        for submission in submissions:
+            try:
+                async with async_session() as session:
+                    existing = await session.execute(
+                        select(GradingTask).where(GradingTask.submission_id == submission.id)
+                    )
+                    if existing.scalar_one_or_none():
+                        continue
+
+                    images = json.loads(submission.images)
+                    if not images:
+                        continue
+
+                    local_paths = [image_url_to_local_path(url) for url in images]
+                    output_filename = f"stitched_{submission.id}.jpg"
+                    stitched_url = stitch_images(local_paths, output_filename)
+
+                    task = GradingTask(
+                        submission_id=submission.id,
+                        stitched_image_url=stitched_url,
+                        status="pending",
+                    )
+                    session.add(task)
+                    await session.commit()
+                    await session.refresh(task)
+
+                await call_grading_agent(
+                    task_id=task.id,
+                    submission_id=submission.id,
+                    stitched_image_url=stitched_url,
+                    prompt=assignment.grading_prompt,
+                    answer_json=assignment.reference_answer or "",
+                )
+            except Exception as e:
+                logger.error(f"手动触发批改失败: submission_id={submission.id}, error={e}")
+
+    asyncio.create_task(_run_grading())
+
+    return {
+        "code": 0,
+        "data": {
+            "message": "批改任务已启动",
+            "submission_count": len(submissions),
+        },
+    }
+
+
+@router.get("/trigger-status/{assignment_id}")
+async def trigger_grading_status(
+    assignment_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    查询作业下所有提交的批改进度（轮询用）
+
+    权限要求：teacher / admin
+    """
+    result = await db.execute(
+        select(Submission).where(
+            and_(
+                Submission.assignment_id == assignment_id,
+                Submission.is_latest == True,
+            )
+        )
+    )
+    submissions = result.scalars().all()
+
+    total = len(submissions)
+    pending = 0
+    processing = 0
+    graded = 0
+    failed = 0
+
+    for s in submissions:
+        task = (await db.execute(
+            select(GradingTask).where(GradingTask.submission_id == s.id)
+        )).scalar_one_or_none()
+
+        if not task or task.status == "pending":
+            pending += 1
+        elif task.status == "sent":
+            processing += 1
+        elif task.status == "graded":
+            graded += 1
+        elif task.status == "failed":
+            failed += 1
+
+    return {
+        "code": 0,
+        "data": {
+            "total": total,
+            "pending": pending,
+            "processing": processing,
+            "graded": graded,
+            "failed": failed,
+            "done": graded + failed,
         },
     }
 

@@ -127,16 +127,31 @@ export function useAuthStore() {
    */
   async function tryDingTalkLogin() {
     try {
+      const platform = dd.env.platform
+      const corpId = import.meta.env.VITE_DINGTALK_CORP_ID || ''
+      console.log('[免登调试] platform:', platform, 'corpId:', corpId || '(空)')
+
       // 判断是否在钉钉客户端内运行
       // dd.env.platform 返回平台标识，'notInDingTalk' 表示不在钉钉环境中
-      if (dd.env.platform !== 'notInDingTalk') {
+      if (platform !== 'notInDingTalk') {
+        if (!corpId) {
+          console.error('[免登调试] corpId 为空，免登无法执行。请检查 .env.production 文件是否存在。')
+          return
+        }
+
         // 获取钉钉临时授权码 authCode
         const authCode = await new Promise((resolve, reject) => {
           dd.ready(() => {
             dd.runtime.permission.requestAuthCode({
-              corpId: import.meta.env.VITE_DINGTALK_CORP_ID || '',
-              onSuccess: (result) => resolve(result.code),   // 成功返回 authCode
-              onFail: (err) => reject(err),                    // 失败则 reject
+              corpId: corpId,
+              onSuccess: (result) => {
+                console.log('[免登调试] requestAuthCode 成功, code:', result.code?.substring(0, 8) + '...')
+                resolve(result.code)
+              },
+              onFail: (err) => {
+                console.error('[免登调试] requestAuthCode 失败:', JSON.stringify(err))
+                reject(err)
+              },
             })
           })
         })

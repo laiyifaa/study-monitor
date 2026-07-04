@@ -21,13 +21,13 @@
  *   - 各页面组件：import api 后直接调用 api.get/post/put/delete
  *     组件无需关心 token 注入和错误处理，全部由拦截器代理
  *
- * 认证交互时序（请求→401→重登）：
- *   页面调用 api.get('/xxx')
- *     → 请求拦截：从 auth.js 读取 token，注入 Authorization: Bearer xxx
- *     → 后端返回 401（token 过期/无效）
- *     → 响应拦截：检测到 401 + token 存在（说明是登录态过期而非未登录）
- *     → 调用 auth.logout() 清除本地登录态
- *     → 跳转首页 '#' → App.vue onMounted 检测未登录 → 重新 tryDingTalkLogin
+ * 401 竞态条件处理：
+ *   免登场景下，页面加载时会发出无 token 的请求（如 my-progress），
+ *   这些请求的 401 响应可能在免登完成后才到达。
+ *   如果 401 拦截器此时清掉刚写入的 token，用户就会退出登录。
+ *   解决方案：在请求 config 上记录发送时使用的 token（_sentToken），
+ *   401 时只在「失败请求的 token === 当前 token」时才执行登出，
+ *   从而区分「过期 token 的 401」和「无 token 旧请求的 401」。
  * ============================================================================
  */
 
@@ -51,12 +51,8 @@ const api = axios.create({
  * 请求拦截器：自动注入 Bearer Token
  *
  * 每个发往后端的请求都会经过此拦截器，自动在 Header 中附加 JWT token。
- * 这样各业务组件发起请求时无需手动传递 token，降低遗漏风险。
- *
- * token 读取方式：auth.token.value || auth.token
- * - auth.token 是 Vue3 的 ref 对象，正常情况通过 .value 读取
- * - 但某些边界情况下（如热更新/循环依赖）可能拿到原始字符串
- * - 双重读取确保兼容性，避免因 ref 包装导致 token 为空而请求失败
+ * 同时在 config._sentToken 中记录本次请求使用的 token，
+ * 供响应拦截器判断 401 是否来自当前有效的 token。
  */
 api.interceptors.request.use((config) => {
   const auth = useAuthStore()
@@ -66,6 +62,8 @@ api.interceptors.request.use((config) => {
     // JWT 标准格式：Authorization: Bearer <token>
     // 后端 FastAPI 的 OAuth2PasswordBearer 会解析此 Header
     config.headers.Authorization = `Bearer ${tokenVal}`
+    // 记录本次请求使用的 token，用于 401 时判断是否是当前 token
+    config._sentToken = tokenVal
   }
   return config
 })
@@ -76,34 +74,29 @@ api.interceptors.request.use((config) => {
  * 成功响应：直接原样返回，由业务组件处理数据
  * 错误响应：重点处理 401（未授权），其他错误直接抛出
  *
- * 401 处理的关键区分：
- * - 已登录状态收到 401 → token 过期/无效 → 清除登录态 + 跳转首页
- *   清除后 App.vue 会重新触发 tryDingTalkLogin，实现自动重登
- * - 未登录状态收到 401 → 本来就没 token，不做特殊处理
- *   避免在用户首次访问课程列表时被重定向，影响体验
+ * 401 处理逻辑（防竞态）：
+ * - 免登场景：页面加载时发出无 token 请求 → 免登成功写入 token →
+ *   无 token 请求的 401 延迟到达 → 不应清除刚写入的 token
+ * - 真实过期：已登录用户的 token 过期 → 401 → 应清除登录态
  *
- * 跳转方式用 window.location.hash 而非 router.push：
- * - 拦截器在 Vue 组件上下文之外，可能拿不到 router 实例
- * - 直接修改 hash 简单可靠，且会触发 router 的路由匹配
+ * 判断依据：config._sentToken 是否等于当前 token
+ * - 相等：说明是当前 token 过期，需要登出
+ * - 不等或无值：说明是旧请求/无 token 请求的 401，忽略
  */
 api.interceptors.response.use(
   (response) => response,  // 成功响应，原样返回
   (error) => {
     if (error.response?.status === 401) {
-      // 免登进行中时，忽略 401（这些是免登完成前发出的旧请求）
       const auth = useAuthStore()
-      if (auth.dingtalkLoginInProgress) {
-        return Promise.reject(error)
-      }
-      // 判断当前是否有 token：有 token 说明是"登录过期"，无 token 说明是"未登录"
-      // 仅在登录过期时清除登录态，避免未登录用户的首次请求触发登出逻辑
-      const tokenVal = auth.token.value || auth.token
-      if (tokenVal) {
-        // 【交互】调用 auth.js 的 logout，清除 token + user + localStorage
+      const currentToken = auth.token.value || auth.token
+      const sentToken = error.config?._sentToken
+
+      // 只在「失败请求使用的 token === 当前 token」时才登出
+      // 这排除了两种不需要登出的情况：
+      // 1. 请求没有携带 token（sentToken 为空）→ 免登前的旧请求
+      // 2. 请求携带的 token 与当前 token 不同 → 已被新 token 替代的旧请求
+      if (sentToken && sentToken === currentToken) {
         auth.logout()
-        // Token 过期时跳转登录页，而非首页
-        // 首页是公开页面，用户可能不知道为何看到空数据
-        // 登录页明确提示需要重新认证，体验更好
         if (window.location.hash !== '#/login') {
           window.location.hash = '#/login'
         }

@@ -220,21 +220,89 @@ async def delete_section(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    删除小节（同时删除本地视频文件）
+    删除小节（级联删除所有关联数据）
+
+    级联删除顺序：
+    grading_reports → grading_tasks → submissions → assignments → section_feedbacks
+    → heartbeat_logs → study_sessions → section(含视频)
 
     权限要求：【teacher / admin】
     """
+    from app.models.models import (
+        Assignment, Submission, GradingReport, GradingTask,
+        SectionFeedback, StudySession, HeartbeatLog,
+    )
+
     result = await db.execute(select(Section).where(Section.id == section_id))
     section = result.scalar_one_or_none()
     if not section:
         raise HTTPException(status_code=404, detail="小节不存在")
 
-    # 删除本地视频文件
+    # 1. 作业 → 提交 → 批改报告/批改任务
+    asgn_result = await db.execute(
+        select(Assignment).where(Assignment.section_id == section_id)
+    )
+    assignments = asgn_result.scalars().all()
+    assignment_ids = [a.id for a in assignments]
+
+    if assignment_ids:
+        sub_result = await db.execute(
+            select(Submission).where(Submission.assignment_id.in_(assignment_ids))
+        )
+        submissions = sub_result.scalars().all()
+        submission_ids = [s.id for s in submissions]
+
+        if submission_ids:
+            await db.execute(
+                GradingReport.__table__.delete().where(
+                    GradingReport.submission_id.in_(submission_ids)
+                )
+            )
+            await db.execute(
+                GradingTask.__table__.delete().where(
+                    GradingTask.submission_id.in_(submission_ids)
+                )
+            )
+        await db.execute(
+            Submission.__table__.delete().where(
+                Submission.assignment_id.in_(assignment_ids)
+            )
+        )
+    await db.execute(
+        Assignment.__table__.delete().where(Assignment.section_id == section_id)
+    )
+
+    # 2. 小节反馈
+    await db.execute(
+        SectionFeedback.__table__.delete().where(
+            SectionFeedback.section_id == section_id
+        )
+    )
+
+    # 3. 学习会话和心跳日志
+    sess_result = await db.execute(
+        select(StudySession).where(StudySession.section_id == section_id)
+    )
+    sessions = sess_result.scalars().all()
+    session_uuids = [s.session_id for s in sessions]
+
+    if session_uuids:
+        await db.execute(
+            HeartbeatLog.__table__.delete().where(
+                HeartbeatLog.session_id.in_(session_uuids)
+            )
+        )
+    await db.execute(
+        StudySession.__table__.delete().where(StudySession.section_id == section_id)
+    )
+
+    # 4. 删除本地视频文件
     if section.video_type == "local" and section.video_url:
         local_path = os.path.join(UPLOAD_DIR, section.video_url)
         if os.path.exists(local_path):
             os.remove(local_path)
 
+    # 5. 删除小节
     await db.delete(section)
     await db.commit()
     return {"code": 0, "data": {"id": section_id}}

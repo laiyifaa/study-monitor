@@ -90,7 +90,11 @@ api.interceptors.response.use(
   (response) => response,  // 成功响应，原样返回
   (error) => {
     if (error.response?.status === 401) {
+      // 免登进行中时，忽略 401（这些是免登完成前发出的旧请求）
       const auth = useAuthStore()
+      if (auth.dingtalkLoginInProgress) {
+        return Promise.reject(error)
+      }
       // 判断当前是否有 token：有 token 说明是"登录过期"，无 token 说明是"未登录"
       // 仅在登录过期时清除登录态，避免未登录用户的首次请求触发登出逻辑
       const tokenVal = auth.token.value || auth.token

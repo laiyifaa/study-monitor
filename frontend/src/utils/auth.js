@@ -67,6 +67,13 @@ const token = ref(localStorage.getItem('token') || '')
 const user = ref(JSON.parse(localStorage.getItem('user') || 'null'))
 
 /**
+ * 免登进行中标记
+ * - true：免登流程正在执行中，401 拦截器不应清除 token（免登完成前的旧请求）
+ * - false：免登已完成或未触发，401 正常处理
+ */
+const dingtalkLoginInProgress = ref(false)
+
+/**
  * 认证 Store 工厂函数
  *
  * 返回认证相关的所有状态和方法，供组件和其他模块使用。
@@ -126,6 +133,7 @@ export function useAuthStore() {
    *   缺少 corpId 时 authCode 获取会失败，但不影响非钉钉环境使用。
    */
   async function tryDingTalkLogin() {
+    dingtalkLoginInProgress.value = true
     try {
       const platform = dd.env.platform
       const corpId = import.meta.env.VITE_DINGTALK_CORP_ID || ''
@@ -170,6 +178,8 @@ export function useAuthStore() {
       // 免登失败可能的原因：网络异常、corpId 无效、authCode 过期、后端异常
       // 不阻断应用运行，用户可手动刷新重试
       console.warn('钉钉免登失败:', e)
+    } finally {
+      dingtalkLoginInProgress.value = false
     }
   }
 
@@ -208,5 +218,5 @@ export function useAuthStore() {
     localStorage.removeItem('user')
   }
 
-  return { token, user, isLoggedIn, isStudent, isTeacher, tryDingTalkLogin, setAuth, logout }
+  return { token, user, isLoggedIn, isStudent, isTeacher, tryDingTalkLogin, setAuth, logout, dingtalkLoginInProgress }
 }

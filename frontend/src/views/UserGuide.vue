@@ -9,6 +9,19 @@
     </div>
     <h2>使用指南</h2>
 
+    <!-- 下载按钮 -->
+    <div class="download-bar">
+      <span class="download-label">离线版本：</span>
+      <a class="download-btn pdf" href="/docs/使用指南.pdf" download="在线学习平台使用指南.pdf">
+        <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载 PDF
+      </a>
+      <a class="download-btn word" href="/docs/使用指南.docx" download="在线学习平台使用指南.docx">
+        <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载 Word
+      </a>
+    </div>
+
     <!-- 角色切换标签 -->
     <div class="role-tabs">
       <button :class="['tab', { active: activeRole === 'student' }]" @click="activeRole = 'student'">学生</button>
@@ -172,7 +185,7 @@
         <table class="info-table">
           <tr><td class="label">技术栈</td><td>Python FastAPI + MySQL + Redis + Nginx</td></tr>
           <tr><td class="label">前端</td><td>Vue3 + Vite + DingTalk JSAPI（H5微应用）</td></tr>
-          <tr><td class="label">部署</td><td>Docker Compose，服务器 115.223.38.172:1001</td></tr>
+          <tr><td class="label">部署</td><td>Docker Compose，服务器 115.223.38.90:1001</td></tr>
           <tr><td class="label">容器</td><td>study-monitor-backend / frontend / mysql / redis</td></tr>
           <tr><td class="label">数据库</td><td>MySQL 8.0，数据库名 study_monitor</td></tr>
         </table>
@@ -261,7 +274,65 @@ onMounted(() => {
 .guide-page h2 {
   font-size: 20px;
   color: #333;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+}
+
+/* 下载按钮区域 */
+.download-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: #f9f9fb;
+  border-radius: 8px;
+  border: 1px solid #eef0f3;
+}
+
+.download-label {
+  font-size: 13px;
+  color: #999;
+  white-space: nowrap;
+}
+
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.download-btn .download-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.download-btn.pdf {
+  background: #fff1f0;
+  color: #cf1322;
+  border-color: #ffa39e;
+}
+.download-btn.pdf:hover {
+  background: #ff7875;
+  color: #fff;
+}
+
+.download-btn.word {
+  background: #e6f7ff;
+  color: #096dd9;
+  border-color: #91d5ff;
+}
+.download-btn.word:hover {
+  background: #1890ff;
+  color: #fff;
 }
 
 /* 角色标签切换 */

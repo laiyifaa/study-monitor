@@ -135,49 +135,56 @@ export function useAuthStore() {
   async function tryDingTalkLogin() {
     dingtalkLoginInProgress.value = true
     try {
-      const platform = dd.env.platform
       const corpId = import.meta.env.VITE_DINGTALK_CORP_ID || ''
-      console.log('[免登调试] platform:', platform, 'corpId:', corpId || '(空)')
+      console.log('[免登调试] dd.env.platform:', dd.env.platform, 'corpId:', corpId || '(空)', 'dd.version:', dd.version)
 
-      // 判断是否在钉钉客户端内运行
-      // dd.env.platform 返回平台标识，'notInDingTalk' 表示不在钉钉环境中
-      if (platform !== 'notInDingTalk') {
-        if (!corpId) {
-          console.error('[免登调试] corpId 为空，免登无法执行。请检查 .env.production 文件是否存在。')
-          return
-        }
+      if (!corpId) {
+        console.error('[免登调试] corpId 为空，免登无法执行。请检查 .env.production 文件是否存在。')
+        return
+      }
 
-        // 获取钉钉临时授权码 authCode
-        const authCode = await new Promise((resolve, reject) => {
-          dd.ready(() => {
-            dd.runtime.permission.requestAuthCode({
-              corpId: corpId,
-              onSuccess: (result) => {
-                console.log('[免登调试] requestAuthCode 成功, code:', result.code?.substring(0, 8) + '...')
-                resolve(result.code)
-              },
-              onFail: (err) => {
-                console.error('[免登调试] requestAuthCode 失败:', JSON.stringify(err))
-                reject(err)
-              },
-            })
+      // 兼容第三方企业应用：无论 dd.env.platform 返回什么值，
+      // 只要在钉钉客户端内打开，dd.ready 都会触发。
+      // 所以不再依赖 dd.env.platform 判断，直接在 dd.ready 中尝试获取 authCode。
+      // 如果不在钉钉环境，dd.ready 永远不会回调，用超时机制兜底。
+      const authCode = await new Promise((resolve, reject) => {
+        // 5秒超时：如果不在钉钉环境，dd.ready 不会触发，避免永远挂起
+        const timeout = setTimeout(() => {
+          reject(new Error('dd.ready 超时（5秒），可能不在钉钉客户端环境'))
+        }, 5000)
+
+        dd.ready(() => {
+          clearTimeout(timeout)
+          console.log('[免登调试] dd.ready 已触发，开始 requestAuthCode')
+          dd.runtime.permission.requestAuthCode({
+            corpId: corpId,
+            onSuccess: (result) => {
+              console.log('[免登调试] requestAuthCode 成功, code:', result.code?.substring(0, 8) + '...')
+              resolve(result.code)
+            },
+            onFail: (err) => {
+              console.error('[免登调试] requestAuthCode 失败:', JSON.stringify(err))
+              reject(err)
+            },
           })
         })
+      })
 
-        // 【交互】通过 api.js 向后端发送 authCode 换取 JWT
-        // 后端接口：POST /api/auth/dingtalk，参数 { auth_code: string }
-        // 后端逻辑：authCode → 钉钉服务端换用户信息 → 创建/查找用户 → 签发 JWT
-        const resp = await api.post('/auth/dingtalk', { auth_code: authCode })
-        if (resp.data.code === 0) {
-          // 后端返回 code=0 表示成功，data 中包含 token 和 user
-          setAuth(resp.data.data.token, resp.data.data.user)
-        }
+      // 【交互】通过 api.js 向后端发送 authCode 换取 JWT
+      // 后端接口：POST /api/auth/dingtalk，参数 { auth_code: string }
+      // 后端逻辑：authCode → 钉钉服务端换用户信息 → 创建/查找用户 → 签发 JWT
+      const resp = await api.post('/auth/dingtalk', { auth_code: authCode })
+      if (resp.data.code === 0) {
+        // 后端返回 code=0 表示成功，data 中包含 token 和 user
+        setAuth(resp.data.data.token, resp.data.data.user)
+        console.log('[免登调试] 免登成功，用户:', resp.data.data.user.name)
+      } else {
+        console.error('[免登调试] 后端返回失败:', resp.data.msg)
       }
-      // 不在钉钉环境：静默跳过，不打日志（避免浏览器调试时刷屏）
     } catch (e) {
-      // 免登失败可能的原因：网络异常、corpId 无效、authCode 过期、后端异常
+      // 免登失败可能的原因：网络异常、corpId 无效、authCode 过期、后端异常、不在钉钉环境
       // 不阻断应用运行，用户可手动刷新重试
-      console.warn('钉钉免登失败:', e)
+      console.warn('[免登调试] 钉钉免登失败:', e?.message || e)
     } finally {
       dingtalkLoginInProgress.value = false
     }

@@ -42,10 +42,10 @@
         <RingGauge label="交换分区" :percent="data.server.swap_percent" :alert="data.server.swap_percent > 90" :info="'Swap'" color="#fa8c16" />
       </div>
       <div class="mini-card-row">
-        <MiniCard emoji="&#8593;" label="上行" :value="data.server.net_upload_mbps" unit="Mbps" :max="480" />
-        <MiniCard emoji="&#8595;" label="下行" :value="data.server.net_download_mbps" unit="Mbps" :max="400" />
-        <MiniCard emoji="&#8592;" label="磁盘读" :value="data.server.disk_io_read_mbs" unit="MB/s" :max="170" />
-        <MiniCard emoji="&#8594;" label="磁盘写" :value="data.server.disk_io_write_mbs" unit="MB/s" :max="70" />
+        <MiniCard emoji="&#8593;" label="上行" :value="data.server.net_upload_mbps" unit="Mbps" :max="1000" />
+        <MiniCard emoji="&#8595;" label="下行" :value="data.server.net_download_mbps" unit="Mbps" :max="1000" />
+        <MiniCard emoji="&#8592;" label="磁盘读" :value="data.server.disk_io_read_mbs" unit="MB/s" :max="300" />
+        <MiniCard emoji="&#8594;" label="磁盘写" :value="data.server.disk_io_write_mbs" unit="MB/s" :max="200" />
       </div>
     </div>
 

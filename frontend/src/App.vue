@@ -58,9 +58,6 @@
     </div>
   </header>
 
-  <!-- 免登调试横幅（登录页+未登录时显示） -->
-  <div v-if="debugMsg && !auth.isLoggedIn.value" class="debug-banner">{{ debugMsg }}</div>
-
   <!-- 路由出口：所有页面组件（CourseList、StudentLearn、TeacherDashboard...）
        都在此处渲染，由 router/index.js 的路由表决定显示哪个 -->
   <router-view />
@@ -105,9 +102,6 @@ const auth = useAuthStore()
 /** ============ 未读公告数 ============ */
 const unreadCount = ref(0)
 
-/** ============ 免登调试信息 ============ */
-const debugMsg = ref('')
-
 async function fetchUnreadCount() {
   if (!auth.isLoggedIn.value) return
   try {
@@ -141,7 +135,6 @@ const showHeader = computed(() => {
 const roleLabel = computed(() => {
   const role = auth.user.value?.role
   if (role === 'teacher') return '教师'
-  if (role === 'admin') return '管理员'
   if (role === 'admin') return '管理员'
   return '学生'
 })
@@ -207,32 +200,15 @@ watch(() => route.path, (newPath, oldPath) => {
 onMounted(async () => {
   // 应用首次加载/刷新时，检查是否已有有效 token
   if (!auth.isLoggedIn.value) {
-    // 尝试钉钉免登：显示调试信息
-    debugMsg.value = '免登检测中...'
+    // 尝试钉钉免登
     try {
-      const dd = await import('dingtalk-jsapi')
-      debugMsg.value = `dd.platform=${dd.default?.env?.platform || '?'}, dd.version=${dd.default?.version || '?'}`
-      
-      // 等待 1 秒让 dd.ready 有机会触发
-      await new Promise(r => setTimeout(r, 1000))
-      
-      const corpId = import.meta.env.VITE_DINGTALK_CORP_ID || ''
-      debugMsg.value += ` | corpId=${corpId ? '已设置' : '空!'}`
-      
       await auth.tryDingTalkLogin()
-      
-      if (auth.isLoggedIn.value) {
-        debugMsg.value = ''
-      } else {
-        debugMsg.value += ' | 免登未成功，请截图此信息反馈'
-      }
     } catch (e) {
-      debugMsg.value += ` | 异常: ${e?.message || e}`
+      // 免登失败静默降级，用户以游客身份浏览
     }
   }
   // 登录后获取未读公告数
   if (auth.isLoggedIn.value) {
-    debugMsg.value = ''
     fetchUnreadCount()
     // 每60秒轮询一次未读数
     setInterval(fetchUnreadCount, 60000)
@@ -259,16 +235,6 @@ function goHome() {
 
 /* 全局字体与背景色 */
 body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f5f7fa; color: #333; }
-
-.debug-banner {
-  background: #fff3cd;
-  color: #856404;
-  padding: 8px 16px;
-  font-size: 12px;
-  text-align: center;
-  border-bottom: 1px solid #ffc107;
-  word-break: break-all;
-}
 
 /* ====== 全局顶栏样式 ====== */
 .app-header {

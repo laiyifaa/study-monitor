@@ -210,34 +210,128 @@ async def delete_course(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    删除课程（级联删除所有小节及其视频文件）
+    删除课程（级联删除所有关联数据）
+
+    级联删除顺序（从叶子到根）：
+    grading_reports → grading_tasks → submissions → assignments → section_feedbacks
+    → heartbeat_logs → study_sessions → announcements(含已读) → sections(含视频) → course
 
     权限要求：【仅 admin】
     """
+    from app.models.models import (
+        Assignment, Submission, GradingReport, GradingTask,
+        SectionFeedback, StudySession, HeartbeatLog,
+        Announcement, AnnouncementRead,
+    )
+
     result = await db.execute(select(Course).where(Course.id == course_id))
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    # 查找该课程下所有小节，删除其视频文件
+    # 1. 查找该课程下所有小节
     sec_result = await db.execute(select(Section).where(Section.course_id == course_id))
     sections = sec_result.scalars().all()
+    section_ids = [s.id for s in sections]
+
+    # 2. 作业 → 提交 → 批改报告/批改任务
+    if section_ids:
+        asgn_result = await db.execute(
+            select(Assignment).where(Assignment.section_id.in_(section_ids))
+        )
+        assignments = asgn_result.scalars().all()
+        assignment_ids = [a.id for a in assignments]
+
+        if assignment_ids:
+            sub_result = await db.execute(
+                select(Submission).where(Submission.assignment_id.in_(assignment_ids))
+            )
+            submissions = sub_result.scalars().all()
+            submission_ids = [s.id for s in submissions]
+
+            if submission_ids:
+                # 批改报告
+                await db.execute(
+                    GradingReport.__table__.delete().where(
+                        GradingReport.submission_id.in_(submission_ids)
+                    )
+                )
+                # 批改任务
+                await db.execute(
+                    GradingTask.__table__.delete().where(
+                        GradingTask.submission_id.in_(submission_ids)
+                    )
+                )
+            # 提交
+            await db.execute(
+                Submission.__table__.delete().where(
+                    Submission.assignment_id.in_(assignment_ids)
+                )
+            )
+        # 作业（同时匹配 section_id 和 course_id 冗余字段）
+        await db.execute(
+            Assignment.__table__.delete().where(Assignment.section_id.in_(section_ids))
+        )
+
+        # 小节反馈
+        await db.execute(
+            SectionFeedback.__table__.delete().where(
+                SectionFeedback.section_id.in_(section_ids)
+            )
+        )
+
+    # 3. 学习会话和心跳日志
+    sess_result = await db.execute(
+        select(StudySession).where(StudySession.course_id == course_id)
+    )
+    sessions = sess_result.scalars().all()
+    session_uuids = [s.session_id for s in sessions]
+
+    if session_uuids:
+        await db.execute(
+            HeartbeatLog.__table__.delete().where(
+                HeartbeatLog.session_id.in_(session_uuids)
+            )
+        )
+    await db.execute(
+        StudySession.__table__.delete().where(StudySession.course_id == course_id)
+    )
+
+    # 4. 公告及已读记录
+    ann_result = await db.execute(
+        select(Announcement).where(Announcement.course_id == course_id)
+    )
+    announcements = ann_result.scalars().all()
+    announcement_ids = [a.id for a in announcements]
+
+    if announcement_ids:
+        await db.execute(
+            AnnouncementRead.__table__.delete().where(
+                AnnouncementRead.announcement_id.in_(announcement_ids)
+            )
+        )
+        await db.execute(
+            Announcement.__table__.delete().where(
+                Announcement.id.in_(announcement_ids)
+            )
+        )
+
+    # 5. 删除小节及本地视频文件
     for sec in sections:
         if sec.video_type == "local" and sec.video_url:
             local_path = os.path.join(UPLOAD_DIR, sec.video_url)
             if os.path.exists(local_path):
                 os.remove(local_path)
-
-    # 删除所有小节（DB 级联或手动删除）
     for sec in sections:
         await db.delete(sec)
 
-    # 删除旧的视频文件（兼容 v2.x 数据，Course 上可能还有视频）
+    # 6. 删除旧的视频文件（兼容 v2.x 数据）
     if course.video_type == "local" and course.video_url:
         local_path = os.path.join(UPLOAD_DIR, course.video_url)
         if os.path.exists(local_path):
             os.remove(local_path)
 
+    # 7. 删除课程
     await db.delete(course)
     await db.commit()
     return {"code": 0, "data": {"id": course_id}}

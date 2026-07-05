@@ -136,7 +136,6 @@ const roleLabel = computed(() => {
   const role = auth.user.value?.role
   if (role === 'teacher') return '教师'
   if (role === 'admin') return '管理员'
-  if (role === 'admin') return '管理员'
   return '学生'
 })
 
@@ -201,9 +200,12 @@ watch(() => route.path, (newPath, oldPath) => {
 onMounted(async () => {
   // 应用首次加载/刷新时，检查是否已有有效 token
   if (!auth.isLoggedIn.value) {
-    // 尝试钉钉免登：检测钉钉环境 → 获取 authCode → 后端换 JWT
-    // 如果不在钉钉环境（如本地浏览器调试），此函数会静默跳过
-    await auth.tryDingTalkLogin()
+    // 尝试钉钉免登
+    try {
+      await auth.tryDingTalkLogin()
+    } catch (e) {
+      // 免登失败静默降级，用户以游客身份浏览
+    }
   }
   // 登录后获取未读公告数
   if (auth.isLoggedIn.value) {

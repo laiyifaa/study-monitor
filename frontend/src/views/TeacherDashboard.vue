@@ -44,7 +44,7 @@
     <!-- 新建课程按钮 + 管理后台入口 + 编辑/删除课程 -->
     <div class="top-actions">
       <router-link to="/course-edit/0" class="btn primary">+ 新建课程</router-link>
-      <router-link to="/" class="btn" target="_blank">预览课程</router-link>
+      <router-link to="/" class="btn">预览课程</router-link>
       <router-link to="/admin" class="btn">管理后台</router-link>
       <router-link v-if="isOpsOrAdmin" to="/ops" class="btn info">运维面板</router-link>
       <template v-if="selectedCourseId">

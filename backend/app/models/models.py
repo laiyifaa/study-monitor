@@ -268,7 +268,7 @@ class Assignment(Base):
         course_id         — 所属课程 ID（冗余字段，方便按课程批量查询作业）
         title             — 作业标题
         description       — 题目描述/要求（Markdown 或纯文本）
-        question_files    — 题目文件 URL 列表（图片/PDF，JSON 数组）
+        question_files    — 题目文件 URL 列表（图片/PDF/Word，JSON 数组）
     grading_prompt    — 评分标准/批改提示词（传递给智能体）
     deadline          — 提交截止时间（迟交仍可提交，但标记 is_late=True）
     auto_grade_at     — 智能体自动批改时间（null=截止时间到即触发）

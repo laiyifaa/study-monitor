@@ -31,13 +31,12 @@ API 列表：
         POST   /api/homework/upload                    — 上传作业图片
 """
 
-import asyncio
 import os
 import re
 import json
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -277,8 +276,8 @@ async def upload_question_file(
         raise HTTPException(status_code=400, detail="未选择文件")
 
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"]:
-        raise HTTPException(status_code=400, detail="仅支持 jpg/jpeg/png/gif/webp/pdf 格式")
+    if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".doc", ".docx"]:
+        raise HTTPException(status_code=400, detail="仅支持 jpg/jpeg/png/gif/webp/pdf/doc/docx 格式")
 
     question_dir = os.path.join(HOMEWORK_UPLOAD_DIR, "questions")
     os.makedirs(question_dir, exist_ok=True)
@@ -1080,6 +1079,7 @@ async def get_grading_task_status(
 @router.post("/trigger-grading/{assignment_id}")
 async def trigger_grading(
     assignment_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1150,7 +1150,7 @@ async def trigger_grading(
             except Exception as e:
                 logger.error(f"手动触发批改失败: submission_id={submission.id}, error={e}")
 
-    asyncio.create_task(_run_grading())
+    background_tasks.add_task(_run_grading)
 
     return {
         "code": 0,

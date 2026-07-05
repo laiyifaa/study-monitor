@@ -9,6 +9,23 @@
     </div>
     <h2>使用指南</h2>
 
+      <!-- 下载按钮 -->
+    <div class="download-bar">
+      <span class="download-label">离线版本：</span>
+      <a class="download-btn pdf" href="/docs/使用指南.pdf" download="在线学习平台使用指南.pdf">
+        <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载 PDF
+      </a>
+      <a class="download-btn word" href="/docs/使用指南.docx" download="在线学习平台使用指南.docx">
+        <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载 Word
+      </a>
+      <a class="download-btn skill" href="/docs/在线学习平台助手技能.zip" download="在线学习平台助手技能.zip">
+        <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载智能体技能包
+      </a>
+    </div>
+
     <!-- 角色切换标签 -->
     <div class="role-tabs">
       <button :class="['tab', { active: activeRole === 'student' }]" @click="activeRole = 'student'">学生</button>
@@ -121,6 +138,67 @@
       </section>
 
       <section class="guide-section">
+        <h3>智能体技能接入</h3>
+        <p>平台提供「在线学习平台助手」智能体技能（Skill），支持通过 AI 智能体自动执行教学管理操作，无需手动逐项操作。</p>
+
+        <div class="skill-card">
+          <div class="skill-card-header">
+            <span class="skill-badge">Skill</span>
+            <span class="skill-name">在线学习平台助手</span>
+          </div>
+          <p class="skill-desc">对接本平台 API，让 AI 智能体代为执行课程管理、视频上传、进度查询、统计汇总、提醒推送、报表导出等操作。</p>
+        </div>
+
+        <h4 style="margin:12px 0 6px;font-size:14px;color:#333;">支持的操作</h4>
+        <div class="skill-grid">
+          <div class="skill-item">
+            <span class="skill-item-icon">&#128218;</span>
+            <span>课程创建与编辑</span>
+          </div>
+          <div class="skill-item">
+            <span class="skill-item-icon">&#127909;</span>
+            <span>视频上传与管理</span>
+          </div>
+          <div class="skill-item">
+            <span class="skill-item-icon">&#128200;</span>
+            <span>学习进度查询统计</span>
+          </div>
+          <div class="skill-item">
+            <span class="skill-item-icon">&#128227;</span>
+            <span>发送学习提醒</span>
+          </div>
+          <div class="skill-item">
+            <span class="skill-item-icon">&#128196;</span>
+            <span>导出学习报表</span>
+          </div>
+          <div class="skill-item">
+            <span class="skill-item-icon">&#128101;</span>
+            <span>学生完成情况汇总</span>
+          </div>
+        </div>
+
+        <h4 style="margin:12px 0 6px;font-size:14px;color:#333;">接入步骤</h4>
+        <ol>
+          <li>在本平台生成 API Key：管理后台 → 找到你的用户 → 点击「生成 API Key」</li>
+          <li>点击页面上方「下载智能体技能包」，获取技能配置文件</li>
+          <li>将技能包导入你的 AI 智能体（如星辰超级智能体）</li>
+          <li>在智能体对话中提供服务器地址和 API Key 即可开始使用</li>
+        </ol>
+
+        <h4 style="margin:12px 0 6px;font-size:14px;color:#333;">使用示例</h4>
+        <div class="chat-demo">
+          <div class="chat-bubble user">帮我看看学生学得怎么样</div>
+          <div class="chat-bubble bot">📊 高中数学必修一 - 集合与函数（要求60分钟）<br>&nbsp;&nbsp;完成率: 60% (3/5人)<br>&nbsp;&nbsp;✅ 已完成: 王小明(62分), 李小红(90分), 陈思思(90分)<br>&nbsp;&nbsp;⚠️ 未完成: 刘大伟(55分/差5分), 赵天宇(10分/差50分)</div>
+        </div>
+        <div class="chat-demo">
+          <div class="chat-bubble user">帮我建个新课"初高中衔接化学"，传视频上去</div>
+          <div class="chat-bubble bot">✅ 已创建课程「初高中衔接化学」(ID=18)<br>✅ 已上传第1讲 视频 (80MB)<br>✅ 已上传第2讲 视频 (118MB)<br>... 共12个章节全部上传完成</div>
+        </div>
+
+        <div class="tip" style="margin-top:12px;">提示：技能包内含 SKILL.md（技能定义）和 API 参考文档，技术细节请参阅附件。Teacher 和 Admin 角色均可使用，仅「删除课程」和「用户管理」限定 Admin。</div>
+      </section>
+
+      <section class="guide-section">
         <h3>管理用户</h3>
         <p>在「管理后台」（教师/管理员可见）可查看所有用户列表、修改用户角色、分配班级、生成 API Key。</p>
       </section>
@@ -172,7 +250,7 @@
         <table class="info-table">
           <tr><td class="label">技术栈</td><td>Python FastAPI + MySQL + Redis + Nginx</td></tr>
           <tr><td class="label">前端</td><td>Vue3 + Vite + DingTalk JSAPI（H5微应用）</td></tr>
-          <tr><td class="label">部署</td><td>Docker Compose，服务器 115.223.38.172:1001</td></tr>
+          <tr><td class="label">部署</td><td>Docker Compose，服务器 115.223.38.90:1001</td></tr>
           <tr><td class="label">容器</td><td>study-monitor-backend / frontend / mysql / redis</td></tr>
           <tr><td class="label">数据库</td><td>MySQL 8.0，数据库名 study_monitor</td></tr>
         </table>
@@ -261,7 +339,65 @@ onMounted(() => {
 .guide-page h2 {
   font-size: 20px;
   color: #333;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+}
+
+/* 下载按钮区域 */
+.download-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: #f9f9fb;
+  border-radius: 8px;
+  border: 1px solid #eef0f3;
+}
+
+.download-label {
+  font-size: 13px;
+  color: #999;
+  white-space: nowrap;
+}
+
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.download-btn .download-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.download-btn.pdf {
+  background: #fff1f0;
+  color: #cf1322;
+  border-color: #ffa39e;
+}
+.download-btn.pdf:hover {
+  background: #ff7875;
+  color: #fff;
+}
+
+.download-btn.word {
+  background: #e6f7ff;
+  color: #096dd9;
+  border-color: #91d5ff;
+}
+.download-btn.word:hover {
+  background: #1890ff;
+  color: #fff;
 }
 
 /* 角色标签切换 */
@@ -381,5 +517,109 @@ code {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 下载按钮 - 技能包 */
+.download-btn.skill {
+  background: #f6ffed;
+  color: #389e0d;
+  border-color: #b7eb8f;
+}
+.download-btn.skill:hover {
+  background: #52c41a;
+  color: #fff;
+}
+
+/* 技能卡片 */
+.skill-card {
+  background: linear-gradient(135deg, #f0f5ff 0%, #e6fffb 100%);
+  border: 1px solid #d6e4ff;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 10px 0;
+}
+
+.skill-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.skill-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #1890ff, #722ed1);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.skill-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.skill-desc {
+  font-size: 13px;
+  color: #666;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* 技能功能网格 */
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.skill-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #fafafa;
+  border-radius: 6px;
+  border: 1px solid #f0f0f0;
+  font-size: 13px;
+  color: #444;
+}
+
+.skill-item-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+/* 对话示例 */
+.chat-demo {
+  margin-bottom: 8px;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.chat-bubble.user {
+  background: #1890ff;
+  color: #fff;
+  margin-left: auto;
+  border-bottom-right-radius: 2px;
+  text-align: right;
+}
+
+.chat-bubble.bot {
+  background: #f5f5f5;
+  color: #333;
+  margin-right: auto;
+  border-bottom-left-radius: 2px;
 }
 </style>

@@ -25,8 +25,8 @@
             <h4>题目文件</h4>
             <div class="question-files-list">
               <div v-for="(file, i) in assignmentMap[section.id].question_files" :key="i" class="question-file">
-                <img v-if="!file.endsWith('.pdf')" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
-                <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">查看 PDF</a>
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
+                <a v-else :href="getMediaUrl(file)" target="_blank" class="file-link">{{ fileLabel(file) }}</a>
               </div>
             </div>
           </div>
@@ -249,8 +249,29 @@ function getMediaUrl(url) {
   return normalized
 }
 
+function getFileExtension(file) {
+  if (typeof file !== 'string') return ''
+  const normalized = file.trim().split('?')[0].split('#')[0]
+  const match = normalized.match(/\.([a-z0-9]+)$/i)
+  return match ? match[1].toLowerCase() : ''
+}
+
+function isImageFile(file) {
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(getFileExtension(file))
+}
+
 function isPdf(file) {
-  return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
+  return getFileExtension(file) === 'pdf'
+}
+
+function isDocumentFile(file) {
+  return ['doc', 'docx'].includes(getFileExtension(file))
+}
+
+function fileLabel(file) {
+  if (isPdf(file)) return 'PDF'
+  if (isDocumentFile(file)) return getFileExtension(file).toUpperCase()
+  return '文件'
 }
 
 function formatDate(dateStr) {
@@ -466,7 +487,8 @@ function getIssues(report) {
   cursor: pointer;
 }
 
-.pdf-link {
+.pdf-link,
+.file-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;

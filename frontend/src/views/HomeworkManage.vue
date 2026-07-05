@@ -40,8 +40,8 @@
             <h4>题目文件</h4>
             <div class="question-files-list">
               <div v-for="(file, i) in getAssignment(section.id).question_files" :key="`qf-${i}`" class="question-file-item">
-                <img v-if="!isPdf(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
-                <a v-else :href="getMediaUrl(file)" target="_blank" class="pdf-link">查看 PDF</a>
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
+                <a v-else :href="getMediaUrl(file)" target="_blank" class="file-link">{{ fileLabel(file) }}</a>
               </div>
             </div>
           </div>
@@ -90,12 +90,12 @@
           <textarea v-model="form.description" placeholder="请输入题目描述"></textarea>
         </div>
         <div class="form-group">
-          <label>题目文件（图片/PDF）</label>
-          <input type="file" multiple accept="image/*,.pdf" @change="handleQuestionFileSelect" />
+          <label>题目文件（图片/PDF/Word）</label>
+          <input type="file" multiple accept="image/*,.pdf,.doc,.docx" @change="handleQuestionFileSelect" />
           <div v-if="form.question_files.length > 0" class="question-files-preview">
             <div v-for="(file, i) in form.question_files" :key="i" class="question-file-item">
-              <span v-if="isPdf(file)" class="file-icon">PDF</span>
-              <img v-else :src="getMediaUrl(file)" class="question-thumb" />
+              <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" />
+              <a v-else :href="getMediaUrl(file)" target="_blank" class="file-link">{{ fileLabel(file) }}</a>
               <button type="button" class="remove-btn" @click="removeQuestionFile(i)">x</button>
             </div>
           </div>
@@ -429,8 +429,29 @@ function getMediaUrl(url) {
   return normalized
 }
 
+function getFileExtension(file) {
+  if (typeof file !== 'string') return ''
+  const normalized = file.trim().split('?')[0].split('#')[0]
+  const match = normalized.match(/\.([a-z0-9]+)$/i)
+  return match ? match[1].toLowerCase() : ''
+}
+
+function isImageFile(file) {
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(getFileExtension(file))
+}
+
 function isPdf(file) {
-  return typeof file === 'string' && file.toLowerCase().endsWith('.pdf')
+  return getFileExtension(file) === 'pdf'
+}
+
+function isDocumentFile(file) {
+  return ['doc', 'docx'].includes(getFileExtension(file))
+}
+
+function fileLabel(file) {
+  if (isPdf(file)) return 'PDF'
+  if (isDocumentFile(file)) return getFileExtension(file).toUpperCase()
+  return '文件'
 }
 
 function normalizeAnswerType(type) {
@@ -1302,6 +1323,7 @@ async function pollGradingStatus(assignmentId) {
 }
 
 .pdf-link,
+.file-link,
 .file-icon {
   display: flex;
   width: 100%;

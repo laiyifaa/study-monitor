@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 
 echo [1/2] Starting Backend (uvicorn)...
-start "Backend" cmd /k "cd /d backend && uvicorn app.main:app --port 8000"
+start "Backend" cmd /k "cd /d backend && uvicorn app.main:app --reload --port 8000"
 timeout /t 3 /nobreak >nul
 
 echo [2/2] Starting Frontend (Vite)...

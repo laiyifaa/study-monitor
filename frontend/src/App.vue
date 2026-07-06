@@ -218,6 +218,17 @@ onMounted(async () => {
     } catch (e) {
       // 免登失败静默降级，用户以游客身份浏览
     }
+
+    // 免登成功后，如果用户仍停留在 /login 页面，按角色自动跳转到对应首页
+    // 这是解决"钉钉免登成功但卡在登录页"问题的关键逻辑
+    if (auth.isLoggedIn.value && router.currentRoute.value.path === '/login') {
+      const role = auth.user.value?.role
+      if (role === 'teacher' || role === 'admin') {
+        router.replace('/teacher')
+      } else {
+        router.replace('/my-progress')
+      }
+    }
   }
   // 登录后获取未读公告数
   if (auth.isLoggedIn.value) {

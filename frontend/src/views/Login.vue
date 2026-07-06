@@ -20,7 +20,15 @@
         <p class="subtitle">欢迎登录</p>
       </div>
 
-      <!-- 登录表单 -->
+      <!-- 钉钉免登等待状态 -->
+      <div v-if="isDingTalkLoggingIn" class="dingtalk-waiting">
+        <div class="spinner"></div>
+        <p>正在自动登录中...</p>
+        <p class="waiting-hint">钉钉环境检测到，正在为您免登</p>
+      </div>
+
+      <!-- 登录表单（非免登等待状态时显示） -->
+      <template v-else>
       <form @submit.prevent="handleLogin" class="login-form">
         <div class="form-item">
           <label>用户名</label>
@@ -64,14 +72,16 @@
         <p>钉钉环境打开自动免登，无需手动登录</p>
         <p>首次使用请联系管理员设置密码</p>
       </div>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../utils/auth'
+import * as dd from 'dingtalk-jsapi'
 import api from '../utils/api'
 
 const router = useRouter()
@@ -82,6 +92,37 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
+
+/** 是否在钉钉环境中且正在等待免登 */
+const isDingTalkLoggingIn = ref(false)
+
+/**
+ * 钉钉环境检测：如果用户在钉钉客户端内打开登录页，
+ * 说明 App.vue 的免登流程可能还没完成（或已完成但路由还没跳转）。
+ * 此时显示"正在免登中..."状态，而不是让用户面对登录表单。
+ */
+onMounted(() => {
+  const isInDingTalk = dd.env.platform !== 'notInDingTalk'
+  if (isInDingTalk) {
+    // 在钉钉环境中，等待免登结果
+    isDingTalkLoggingIn.value = true
+    // 免登由 App.vue 的 onMounted 触发，这里等一小段时间检查结果
+    // 如果已登录（App.vue 免登成功），直接跳转
+    setTimeout(() => {
+      if (auth.isLoggedIn.value) {
+        const role = auth.user.value?.role
+        if (role === 'teacher' || role === 'admin') {
+          router.replace('/teacher')
+        } else {
+          router.replace('/my-progress')
+        }
+      } else {
+        // 免登未成功，显示登录表单（降级为手动登录）
+        isDingTalkLoggingIn.value = false
+      }
+    }, 3000)
+  }
+})
 
 /**
  * 快捷填入测试账号（仅填充表单，不触发登录）
@@ -300,5 +341,33 @@ async function handleLogin() {
 .quick-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* 钉钉免登等待状态 */
+.dingtalk-waiting {
+  text-align: center;
+  padding: 20px 0;
+}
+.dingtalk-waiting p {
+  font-size: 15px;
+  color: #333;
+  margin-top: 16px;
+}
+.dingtalk-waiting .waiting-hint {
+  font-size: 12px;
+  color: #999;
+  margin-top: 8px;
+}
+.spinner {
+  display: inline-block;
+  width: 36px;
+  height: 36px;
+  border: 3px solid #e6f7ff;
+  border-top-color: #1890ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

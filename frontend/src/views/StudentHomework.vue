@@ -46,7 +46,13 @@
           <div v-if="mySubmissionMap[section.id]" class="my-submission">
             <h4>我的提交</h4>
             <div class="submission-images">
-              <img v-for="(img, i) in mySubmissionMap[section.id].images" :key="i" :src="getMediaUrl(img)" class="preview" />
+              <img
+                v-for="(img, i) in mySubmissionMap[section.id].images"
+                :key="i"
+                :src="getMediaUrl(img)"
+                class="preview"
+                @click="previewImage(getMediaUrl(img))"
+              />
             </div>
             <div v-if="mySubmissionMap[section.id].report" class="report">
               <div class="score">
@@ -72,7 +78,7 @@
               <div v-else class="pending">等待批改中...</div>
             </div>
           </div>
-          <div v-else class="pending">等待批改中...</div>
+          <div v-else class="pending">暂未提交作业</div>
         </div>
       <div v-if="sections.length === 0" class="empty">暂无作业</div>
     </template>
@@ -153,17 +159,23 @@ async function loadMySubmissions() {
       params: { course_id: courseId }
     })
     const list = res.data.data || []
+    const currentCourseId = String(courseId)
     const map = {}
     for (const s of list) {
-      if (!map[s.assignment_id] || new Date(s.submitted_at) > new Date(map[s.assignment_id].submitted_at)) {
-        map[s.assignment_id] = s
+      const assignment = s.assignment
+      if (!assignment?.id || String(assignment.course_id) !== currentCourseId) {
+        continue
+      }
+      const assignmentId = String(assignment.id)
+      if (!map[assignmentId] || new Date(s.submitted_at) > new Date(map[assignmentId].submitted_at)) {
+        map[assignmentId] = s
       }
     }
     const subMap = {}
-    for (const [aid, sub] of Object.entries(map)) {
-      const assignment = Object.values(assignmentMap.value).find(a => a.id === Number(aid) || a.id === aid)
-      if (assignment) {
-        subMap[assignment.section_id] = sub
+    for (const sub of Object.values(map)) {
+      const sectionId = sub.assignment?.section_id
+      if (sectionId) {
+        subMap[sectionId] = sub
       }
     }
     mySubmissionMap.value = subMap
@@ -556,6 +568,7 @@ function getIssues(report) {
   object-fit: cover;
   border: 1px solid #d6e1dc;
   border-radius: 6px;
+  cursor: pointer;
 }
 
 .report {

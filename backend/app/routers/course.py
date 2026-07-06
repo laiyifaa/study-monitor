@@ -27,7 +27,7 @@ import os
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -235,44 +235,47 @@ async def delete_course(
     section_ids = [s.id for s in sections]
 
     # 2. 作业 → 提交 → 批改报告/批改任务
+    # 旧数据里可能仍有只通过 course_id 关联的课程级作业。
+    assignment_filter = Assignment.course_id == course_id
     if section_ids:
-        asgn_result = await db.execute(
-            select(Assignment).where(Assignment.section_id.in_(section_ids))
+        assignment_filter = or_(Assignment.section_id.in_(section_ids), assignment_filter)
+
+    asgn_result = await db.execute(select(Assignment).where(assignment_filter))
+    assignments = asgn_result.scalars().all()
+    assignment_ids = [a.id for a in assignments]
+
+    if assignment_ids:
+        sub_result = await db.execute(
+            select(Submission).where(Submission.assignment_id.in_(assignment_ids))
         )
-        assignments = asgn_result.scalars().all()
-        assignment_ids = [a.id for a in assignments]
+        submissions = sub_result.scalars().all()
+        submission_ids = [s.id for s in submissions]
 
-        if assignment_ids:
-            sub_result = await db.execute(
-                select(Submission).where(Submission.assignment_id.in_(assignment_ids))
-            )
-            submissions = sub_result.scalars().all()
-            submission_ids = [s.id for s in submissions]
-
-            if submission_ids:
-                # 批改报告
-                await db.execute(
-                    GradingReport.__table__.delete().where(
-                        GradingReport.submission_id.in_(submission_ids)
-                    )
-                )
-                # 批改任务
-                await db.execute(
-                    GradingTask.__table__.delete().where(
-                        GradingTask.submission_id.in_(submission_ids)
-                    )
-                )
-            # 提交
+        if submission_ids:
+            # 批改报告
             await db.execute(
-                Submission.__table__.delete().where(
-                    Submission.assignment_id.in_(assignment_ids)
+                GradingReport.__table__.delete().where(
+                    GradingReport.submission_id.in_(submission_ids)
                 )
             )
+            # 批改任务
+            await db.execute(
+                GradingTask.__table__.delete().where(
+                    GradingTask.submission_id.in_(submission_ids)
+                )
+            )
+        # 提交
+        await db.execute(
+            Submission.__table__.delete().where(
+                Submission.assignment_id.in_(assignment_ids)
+            )
+        )
         # 作业（同时匹配 section_id 和 course_id 冗余字段）
         await db.execute(
-            Assignment.__table__.delete().where(Assignment.section_id.in_(section_ids))
+            Assignment.__table__.delete().where(assignment_filter)
         )
 
+    if section_ids:
         # 小节反馈
         await db.execute(
             SectionFeedback.__table__.delete().where(
@@ -322,8 +325,10 @@ async def delete_course(
             local_path = os.path.join(UPLOAD_DIR, sec.video_url)
             if os.path.exists(local_path):
                 os.remove(local_path)
-    for sec in sections:
-        await db.delete(sec)
+    if section_ids:
+        await db.execute(
+            Section.__table__.delete().where(Section.course_id == course_id)
+        )
 
     # 6. 删除旧的视频文件（兼容 v2.x 数据）
     if course.video_type == "local" and course.video_url:

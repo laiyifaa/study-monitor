@@ -35,6 +35,7 @@ import os
 import re
 import json
 import uuid
+import logging
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel, field_validator
@@ -43,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional, List
 
 from app.config import get_settings
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, Section, User
 from app.services.agent_caller import parse_answer_file_with_agent, call_grading_agent
 from app.services.image_stitcher import stitch_images, image_url_to_local_path
@@ -51,6 +52,7 @@ from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/homework", tags=["作业管理"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 HOMEWORK_UPLOAD_DIR = "uploads/homework"
 ANSWER_UPLOAD_DIR = os.path.join(HOMEWORK_UPLOAD_DIR, "answers")
@@ -82,6 +84,50 @@ async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
         assignment = (await db.execute(select(Assignment).where(Assignment.id == assignment_id))).scalar_one_or_none()
         if assignment and assignment.grading_status != "graded":
             assignment.grading_status = "graded"
+
+
+async def _prepare_grading_task(session: AsyncSession, submission_id: int) -> GradingTask | None:
+    existing_result = await session.execute(
+        select(GradingTask).where(GradingTask.submission_id == submission_id)
+    )
+    task = existing_result.scalar_one_or_none()
+
+    if task and task.status in {"graded", "sent"}:
+        return None
+
+    if not task:
+        task = GradingTask(
+            submission_id=submission_id,
+            stitched_image_url="",
+            status="pending",
+        )
+        session.add(task)
+    else:
+        task.stitched_image_url = ""
+        task.agent_task_id = ""
+        task.status = "pending"
+        task.retry_count = 0
+        task.error_message = ""
+        task.sent_at = None
+        task.graded_at = None
+
+    await session.commit()
+    await session.refresh(task)
+    return task
+
+
+async def _mark_task_failed(task_id: int, error_message: str):
+    async with async_session() as session:
+        task_result = await session.execute(
+            select(GradingTask).where(GradingTask.id == task_id)
+        )
+        task = task_result.scalar_one_or_none()
+        if not task:
+            return
+
+        task.status = "failed"
+        task.error_message = error_message
+        await session.commit()
 
 
 class CreateAssignmentRequest(BaseModel):
@@ -307,6 +353,7 @@ def _assignment_to_dict(a: Assignment, include_answer: bool = False):
         "status": a.status,
         "grading_mode": a.grading_mode,
         "grading_status": a.grading_status,
+        "grading_triggered": a.grading_triggered,
         "created_at": a.created_at.isoformat(),
     }
     if include_answer:
@@ -1103,7 +1150,7 @@ async def trigger_grading(
                 Submission.status == "pending",
                 Submission.is_latest == True,
             )
-        )
+        ).order_by(Submission.submitted_at.asc(), Submission.id.asc())
     )
     submissions = sub_result.scalars().all()
 
@@ -1115,39 +1162,36 @@ async def trigger_grading(
 
     async def _run_grading():
         for submission in submissions:
+            task_id = None
             try:
                 async with async_session() as session:
-                    existing = await session.execute(
-                        select(GradingTask).where(GradingTask.submission_id == submission.id)
-                    )
-                    if existing.scalar_one_or_none():
+                    task = await _prepare_grading_task(session, submission.id)
+                    if not task:
                         continue
+
+                    task_id = task.id
 
                     images = json.loads(submission.images)
                     if not images:
-                        continue
+                        raise ValueError("提交未包含可批改图片")
 
                     local_paths = [image_url_to_local_path(url) for url in images]
                     output_filename = f"stitched_{submission.id}.jpg"
                     stitched_url = stitch_images(local_paths, output_filename)
 
-                    task = GradingTask(
-                        submission_id=submission.id,
-                        stitched_image_url=stitched_url,
-                        status="pending",
-                    )
-                    session.add(task)
+                    task.stitched_image_url = stitched_url
                     await session.commit()
-                    await session.refresh(task)
 
                 await call_grading_agent(
-                    task_id=task.id,
+                    task_id=task_id,
                     submission_id=submission.id,
                     stitched_image_url=stitched_url,
                     prompt=assignment.grading_prompt,
                     answer_json=assignment.reference_answer or "",
                 )
             except Exception as e:
+                if task_id is not None:
+                    await _mark_task_failed(task_id, str(e))
                 logger.error(f"手动触发批改失败: submission_id={submission.id}, error={e}")
 
     background_tasks.add_task(_run_grading)
@@ -1183,6 +1227,7 @@ async def trigger_grading_status(
     submissions = result.scalars().all()
 
     total = len(submissions)
+    task_count = 0
     pending = 0
     processing = 0
     graded = 0
@@ -1192,6 +1237,9 @@ async def trigger_grading_status(
         task = (await db.execute(
             select(GradingTask).where(GradingTask.submission_id == s.id)
         )).scalar_one_or_none()
+
+        if task:
+            task_count += 1
 
         if not task or task.status == "pending":
             pending += 1
@@ -1206,6 +1254,7 @@ async def trigger_grading_status(
         "code": 0,
         "data": {
             "total": total,
+            "task_count": task_count,
             "pending": pending,
             "processing": processing,
             "graded": graded,

@@ -175,22 +175,23 @@
     </div>
 
     <div v-if="showAnswerModal" class="modal-overlay" @click.self="closeAnswerModal">
-      <div class="modal modal-lg answer-manage-modal">
-        <h3>答案管理 - {{ currentSection?.title }}</h3>
-        <div class="answer-module standalone">
-          <div class="answer-header">
-            <label>标准答案</label>
-            <div class="answer-actions">
-              <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
-              <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
-              <label class="btn-sm file-button">
-                {{ answerParsing ? '解析中...' : '上传答案文件' }}
-                <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
-              </label>
+        <div class="modal modal-lg answer-manage-modal">
+          <h3>答案管理 - {{ currentSection?.title }}</h3>
+          <div class="answer-module standalone">
+            <div class="answer-header">
+              <label>标准答案 <span class="answer-count" v-if="form.answer_items.length > 0">{{ form.answer_items.length }} 题</span></label>
+              <div class="answer-actions">
+                <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+                <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
+                <button v-if="form.answer_items.length > 0" type="button" class="btn-sm ghost-action" @click="showAnswerPreview = !showAnswerPreview">{{ showAnswerPreview ? '收起预览' : '查看预览' }}</button>
+                <label class="btn-sm file-button">
+                  {{ answerParsing ? '解析中...' : '上传答案文件' }}
+                  <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
+                </label>
+              </div>
             </div>
-          </div>
-          <div v-if="form.answer_items.length === 0" class="empty small">暂无答案</div>
-          <table v-else class="answer-table">
+            <div v-if="form.answer_items.length === 0" class="empty small">暂无答案</div>
+            <table v-else class="answer-table">
             <thead>
               <tr>
                 <th>题号</th>
@@ -219,7 +220,53 @@
               </tr>
             </tbody>
           </table>
-          <pre v-if="form.answer_items.length > 0" class="answer-json">{{ answerJsonPreview }}</pre>
+          <div ref="quickAnswerBarRef" class="answer-quick-entry">
+            <div class="quick-entry-header">
+              <strong>快速录入</strong>
+              <span class="quick-entry-hint">题号自动递增；选择/判断题按 Enter 追加，填空题按 Ctrl+Enter 追加</span>
+            </div>
+            <div class="quick-entry-grid">
+              <div class="quick-entry-field quick-entry-no">
+                <label>题号</label>
+                <input v-model="quickAnswerItem.no" @keydown="handleQuickAnswerKeydown" placeholder="1" />
+              </div>
+              <div class="quick-entry-field quick-entry-type">
+                <label>题型</label>
+                <select v-model="quickAnswerItem.type" @keydown="handleQuickAnswerKeydown">
+                  <option value="option_letter">选项字母</option>
+                  <option value="true_false">判断题</option>
+                  <option value="fill_blank">填空题</option>
+                </select>
+              </div>
+              <div class="quick-entry-field quick-entry-answer">
+                <label>答案</label>
+                <textarea
+                  v-if="quickAnswerItem.type === 'fill_blank'"
+                  ref="quickAnswerFieldRef"
+                  v-model="quickAnswerItem.answer"
+                  class="answer-textarea quick-answer-textarea"
+                  rows="2"
+                  placeholder="标准答案"
+                  @keydown="handleQuickAnswerKeydown"
+                />
+                <input
+                  v-else
+                  ref="quickAnswerFieldRef"
+                  v-model="quickAnswerItem.answer"
+                  placeholder="标准答案"
+                  @keydown="handleQuickAnswerKeydown"
+                />
+              </div>
+              <div class="quick-entry-field quick-entry-score">
+                <label>分数</label>
+                <input v-model.number="quickAnswerItem.score" type="number" min="0" step="1" placeholder="分数" @keydown="handleQuickAnswerKeydown" />
+              </div>
+              <div class="quick-entry-submit">
+                <button type="button" class="btn-primary quick-entry-button" @click="appendQuickAnswer">追加一题</button>
+              </div>
+            </div>
+          </div>
+          <pre v-if="form.answer_items.length > 0 && showAnswerPreview" class="answer-json answer-json-collapsible">{{ answerJsonPreview }}</pre>
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="closeAnswerModal">取消</button>
@@ -304,6 +351,7 @@
             <div v-if="s.task && s.task.status === 'sent'" class="task-info">智能体批改中...</div>
             <div v-if="s.task && s.task.status === 'pending'" class="task-info">等待批改...</div>
             <div class="submission-actions">
+              <button v-if="s.report || s.status === 'graded'" class="btn-sm" @click="openReportModal(s)">查看报告</button>
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
             </div>
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
@@ -311,6 +359,98 @@
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="showSubmissionsModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showReportModal" class="modal-overlay" @click.self="closeReportModal">
+      <div class="modal modal-lg report-detail-modal">
+        <div class="report-modal-header">
+          <div>
+            <h3>批改报告 - {{ reportSubmission?.user?.name || '学生' }}</h3>
+            <div class="report-subtitle">提交时间：{{ formatDate(reportSubmission?.submitted_at) }}</div>
+          </div>
+          <span v-if="reportDetail?.status" class="status-tag" :class="reportDetail.status">{{ reportStatusText(reportDetail.status) }}</span>
+        </div>
+
+        <div v-if="reportLoading" class="loading report-loading">加载中...</div>
+        <div v-else-if="reportError" class="task-error report-error">{{ reportError }}</div>
+        <template v-else-if="reportDetail">
+          <div class="report-summary-grid">
+            <div class="report-summary-item">
+              <span class="report-summary-label">总分</span>
+              <strong class="report-summary-value">{{ reportDetail.score }}</strong>
+            </div>
+            <div class="report-summary-item">
+              <span class="report-summary-label">满分</span>
+              <strong class="report-summary-value">{{ reportDetail.full_score }}</strong>
+            </div>
+            <div class="report-summary-item">
+              <span class="report-summary-label">正确率</span>
+              <strong class="report-summary-value">{{ formatAccuracy(reportDetail.accuracy) }}</strong>
+            </div>
+            <div class="report-summary-item">
+              <span class="report-summary-label">对错题数</span>
+              <strong class="report-summary-value">对{{ reportDetail.correct_count }} / 错{{ reportDetail.wrong_count }}</strong>
+            </div>
+            <div class="report-summary-item">
+              <span class="report-summary-label">生成方式</span>
+              <strong class="report-summary-value">{{ reportDetail.generated_by || '未知' }}</strong>
+            </div>
+            <div class="report-summary-item">
+              <span class="report-summary-label">生成时间</span>
+              <strong class="report-summary-value">{{ formatDate(reportDetail.created_at) }}</strong>
+            </div>
+          </div>
+
+          <div class="report-section">
+            <div class="report-section-title">智能体反馈</div>
+            <div class="report-feedback-block">{{ reportDetail.feedback || '暂无评语' }}</div>
+          </div>
+
+          <div v-if="getReportReviewQuestions(reportDetail).length" class="report-section">
+            <div class="report-section-title">需复核题号</div>
+            <div class="report-review-list">
+              <span v-for="item in getReportReviewQuestions(reportDetail)" :key="`review-${item}`" class="review-chip">{{ item }}</span>
+            </div>
+          </div>
+
+          <div v-if="getReportIssues(reportDetail).length" class="report-section">
+            <div class="report-section-title">补充信息</div>
+            <ul class="report-issues-list">
+              <li v-for="(issue, index) in getReportIssues(reportDetail)" :key="`issue-${index}`">{{ issue }}</li>
+            </ul>
+          </div>
+
+          <div v-if="getReportQuestions(reportDetail)?.length" class="report-section">
+            <div class="report-section-title">逐题明细</div>
+            <div class="report-question-list">
+              <div v-for="question in getReportQuestions(reportDetail)" :key="question.key" class="report-question-item">
+                <div class="report-question-head">
+                  <span class="report-question-index">第{{ question.index }}题</span>
+                  <span class="report-question-score">
+                    <template v-if="hasDisplayValue(question.score)">{{ question.score }}</template>
+                    <template v-else>--</template>
+                    <template v-if="hasDisplayValue(question.maxScore)"> / {{ question.maxScore }}</template>
+                  </span>
+                  <span class="report-question-status" :class="questionStatusClass(question)">{{ questionStatusText(question) }}</span>
+                </div>
+                <div v-if="question.expectedAnswer" class="report-question-line">标准答案：{{ question.expectedAnswer }}</div>
+                <div v-if="question.answer" class="report-question-line">识别答案：{{ question.answer }}</div>
+                <div v-if="question.comment" class="report-question-line">说明：{{ question.comment }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="formatReportDetailJson(reportDetail)" class="report-section">
+            <div class="report-section-title">原始明细</div>
+            <pre class="report-raw-json">{{ formatReportDetailJson(reportDetail) }}</pre>
+          </div>
+        </template>
+        <div v-else class="empty report-empty">暂无批改报告</div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeReportModal">关闭</button>
         </div>
       </div>
     </div>
@@ -355,7 +495,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../utils/api.js'
 
@@ -379,7 +519,12 @@ const showBatchAnswerModal = ref(false)
 const showSubmissionsModal = ref(false)
 const showUnsubmittedModal = ref(false)
 const showGradeModal = ref(false)
+const showReportModal = ref(false)
 const gradingSubmission = ref(null)
+const reportSubmission = ref(null)
+const reportDetail = ref(null)
+const reportLoading = ref(false)
+const reportError = ref('')
 const gradeForm = ref({ score: '', feedback: '' })
 const gradeSubmitting = ref(false)
 const answerParsing = ref(false)
@@ -388,7 +533,22 @@ const currentSection = ref(null)
 const currentViewSectionId = ref(null)
 const triggeringSection = ref(null)
 const triggerStatus = ref(null)
+const showAnswerPreview = ref(false)
+const quickAnswerFieldRef = ref(null)
+const quickAnswerBarRef = ref(null)
 let pollTimer = null
+
+function getNextAnswerNo(rows = form.value?.answer_items || []) {
+  const numericNos = rows
+    .map(item => String(item?.no ?? '').trim())
+    .filter(no => /^\d+$/.test(no))
+    .map(no => Number(no))
+
+  if (!numericNos.length) {
+    return rows.length ? String(rows.length + 1) : '1'
+  }
+  return String(Math.max(...numericNos) + 1)
+}
 
 function emptyForm() {
   return {
@@ -405,11 +565,16 @@ function emptyForm() {
 }
 
 const form = ref(emptyForm())
+const quickAnswerItem = ref(createAnswerItem({ no: '1' }))
 
 const answerJsonPreview = computed(() => JSON.stringify(serializeAnswerItems(collectAnswerItems(form.value.answer_items).items), null, 2))
 
 onMounted(() => {
   loadData()
+})
+
+onUnmounted(() => {
+  stopPolling()
 })
 
 function getAssignment(sectionId) {
@@ -495,6 +660,22 @@ function createAnswerItem(overrides = {}) {
     answer: normalizeAnswerText(type, overrides.answer),
     score: normalizeAnswerScore(type, overrides.score),
   }
+}
+
+function resetQuickAnswerItem(overrides = {}) {
+  quickAnswerItem.value = createAnswerItem({
+    no: getNextAnswerNo(),
+    type: overrides.type ?? quickAnswerItem.value?.type ?? 'option_letter',
+    score: overrides.score ?? quickAnswerItem.value?.score ?? ANSWER_TYPE_DEFAULT_SCORE.option_letter,
+    answer: '',
+  })
+}
+
+async function focusQuickAnswerField() {
+  await nextTick()
+  quickAnswerBarRef.value?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  quickAnswerFieldRef.value?.focus?.()
+  quickAnswerFieldRef.value?.select?.()
 }
 
 function extractAnswerEntries(raw) {
@@ -608,13 +789,52 @@ function hasAnswer(assignment) {
 }
 
 function addAnswerItem() {
+  const lastItem = form.value.answer_items.at(-1)
   form.value.answer_items.push(createAnswerItem({
-    no: String(form.value.answer_items.length + 1),
+    no: getNextAnswerNo(),
+    type: lastItem?.type ?? quickAnswerItem.value.type,
+    score: lastItem?.score ?? quickAnswerItem.value.score,
   }))
+  resetQuickAnswerItem({
+    type: lastItem?.type ?? quickAnswerItem.value.type,
+    score: lastItem?.score ?? quickAnswerItem.value.score,
+  })
 }
 
 function removeAnswerItem(index) {
   form.value.answer_items.splice(index, 1)
+  resetQuickAnswerItem()
+}
+
+function appendQuickAnswer() {
+  const candidate = createAnswerItem(quickAnswerItem.value)
+  const existingNos = new Set(form.value.answer_items.map(item => String(item.no ?? '').trim()).filter(Boolean))
+
+  if (existingNos.has(candidate.no)) {
+    alert(`题号 ${candidate.no} 已存在，请修改后再追加`)
+    return
+  }
+
+  const { items, errors } = collectAnswerItems([candidate])
+  if (errors.length) {
+    alert(errors[0].replace('第 1 行', '快速录入'))
+    return
+  }
+
+  form.value.answer_items.push(items[0])
+  resetQuickAnswerItem({ type: candidate.type, score: candidate.score })
+  focusQuickAnswerField()
+}
+
+function handleQuickAnswerKeydown(event) {
+  if (event.isComposing || event.key !== 'Enter') return
+  if (
+    quickAnswerItem.value.type === 'fill_blank'
+    && event.target?.tagName === 'TEXTAREA'
+    && !(event.ctrlKey || event.metaKey)
+  ) return
+  event.preventDefault()
+  appendQuickAnswer()
 }
 
 function resetBatchAnswerRows(count = 3) {
@@ -676,10 +896,39 @@ async function loadData() {
       map[assignment.section_id] = assignment
     }
     assignmentMap.value = map
+    await restoreGradingProgress()
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   } finally {
     loading.value = false
+  }
+}
+
+async function restoreGradingProgress() {
+  if (triggeringSection.value) return
+
+  stopPolling()
+  triggeringSection.value = null
+  triggerStatus.value = null
+
+  for (const section of sections.value) {
+    const assignment = assignmentMap.value[section.id]
+    if (!assignment) continue
+    if (assignment.status !== 'published' || assignment.grading_mode === 'manual') continue
+    if (!assignment.grading_triggered || assignment.grading_status === 'graded') continue
+
+    try {
+      const res = await api.get(`/homework/trigger-status/${assignment.id}`)
+      const status = res.data.data
+      if (!status?.total || !status.task_count || status.done >= status.total) continue
+
+      triggeringSection.value = section.id
+      triggerStatus.value = status
+      pollTimer = setInterval(() => pollGradingStatus(assignment.id), 3000)
+      return
+    } catch (e) {
+      console.error('恢复批改进度失败', e)
+    }
   }
 }
 
@@ -690,6 +939,8 @@ function openCreateForSection(section) {
     title: `${section.title} 作业`,
     section_id: section.id,
   }
+  showAnswerPreview.value = false
+  resetQuickAnswerItem()
   showCreateModal.value = true
 }
 
@@ -708,6 +959,8 @@ function openEditForSection(section) {
     section_id: section.id,
     answer_items: parseAnswerItems(assignment.reference_answer),
   }
+  showAnswerPreview.value = false
+  resetQuickAnswerItem()
   showEditModal.value = true
 }
 
@@ -720,7 +973,10 @@ function openAnswerForSection(section) {
     section_id: section.id,
     answer_items: parseAnswerItems(assignment.reference_answer),
   }
+  showAnswerPreview.value = false
+  resetQuickAnswerItem()
   showAnswerModal.value = true
+  focusQuickAnswerField()
 }
 
 async function saveAssignment() {
@@ -770,15 +1026,19 @@ function closeModal() {
   showCreateModal.value = false
   showEditModal.value = false
   showBatchAnswerModal.value = false
+  showAnswerPreview.value = false
   currentSection.value = null
   form.value = emptyForm()
+  resetQuickAnswerItem()
 }
 
 function closeAnswerModal() {
   showAnswerModal.value = false
   showBatchAnswerModal.value = false
+  showAnswerPreview.value = false
   currentSection.value = null
   form.value = emptyForm()
+  resetQuickAnswerItem()
 }
 
 async function saveAnswer() {
@@ -872,13 +1132,131 @@ function taskStatusText(status) {
   return { pending: '待发送', sent: '已发送', graded: '已批改', failed: '失败' }[status] || status
 }
 
+function reportStatusText(status) {
+  return { success: '成功', partial: '部分成功', degraded: '降级', failed: '失败' }[status] || status || '未知'
+}
+
+function hasDisplayValue(value) {
+  return value !== null && value !== undefined && value !== ''
+}
+
+function formatAccuracy(value) {
+  if (value === null || value === undefined || value === '') return '--'
+  const normalized = Number(value)
+  if (!Number.isFinite(normalized)) return '--'
+  return `${(normalized * 100).toFixed(0)}%`
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return ''
   return new Date(dateStr).toLocaleString('zh-CN')
 }
 
+function parseReportDetail(report) {
+  if (!report?.detail) return null
+  try {
+    return typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
+  } catch {
+    return null
+  }
+}
+
+function getReportReviewQuestions(report) {
+  const detail = parseReportDetail(report)
+  const merged = [
+    ...(Array.isArray(report?.review_questions) ? report.review_questions : []),
+    ...(Array.isArray(detail?.review) ? detail.review : []),
+  ]
+  return [...new Set(merged.map(item => String(item ?? '').trim()).filter(Boolean))]
+}
+
+function getReportIssues(report) {
+  const detail = parseReportDetail(report)
+  if (!detail) return []
+
+  const issues = []
+  if (Array.isArray(detail.issues)) {
+    issues.push(...detail.issues.map(item => String(item ?? '').trim()).filter(Boolean))
+  }
+  if (detail.error) {
+    issues.push(`批改异常：${detail.error}`)
+  }
+  return issues
+}
+
+function getReportQuestions(report) {
+  const detail = parseReportDetail(report)
+  if (!detail) return null
+
+  const source = Array.isArray(detail.questions)
+    ? detail.questions
+    : Array.isArray(detail.details)
+      ? detail.details
+      : null
+
+  if (!source?.length) return null
+
+  return source.map((item, index) => ({
+    key: `${item?.index ?? item?.qid ?? item?.no ?? index + 1}-${index}`,
+    index: item?.index ?? item?.qid ?? item?.no ?? index + 1,
+    correct: typeof item?.correct === 'boolean' ? item.correct : (typeof item?.ok === 'boolean' ? item.ok : null),
+    score: item?.score ?? item?.s ?? item?.obtained_score ?? item?.points ?? null,
+    maxScore: item?.max_score ?? item?.fs ?? item?.full_score ?? item?.total_score ?? null,
+    comment: item?.comment ?? item?.feedback ?? item?.reason ?? item?.analysis ?? '',
+    answer: item?.answer ?? item?.student_answer ?? '',
+    expectedAnswer: item?.expected_answer ?? item?.reference_answer ?? '',
+  }))
+}
+
+function formatReportDetailJson(report) {
+  const detail = parseReportDetail(report)
+  if (!detail) return ''
+  try {
+    return JSON.stringify(detail, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function questionStatusText(question) {
+  if (question.correct === true) return '正确'
+  if (question.correct === false) return '错误'
+  return '待确认'
+}
+
+function questionStatusClass(question) {
+  if (question.correct === true) return 'correct'
+  if (question.correct === false) return 'wrong'
+  return 'unknown'
+}
+
 function previewImage(url) {
   window.open(url, '_blank')
+}
+
+async function openReportModal(submission) {
+  reportSubmission.value = submission
+  reportDetail.value = null
+  reportError.value = ''
+  reportLoading.value = true
+  showReportModal.value = true
+
+  try {
+    const res = await api.get(`/homework/reports/${submission.id}`)
+    reportDetail.value = res.data.data || null
+  } catch (e) {
+    reportError.value = e.response?.data?.detail || e.message || '加载报告失败'
+  } finally {
+    reportLoading.value = false
+  }
+}
+
+function closeReportModal() {
+  showReportModal.value = false
+  reportSubmission.value = null
+  reportDetail.value = null
+  reportError.value = ''
+  reportLoading.value = false
 }
 
 function openGradeModal(submission) {
@@ -1369,6 +1747,18 @@ async function pollGradingStatus(assignmentId) {
   margin-top: 4px;
 }
 
+.answer-count {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #edf6ff;
+  color: #245b9b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .answer-header {
   display: flex;
   align-items: center;
@@ -1385,6 +1775,11 @@ async function pollGradingStatus(assignmentId) {
 
 .file-button input {
   display: none;
+}
+
+.ghost-action {
+  background: #f5f7fa;
+  color: #415163;
 }
 
 .answer-table {
@@ -1447,6 +1842,95 @@ async function pollGradingStatus(assignmentId) {
   overflow-x: auto;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.answer-json-collapsible {
+  margin-top: 12px;
+}
+
+.answer-quick-entry {
+  margin-top: 14px;
+  border: 1px solid #d7e4ea;
+  border-radius: 8px;
+  background: #f6fbfd;
+  padding: 14px;
+}
+
+.quick-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: #17324d;
+}
+
+.quick-entry-hint {
+  font-size: 12px;
+  color: #687681;
+}
+
+.quick-entry-grid {
+  display: grid;
+  grid-template-columns: 90px 150px minmax(220px, 1fr) 110px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.quick-entry-field label {
+  display: block;
+  margin-bottom: 6px;
+  color: #556575;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.quick-entry-field input,
+.quick-entry-field select,
+.quick-entry-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.quick-answer-textarea {
+  min-height: 62px;
+}
+
+.quick-entry-submit {
+  display: flex;
+  align-items: stretch;
+}
+
+.quick-entry-button {
+  width: 100%;
+  min-width: 112px;
+}
+
+@media (max-width: 920px) {
+  .quick-entry-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .quick-entry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quick-entry-answer,
+  .quick-entry-submit {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .quick-entry-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-entry-answer,
+  .quick-entry-submit {
+    grid-column: auto;
+  }
 }
 
 .batch-answer-modal {
@@ -1584,7 +2068,177 @@ async function pollGradingStatus(assignmentId) {
 }
 
 .submission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 8px;
+}
+
+.report-detail-modal {
+  width: min(880px, 100%);
+}
+
+.report-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.report-modal-header h3 {
+  margin-bottom: 6px;
+}
+
+.report-subtitle {
+  color: #6b7785;
+  font-size: 13px;
+}
+
+.report-loading,
+.report-empty,
+.report-error {
+  margin-bottom: 12px;
+}
+
+.report-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.report-summary-item {
+  border: 1px solid #d9e5ec;
+  border-radius: 6px;
+  padding: 12px;
+  background: #f8fbfd;
+}
+
+.report-summary-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #6b7785;
+  font-size: 12px;
+}
+
+.report-summary-value {
+  display: block;
+  color: #17324d;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.report-section {
+  margin-bottom: 18px;
+}
+
+.report-section-title {
+  margin-bottom: 8px;
+  color: #17324d;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.report-feedback-block,
+.report-raw-json {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #d9e5ec;
+  border-radius: 6px;
+  background: #f8fbfd;
+  color: #324252;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-review-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #fff4df;
+  color: #a16207;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-issues-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.report-question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.report-question-item {
+  border: 1px solid #d9e5ec;
+  border-radius: 6px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.report-question-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.report-question-index {
+  color: #17324d;
+  font-weight: 700;
+}
+
+.report-question-score {
+  color: #475569;
+  font-size: 13px;
+}
+
+.report-question-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-question-status.correct {
+  background: #e8f7ef;
+  color: #15803d;
+}
+
+.report-question-status.wrong {
+  background: #fee8e7;
+  color: #b42318;
+}
+
+.report-question-status.unknown {
+  background: #eef5ff;
+  color: #2563eb;
+}
+
+.report-question-line {
+  margin-top: 4px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .loading,
@@ -1608,7 +2262,8 @@ async function pollGradingStatus(assignmentId) {
 
   .page-header,
   .assignment-header,
-  .answer-header {
+  .answer-header,
+  .report-modal-header {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1619,6 +2274,10 @@ async function pollGradingStatus(assignmentId) {
 
   .answer-table {
     min-width: 560px;
+  }
+
+  .report-summary-grid {
+    grid-template-columns: 1fr;
   }
 
   .answer-module {

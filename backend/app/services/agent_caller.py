@@ -32,6 +32,32 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+async def _mark_task_sent(task_id: int):
+    async with async_session() as db:
+        task_result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
+        task = task_result.scalar_one_or_none()
+        if not task:
+            return
+
+        task.status = "sent"
+        task.sent_at = task.sent_at or datetime.utcnow()
+        task.error_message = ""
+        await db.commit()
+
+
+async def _mark_task_failed(task_id: int, error_message: str, retry_count: int):
+    async with async_session() as db:
+        result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
+        task = result.scalar_one_or_none()
+        if not task:
+            return
+
+        task.status = "failed"
+        task.error_message = error_message
+        task.retry_count = retry_count
+        await db.commit()
+
+
 async def call_grading_agent(
     task_id: int,
     submission_id: int,
@@ -59,13 +85,16 @@ async def call_grading_agent(
     api_key = settings.GRADING_AGENT_API_KEY
 
     if not agent_url or not api_key:
+        error_message = "智能体批改未配置 (GRADING_AGENT_URL 或 GRADING_AGENT_API_KEY 为空)"
         logger.warning(
-            f"智能体批改未配置 (GRADING_AGENT_URL 或 GRADING_AGENT_API_KEY 为空), "
-            f"跳过调用: task_id={task_id}, submission_id={submission_id}"
+            f"{error_message}, 跳过调用: task_id={task_id}, submission_id={submission_id}"
         )
+        await _mark_task_failed(task_id, error_message, retry_count)
         return False
 
     try:
+        await _mark_task_sent(task_id)
+
         image_path = await _download_image(stitched_image_url)
         if not image_path:
             raise Exception("图片下载失败")
@@ -127,6 +156,7 @@ async def call_grading_agent(
             task = task_result.scalar_one_or_none()
             if task:
                 task.status = "graded"
+                task.sent_at = task.sent_at or datetime.utcnow()
                 task.graded_at = datetime.utcnow()
 
             await _refresh_grading_status(submission.assignment_id, db)
@@ -157,14 +187,7 @@ async def call_grading_agent(
                 retry_count=retry_count + 1,
             )
         else:
-            async with async_session() as db:
-                result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
-                task = result.scalar_one_or_none()
-                if task:
-                    task.status = "failed"
-                    task.error_message = str(e)
-                    task.retry_count = retry_count
-                    await db.commit()
+            await _mark_task_failed(task_id, str(e), retry_count)
 
             logger.error(
                 f"智能体批改最终失败（超过最大重试次数）: "

@@ -65,8 +65,8 @@
   <!-- ====== 修改密码弹窗 ====== -->
   <div v-if="showChangePw" class="modal-overlay" @click.self="showChangePw = false">
     <div class="modal-card">
-      <h3>修改密码</h3>
-      <div class="form-item">
+      <h3>{{ hasPassword ? '修改密码' : '设置密码' }}</h3>
+      <div v-if="hasPassword" class="form-item">
         <label>当前密码</label>
         <input v-model="pwForm.old_password" type="password" placeholder="请输入当前密码" />
       </div>
@@ -81,7 +81,7 @@
       <div v-if="pwError" class="pw-error">{{ pwError }}</div>
       <div class="modal-actions">
         <button class="btn-sm primary" @click="doChangePassword" :disabled="pwLoading">
-          {{ pwLoading ? '修改中...' : '确认修改' }}
+          {{ pwLoading ? (hasPassword ? '修改中...' : '设置中...') : (hasPassword ? '确认修改' : '确认设置') }}
         </button>
         <button class="btn-sm" @click="showChangePw = false">取消</button>
       </div>
@@ -117,6 +117,9 @@ async function fetchUnreadCount() {
 /** ============ 修改密码弹窗状态 ============ */
 const showChangePw = ref(false)
 const pwForm = ref({ old_password: '', new_password: '', confirm_password: '' })
+
+/** 用户是否已设置密码（钉钉免登用户首次没有密码） */
+const hasPassword = computed(() => !!auth.user.value?.has_password)
 const pwLoading = ref(false)
 const pwError = ref('')
 
@@ -154,7 +157,8 @@ function handleLogout() {
  */
 async function doChangePassword() {
   pwError.value = ''
-  if (!pwForm.value.old_password) {
+  // 有密码时必须输入旧密码
+  if (hasPassword.value && !pwForm.value.old_password) {
     pwError.value = '请输入当前密码'
     return
   }
@@ -169,14 +173,22 @@ async function doChangePassword() {
 
   pwLoading.value = true
   try {
-    const res = await api.post('/auth/change-password', {
-      old_password: pwForm.value.old_password,
+    const payload = {
       new_password: pwForm.value.new_password,
-    })
+    }
+    // 有密码时才发送旧密码
+    if (hasPassword.value) {
+      payload.old_password = pwForm.value.old_password
+    }
+    const res = await api.post('/auth/change-password', payload)
     if (res.data.code === 0) {
-      alert('密码修改成功')
+      alert(hasPassword.value ? '密码修改成功' : '密码设置成功')
       showChangePw.value = false
       pwForm.value = { old_password: '', new_password: '', confirm_password: '' }
+      // 首次设置密码后更新本地状态
+      if (auth.user.value) {
+        auth.user.value.has_password = true
+      }
     } else {
       pwError.value = res.data.msg || '修改失败'
     }

@@ -24,6 +24,10 @@
         <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         下载智能体技能包
       </a>
+      <a class="download-btn agent" href="https://www.teleai.com.cn/product/teleagent" target="_blank" rel="noopener">
+        <svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载智能体
+      </a>
     </div>
 
     <!-- 角色切换标签 -->
@@ -527,6 +531,17 @@ code {
 }
 .download-btn.skill:hover {
   background: #52c41a;
+  color: #fff;
+}
+
+/* 下载按钮 - 智能体 */
+.download-btn.agent {
+  background: #e6f7ff;
+  color: #1890ff;
+  border-color: #91d5ff;
+}
+.download-btn.agent:hover {
+  background: #1890ff;
   color: #fff;
 }
 

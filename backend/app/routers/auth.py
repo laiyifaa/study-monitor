@@ -232,6 +232,7 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
                 "class_name": user.class_name,
                 "real_name": user.real_name,
                 "phone": user.phone,
+                "has_password": bool(user.password_hash),
             },
         },
     }
@@ -260,6 +261,7 @@ async def get_me(user: User = Depends(get_current_user)):
         "class_name": user.class_name,
         "real_name": user.real_name,
         "phone": user.phone,
+        "has_password": bool(user.password_hash),
     }
 
 
@@ -331,6 +333,7 @@ async def browser_login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
                 "class_name": user.class_name,
                 "real_name": user.real_name,
                 "phone": user.phone,
+                "has_password": bool(user.password_hash),
             },
         },
     }
@@ -383,8 +386,8 @@ async def set_password(
 
 
 class ChangePasswordRequest(BaseModel):
-    """自助修改密码请求体：需验证旧密码"""
-    old_password: str       # 当前密码
+    """自助修改密码请求体：已有密码时需验证旧密码，无密码时可跳过"""
+    old_password: str = ""  # 当前密码（无密码用户可留空）
     new_password: str       # 新密码
 
 
@@ -408,8 +411,14 @@ async def change_password(
         - change-password：只能改自己，且必须验证旧密码，更安全
     """
     # 检查是否设置了密码（钉钉免登用户可能没有密码）
+    # 如果没有密码，允许直接设置新密码（首次设置），无需验证旧密码
     if not current_user.password_hash:
-        return {"code": 1, "msg": "您尚未设置密码，请联系管理员设置初始密码"}
+        # 首次设置密码：跳过旧密码验证
+        if len(req.new_password) < 6:
+            return {"code": 1, "msg": "新密码长度不能少于6位"}
+        current_user.password_hash = hash_password(req.new_password)
+        await db.commit()
+        return {"code": 0, "msg": "密码设置成功"}
 
     # 验证旧密码
     if not verify_password(req.old_password, current_user.password_hash):

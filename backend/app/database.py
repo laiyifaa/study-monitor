@@ -15,6 +15,7 @@
 - 连接池 pool_size=20 + max_overflow=10，适合校园场景的适中并发量
 """
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import get_settings
@@ -79,3 +80,15 @@ async def init_db():
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        answer_files_exists = await conn.scalar(text(
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() "
+            "AND table_name = 'assignments' "
+            "AND column_name = 'answer_files'"
+        ))
+        if not answer_files_exists:
+            await conn.execute(text(
+                "ALTER TABLE assignments "
+                "ADD COLUMN answer_files TEXT NULL COMMENT '答案附件URL数组(JSON)' AFTER question_files"
+            ))

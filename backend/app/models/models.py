@@ -289,6 +289,7 @@ class Assignment(Base):
     title = Column(String(200), nullable=False)
     description = Column(Text, default="")
     question_files = Column(Text, default="[]", comment="题目文件URL数组(JSON)")
+    answer_files = Column(Text, default="[]", nullable=True, comment="答案附件URL数组(JSON)")
     grading_prompt = Column(Text, default="", comment="评分标准/批改提示词")
     reference_answer = Column(Text, default=None, nullable=True, comment="参考答案（供智能体批改参考）")
     deadline = Column(DateTime, nullable=True)

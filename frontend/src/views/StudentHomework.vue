@@ -26,7 +26,7 @@
             <div class="question-files-list">
               <div v-for="(file, i) in assignmentMap[section.id].question_files" :key="i" class="question-file">
                 <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
-                <a v-else :href="getMediaUrl(file)" target="_blank" class="file-link">{{ fileLabel(file) }}</a>
+                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
               </div>
             </div>
           </div>
@@ -34,11 +34,12 @@
             <span v-if="assignmentMap[section.id].deadline">截止：{{ formatDate(assignmentMap[section.id].deadline) }}</span>
             <span v-if="isOverdue(assignmentMap[section.id])" class="overdue-hint">（已截止）</span>
             <span v-if="mySubmissionMap[section.id]" class="submitted-hint">已提交</span>
+            <span v-if="mySubmissionMap[section.id]?.is_late" class="submitted-hint late">迟交</span>
           </div>
 
           <div v-if="assignmentMap[section.id].status === 'published'" class="submit-section">
-            <button class="btn-primary" @click="openSubmitModal(section.id)">
-              {{ mySubmissionMap[section.id] ? '修改提交' : '提交作业' }}
+            <button class="btn-primary" :disabled="isSubmissionLocked(section.id)" @click="openSubmitModal(section.id)">
+              {{ isSubmissionLocked(section.id) ? '已批改，不可再提交' : (mySubmissionMap[section.id] ? '修改提交' : '提交作业') }}
             </button>
           </div>
         </div>
@@ -75,7 +76,15 @@
                   <li v-for="(issue, i) in getIssues(mySubmissionMap[section.id].report)" :key="i">{{ issue }}</li>
                 </ul>
               </div>
-              <div v-else class="pending">等待批改中...</div>
+            </div>
+            <div v-else class="pending">等待批改中...</div>
+            <div v-if="mySubmissionMap[section.id].can_view_answer_files && mySubmissionMap[section.id].answer_files?.length" class="question-files answer-files">
+              <h4>答案附件</h4>
+              <div class="question-files-list">
+                <div v-for="file in mySubmissionMap[section.id].answer_files" :key="`${section.id}-${file.index}`" class="question-file">
+                  <button type="button" class="file-link" :title="file.name" @click="openStudentAnswerFile(section.id, file)">{{ fileLabel(file.name) }}</button>
+                </div>
+              </div>
             </div>
           </div>
           <div v-else class="pending">暂未提交作业</div>
@@ -111,10 +120,23 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useDingTalk } from '../composables/useDingTalk.js'
 import api from '../utils/api.js'
+import {
+  fileLabel,
+  getAbsoluteMediaUrl,
+  getFileName,
+  getMediaUrl,
+  isDocumentFile,
+  isImageFile,
+  isPdf,
+  toAbsoluteUrl,
+  triggerBrowserDownload,
+} from '../utils/homeworkFiles.js'
 
 const route = useRoute()
 const courseId = route.params.courseId
+const { isDingTalk, previewFile } = useDingTalk()
 
 const loading = ref(false)
 const sections = ref([])
@@ -185,6 +207,7 @@ async function loadMySubmissions() {
 }
 
 function openSubmitModal(sectionId) {
+  if (isSubmissionLocked(sectionId)) return
   currentSectionId.value = sectionId
   showSubmitModal.value = true
 }
@@ -244,46 +267,12 @@ function isOverdue(assignment) {
   return new Date(assignment.deadline) < new Date()
 }
 
+function isSubmissionLocked(sectionId) {
+  return mySubmissionMap.value[sectionId]?.status === 'graded'
+}
+
 function statusText(status) {
   return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
-}
-
-function getMediaUrl(url) {
-  if (!url) return ''
-  const normalized = typeof url === 'string' ? url.trim() : ''
-  if (!normalized) return ''
-  if (/^https?:\/\//i.test(normalized)) return normalized
-  if (normalized.startsWith('/api/')) return normalized
-  if (normalized.startsWith('/uploads/')) return `/api${normalized}`
-  if (normalized.startsWith('uploads/')) return `/api/${normalized}`
-  if (normalized.startsWith('homework/')) return `/api/${normalized}`
-  if (!normalized.includes('/')) return `/api/uploads/${normalized}`
-  return normalized
-}
-
-function getFileExtension(file) {
-  if (typeof file !== 'string') return ''
-  const normalized = file.trim().split('?')[0].split('#')[0]
-  const match = normalized.match(/\.([a-z0-9]+)$/i)
-  return match ? match[1].toLowerCase() : ''
-}
-
-function isImageFile(file) {
-  return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(getFileExtension(file))
-}
-
-function isPdf(file) {
-  return getFileExtension(file) === 'pdf'
-}
-
-function isDocumentFile(file) {
-  return ['doc', 'docx'].includes(getFileExtension(file))
-}
-
-function fileLabel(file) {
-  if (isPdf(file)) return 'PDF'
-  if (isDocumentFile(file)) return getFileExtension(file).toUpperCase()
-  return '文件'
 }
 
 function formatDate(dateStr) {
@@ -293,6 +282,68 @@ function formatDate(dateStr) {
 
 function previewImage(url) {
   window.open(url, '_blank')
+}
+
+function openQuestionFile(file) {
+  const mediaUrl = getMediaUrl(file)
+  if (!mediaUrl) return
+
+  if (isPdf(file)) {
+    if (isDingTalk) {
+      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      return
+    }
+    window.open(mediaUrl, '_blank')
+    return
+  }
+
+  if (isDocumentFile(file)) {
+    if (isDingTalk) {
+      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      return
+    }
+    triggerBrowserDownload(mediaUrl, getFileName(file))
+    return
+  }
+
+  window.open(mediaUrl, '_blank')
+}
+
+async function requestAnswerFileAccessUrl(sectionId, fileIndex) {
+  const res = await api.post('/homework/answer-files/access', {
+    section_id: sectionId,
+    file_index: fileIndex,
+  })
+  return toAbsoluteUrl(res.data.data?.url || '')
+}
+
+async function openStudentAnswerFile(sectionId, file) {
+  try {
+    const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
+    if (!accessUrl) return
+
+    if (isPdf(file.name)) {
+      if (isDingTalk) {
+        previewFile(accessUrl, file.name)
+        return
+      }
+      window.open(accessUrl, '_blank')
+      return
+    }
+
+    if (isDocumentFile(file.name)) {
+      if (isDingTalk) {
+        previewFile(accessUrl, file.name)
+        return
+      }
+      triggerBrowserDownload(accessUrl, file.name)
+      return
+    }
+
+    window.open(accessUrl, '_blank')
+  } catch (e) {
+    alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
+  }
 }
 
 function getQuestions(report) {
@@ -512,6 +563,9 @@ function getIssues(report) {
   border-radius: 6px;
   text-decoration: none;
   font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  appearance: none;
 }
 
 .meta {
@@ -535,6 +589,11 @@ function getIssues(report) {
 .submitted-hint {
   background: #e7f6ef;
   color: #166154;
+}
+
+.submitted-hint.late {
+  background: #fee8e7;
+  color: #b42318;
 }
 
 .submit-section {

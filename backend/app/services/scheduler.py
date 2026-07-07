@@ -28,6 +28,7 @@ from app.database import async_session
 from app.models.models import HeartbeatLog, Assignment, Submission, GradingTask
 from app.services.image_stitcher import stitch_images, image_url_to_local_path
 from app.services.agent_caller import call_grading_agent
+from app.utils.datetime_helper import now_cn_naive
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -114,7 +115,7 @@ async def trigger_auto_grading():
     """
     try:
         async with async_session() as db:
-            now = datetime.utcnow()
+            now = now_cn_naive()
             result = await db.execute(
                 select(Assignment).where(
                     and_(

@@ -36,8 +36,10 @@ import re
 import json
 import uuid
 import logging
+from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +50,8 @@ from app.database import get_db, async_session
 from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, Section, User
 from app.services.agent_caller import parse_answer_file_with_agent, call_grading_agent
 from app.services.image_stitcher import stitch_images, image_url_to_local_path
+from app.utils.datetime_helper import now_cn_naive, parse_cn_datetime_input
+from app.utils.file_access import create_answer_file_access_token, decode_answer_file_access_token
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/homework", tags=["作业管理"])
@@ -56,6 +60,10 @@ logger = logging.getLogger(__name__)
 
 HOMEWORK_UPLOAD_DIR = "uploads/homework"
 ANSWER_UPLOAD_DIR = os.path.join(HOMEWORK_UPLOAD_DIR, "answers")
+QUESTION_UPLOAD_DIR = os.path.join(HOMEWORK_UPLOAD_DIR, "questions")
+ANSWER_FILE_ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".doc", ".docx"]
+ANSWER_FILE_ALLOWED_PREFIXES = ("uploads/homework/answers/", "homework/answers/")
+UPLOAD_BASE_DIRS = [Path(__file__).resolve().parents[2] / "uploads", Path(__file__).resolve().parents[3] / "uploads"]
 ANSWER_TYPES = {"option_letter", "true_false", "fill_blank"}
 ANSWER_TYPE_ALIASES = {
     "choice": "option_letter",
@@ -134,6 +142,7 @@ class CreateAssignmentRequest(BaseModel):
     title: str
     description: str = ""
     question_files: List[str] = []
+    answer_files: List[str] = []
     grading_prompt: str = ""
     reference_answer: str = ""  # v5.0: 参考答案
     deadline: Optional[str] = None
@@ -145,6 +154,7 @@ class UpdateAssignmentRequest(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     question_files: Optional[List[str]] = None
+    answer_files: Optional[List[str]] = None
     grading_prompt: Optional[str] = None
     reference_answer: Optional[str] = None  # v5.0: 参考答案
     deadline: Optional[str] = None
@@ -165,6 +175,13 @@ class ManualGradeRequest(BaseModel):
 
 class SaveAnswerRequest(BaseModel):
     answer: Any  # 支持新旧答案 JSON 结构
+    answer_files: Optional[List[str]] = None
+
+
+class AnswerFileAccessRequest(BaseModel):
+    section_id: Optional[int] = None
+    file_index: Optional[int] = None
+    file_url: Optional[str] = None
 
 
 def _normalize_answer_type(value: Any) -> str:
@@ -290,6 +307,98 @@ def _answer_to_object(raw: str | None) -> dict:
         return {}
 
 
+def _load_url_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def _normalize_homework_file_url(file_url: str) -> str:
+    normalized = image_url_to_local_path(str(file_url or "").strip())
+    normalized = os.path.normpath(normalized).replace("\\", "/")
+    return normalized.lstrip("/")
+
+
+def _is_safe_answer_file_url(file_url: str) -> bool:
+    normalized = _normalize_homework_file_url(file_url)
+    if not normalized or normalized in {".", ".."} or normalized.startswith("../"):
+        return False
+    return normalized.startswith(ANSWER_FILE_ALLOWED_PREFIXES)
+
+
+def _resolve_answer_file_path(file_url: str) -> Path | None:
+    if not _is_safe_answer_file_url(file_url):
+        return None
+
+    normalized = _normalize_homework_file_url(file_url)
+    candidates = [normalized]
+    if normalized.startswith("uploads/"):
+        candidates.append(normalized[len("uploads/"):])
+
+    for base_dir in UPLOAD_BASE_DIRS:
+        for relative in candidates:
+            candidate = (base_dir / relative).resolve()
+            try:
+                upload_root = base_dir.resolve()
+            except OSError:
+                continue
+            if str(candidate).startswith(f"{str(upload_root)}{os.sep}") and candidate.is_file():
+                return candidate
+    return None
+
+
+def _answer_files_to_student_entries(files: list[str]) -> list[dict]:
+    entries = []
+    for index, file_url in enumerate(files):
+        normalized = str(file_url or "").strip().split("?", 1)[0].split("#", 1)[0]
+        entries.append({
+            "index": index,
+            "name": os.path.basename(normalized) or f"answer-{index + 1}",
+        })
+    return entries
+
+
+async def _student_can_view_answer_files(assignment_id: int, student_id: int, db: AsyncSession) -> bool:
+    latest_submission = (await db.execute(
+        select(Submission).where(
+            and_(
+                Submission.assignment_id == assignment_id,
+                Submission.user_id == student_id,
+                Submission.is_latest == True,
+            )
+        )
+    )).scalar_one_or_none()
+    return bool(latest_submission and latest_submission.status == "graded")
+
+
+async def _resolve_assignment_answer_file(
+    section_id: int,
+    file_index: int,
+    db: AsyncSession,
+) -> tuple[Assignment, list[str], str]:
+    assignment = (await db.execute(select(Assignment).where(Assignment.section_id == section_id))).scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+
+    answer_files = _load_url_list(getattr(assignment, "answer_files", None))
+    if file_index < 0 or file_index >= len(answer_files):
+        raise HTTPException(status_code=404, detail="答案附件不存在")
+    return assignment, answer_files, answer_files[file_index]
+
+
+async def _ensure_assignment_contains_answer_file(section_id: int, file_url: str, db: AsyncSession) -> Assignment:
+    assignment = (await db.execute(select(Assignment).where(Assignment.section_id == section_id))).scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+    if file_url not in _load_url_list(getattr(assignment, "answer_files", None)):
+        raise HTTPException(status_code=404, detail="答案附件不存在")
+    return assignment
+
+
 @router.post("/upload")
 async def upload_homework_image(
     file: UploadFile = File(...),
@@ -325,17 +434,40 @@ async def upload_question_file(
     if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".doc", ".docx"]:
         raise HTTPException(status_code=400, detail="仅支持 jpg/jpeg/png/gif/webp/pdf/doc/docx 格式")
 
-    question_dir = os.path.join(HOMEWORK_UPLOAD_DIR, "questions")
-    os.makedirs(question_dir, exist_ok=True)
+    os.makedirs(QUESTION_UPLOAD_DIR, exist_ok=True)
 
     filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(question_dir, filename)
+    filepath = os.path.join(QUESTION_UPLOAD_DIR, filename)
 
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
 
     return {"code": 0, "data": {"url": f"/uploads/homework/questions/{filename}"}}
+
+
+@router.post("/upload-answer")
+async def upload_answer_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("teacher", "admin")),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ANSWER_FILE_ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="仅支持图片/PDF/DOC/DOCX 格式")
+
+    os.makedirs(ANSWER_UPLOAD_DIR, exist_ok=True)
+
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(ANSWER_UPLOAD_DIR, filename)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    return {"code": 0, "data": {"url": f"/uploads/homework/answers/{filename}"}}
 
 
 def _assignment_to_dict(a: Assignment, include_answer: bool = False):
@@ -346,7 +478,7 @@ def _assignment_to_dict(a: Assignment, include_answer: bool = False):
         "course_id": a.course_id,
         "title": a.title,
         "description": a.description,
-        "question_files": json.loads(a.question_files),
+        "question_files": _load_url_list(a.question_files),
         "grading_prompt": a.grading_prompt,
         "deadline": a.deadline.isoformat() if a.deadline else None,
         "auto_grade_at": a.auto_grade_at.isoformat() if a.auto_grade_at else None,
@@ -358,6 +490,7 @@ def _assignment_to_dict(a: Assignment, include_answer: bool = False):
     }
     if include_answer:
         data["reference_answer"] = a.reference_answer or ""
+        data["answer_files"] = _load_url_list(getattr(a, "answer_files", None))
     return data
 
 
@@ -434,15 +567,15 @@ async def create_assignment(
     deadline_dt = None
     if req.deadline:
         try:
-            deadline_dt = datetime.fromisoformat(req.deadline.replace("Z", "+00:00"))
-        except:
+            deadline_dt = parse_cn_datetime_input(req.deadline)
+        except ValueError:
             raise HTTPException(status_code=400, detail="截止时间格式错误")
 
     auto_grade_dt = None
     if req.auto_grade_at:
         try:
-            auto_grade_dt = datetime.fromisoformat(req.auto_grade_at.replace("Z", "+00:00"))
-        except:
+            auto_grade_dt = parse_cn_datetime_input(req.auto_grade_at)
+        except ValueError:
             raise HTTPException(status_code=400, detail="自动批改时间格式错误")
 
     if req.grading_mode not in ["auto", "manual", "hybrid"]:
@@ -454,6 +587,7 @@ async def create_assignment(
         title=req.title,
         description=req.description,
         question_files=json.dumps(req.question_files),
+        answer_files=json.dumps(req.answer_files),
         grading_prompt=req.grading_prompt,
         reference_answer=_normalize_answer_json(req.reference_answer),
         deadline=deadline_dt,
@@ -489,22 +623,24 @@ async def update_assignment(
         assignment.description = req.description
     if req.question_files is not None:
         assignment.question_files = json.dumps(req.question_files)
+    if req.answer_files is not None:
+        assignment.answer_files = json.dumps(req.answer_files)
     if req.grading_prompt is not None:
         assignment.grading_prompt = req.grading_prompt
     if req.reference_answer is not None:
         assignment.reference_answer = _normalize_answer_json(req.reference_answer)
     if req.deadline is not None:
         try:
-            assignment.deadline = datetime.fromisoformat(req.deadline.replace("Z", "+00:00"))
-        except:
+            assignment.deadline = parse_cn_datetime_input(req.deadline)
+        except ValueError:
             raise HTTPException(status_code=400, detail="截止时间格式错误")
     if req.auto_grade_at is not None:
         if req.auto_grade_at == "":
             assignment.auto_grade_at = None
         else:
             try:
-                assignment.auto_grade_at = datetime.fromisoformat(req.auto_grade_at.replace("Z", "+00:00"))
-            except:
+                assignment.auto_grade_at = parse_cn_datetime_input(req.auto_grade_at)
+            except ValueError:
                 raise HTTPException(status_code=400, detail="自动批改时间格式错误")
     if req.status is not None:
         if req.status not in ["draft", "published", "closed"]:
@@ -536,6 +672,7 @@ async def get_assignment_answer(
             "assignment_id": assignment.id,
             "section_id": section_id,
             "answer": _answer_to_object(assignment.reference_answer),
+            "answer_files": _load_url_list(getattr(assignment, "answer_files", None)),
         },
     }
 
@@ -553,8 +690,86 @@ async def save_assignment_answer(
         raise HTTPException(status_code=404, detail="作业不存在")
 
     assignment.reference_answer = _normalize_answer_json(req.answer)
+    if req.answer_files is not None:
+        assignment.answer_files = json.dumps(req.answer_files)
     await db.commit()
-    return {"code": 0, "data": {"answer": _answer_to_object(assignment.reference_answer)}}
+    return {
+        "code": 0,
+        "data": {
+            "answer": _answer_to_object(assignment.reference_answer),
+            "answer_files": _load_url_list(getattr(assignment, "answer_files", None)),
+        },
+    }
+
+
+@router.post("/answer-files/access")
+async def create_answer_file_access_url(
+    req: AnswerFileAccessRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    file_url = ""
+    section_id = req.section_id
+    token_section_id = section_id
+
+    if current_user.role in ["teacher", "admin"] and req.file_url:
+        file_url = req.file_url
+        token_section_id = None
+    else:
+        if section_id is None or req.file_index is None:
+            raise HTTPException(status_code=400, detail="缺少答案附件定位信息")
+
+        assignment, answer_files, file_url = await _resolve_assignment_answer_file(section_id, req.file_index, db)
+        if current_user.role == "student":
+            if not await _student_can_view_answer_files(assignment.id, current_user.id, db):
+                raise HTTPException(status_code=403, detail="当前不可查看答案附件")
+
+    if current_user.role not in ["teacher", "admin", "student"]:
+        raise HTTPException(status_code=403, detail="无权访问答案附件")
+
+    if not _is_safe_answer_file_url(file_url):
+        raise HTTPException(status_code=400, detail="答案附件路径非法")
+    if not _resolve_answer_file_path(file_url):
+        raise HTTPException(status_code=404, detail="答案附件不存在")
+
+    token = create_answer_file_access_token({
+        "file_url": file_url,
+        "section_id": token_section_id,
+        "user_id": current_user.id,
+        "role": current_user.role,
+    })
+    return {"code": 0, "data": {"url": f"/api/homework/answer-files/download?token={token}"}}
+
+
+@router.get("/answer-files/download")
+async def download_answer_file(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    payload = decode_answer_file_access_token(token)
+    file_url = str(payload.get("file_url") or "").strip()
+    section_id = payload.get("section_id")
+    user_id = int(payload.get("user_id") or 0)
+    role = str(payload.get("role") or "")
+
+    if not file_url or role not in {"teacher", "admin", "student"}:
+        raise HTTPException(status_code=401, detail="答案附件令牌无效")
+
+    if role == "student":
+        if section_id is None:
+            raise HTTPException(status_code=401, detail="答案附件令牌缺少作业信息")
+        assignment = await _ensure_assignment_contains_answer_file(int(section_id), file_url, db)
+        if not await _student_can_view_answer_files(assignment.id, user_id, db):
+            raise HTTPException(status_code=403, detail="当前不可查看答案附件")
+
+    elif section_id is not None:
+        await _ensure_assignment_contains_answer_file(int(section_id), file_url, db)
+
+    file_path = _resolve_answer_file_path(file_url)
+    if not file_path:
+        raise HTTPException(status_code=404, detail="答案附件不存在")
+
+    return FileResponse(file_path)
 
 
 @router.post("/answer/parse")
@@ -872,7 +1087,7 @@ async def create_submission(
 
     # v4.0: 截止时间后仍可提交，但标记 is_late=True
     is_late = False
-    if assignment.deadline and datetime.utcnow() > assignment.deadline:
+    if assignment.deadline and now_cn_naive() > assignment.deadline:
         is_late = True  # 迟交但仍允许提交
 
     existing_result = await db.execute(
@@ -890,6 +1105,8 @@ async def create_submission(
 
     next_version = 1
     if existing:
+        if existing.status == "graded":
+            raise HTTPException(status_code=400, detail="当前提交已批改，不能再次提交")
         existing.is_latest = False
         next_version = existing.version + 1
 
@@ -905,6 +1122,8 @@ async def create_submission(
     db.add(submission)
 
     assignment.grading_status = "pending"
+    if assignment.grading_mode != "manual":
+        assignment.grading_triggered = False
 
     await db.commit()
     await db.refresh(submission)
@@ -959,6 +1178,8 @@ async def list_my_submissions(
             "status": s.status,
             "is_late": s.is_late,  # v4.0
             "submitted_at": s.submitted_at.isoformat(),
+            "can_view_answer_files": bool(assignment and s.is_latest and s.status == "graded"),
+            "answer_files": _answer_files_to_student_entries(_load_url_list(getattr(assignment, "answer_files", None))) if assignment and s.is_latest and s.status == "graded" else [],
             "report": {
                 "score": report.score,
                 "full_score": report.full_score,
@@ -1274,6 +1495,7 @@ class BatchAssignmentItem(BaseModel):
     title: str
     description: str = ""
     question_files: List[str] = []
+    answer_files: List[str] = []
     grading_prompt: str = ""
     reference_answer: str = ""
     deadline: Optional[str] = None
@@ -1318,8 +1540,8 @@ async def batch_create_assignments(
         deadline_dt = None
         if item.deadline:
             try:
-                deadline_dt = datetime.fromisoformat(item.deadline.replace("Z", "+00:00"))
-            except:
+                deadline_dt = parse_cn_datetime_input(item.deadline)
+            except ValueError:
                 errors.append({"section_id": item.section_id, "error": "截止时间格式错误"})
                 continue
 
@@ -1333,6 +1555,7 @@ async def batch_create_assignments(
             title=item.title,
             description=item.description,
             question_files=json.dumps(item.question_files),
+            answer_files=json.dumps(item.answer_files),
             grading_prompt=item.grading_prompt,
             reference_answer=_normalize_answer_json(item.reference_answer),
             deadline=deadline_dt,

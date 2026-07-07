@@ -257,6 +257,7 @@ async def agent_get_course_assignments(
             "title": a.title,
             "description": a.description,
             "question_files": json.loads(a.question_files),
+            "answer_files": json.loads(a.answer_files or "[]"),
             "grading_prompt": a.grading_prompt,
             "reference_answer": a.reference_answer or "",
             "deadline": a.deadline.isoformat() if a.deadline else None,

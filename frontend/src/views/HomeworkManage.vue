@@ -41,7 +41,17 @@
             <div class="question-files-list">
               <div v-for="(file, i) in getAssignment(section.id).question_files" :key="`qf-${i}`" class="question-file-item">
                 <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
-                <a v-else :href="getMediaUrl(file)" target="_blank" class="file-link">{{ fileLabel(file) }}</a>
+                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="getAssignment(section.id).answer_files?.length" class="question-files-preview card-preview">
+            <h4>答案附件</h4>
+            <div class="question-files-list">
+              <div v-for="(file, i) in getAssignment(section.id).answer_files" :key="`af-${i}`" class="question-file-item">
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="openTeacherAnswerFile(file)" />
+                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openTeacherAnswerFile(file)">{{ fileLabel(file) }}</button>
               </div>
             </div>
           </div>
@@ -95,22 +105,33 @@
           <div v-if="form.question_files.length > 0" class="question-files-preview">
             <div v-for="(file, i) in form.question_files" :key="i" class="question-file-item">
               <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" />
-              <a v-else :href="getMediaUrl(file)" target="_blank" class="file-link">{{ fileLabel(file) }}</a>
+              <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
               <button type="button" class="remove-btn" @click="removeQuestionFile(i)">x</button>
             </div>
           </div>
         </div>
 
         <div class="form-group answer-module">
-          <div class="answer-header">
-            <label>答案模块</label>
-            <div class="answer-actions">
-              <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
-              <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
-              <label class="btn-sm file-button">
-                {{ answerParsing ? '解析中...' : '上传答案文件' }}
-                <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
-              </label>
+            <div class="answer-header">
+              <label>答案模块</label>
+              <div class="answer-actions">
+                <button type="button" class="btn-sm" @click="addAnswerItem">添加一题</button>
+                <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
+                <label class="btn-sm file-button">
+                  上传答案附件
+                  <input type="file" multiple accept="image/*,.pdf,.doc,.docx" @change="handleAnswerAttachmentSelect" />
+                </label>
+                <label class="btn-sm file-button">
+                  {{ answerParsing ? '解析中...' : '解析答案文件' }}
+                  <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
+                </label>
+              </div>
+            </div>
+          <div v-if="form.answer_files.length > 0" class="question-files-preview answer-files-preview">
+            <div v-for="(file, i) in form.answer_files" :key="`answer-file-${i}`" class="question-file-item">
+              <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="openTeacherAnswerFile(file)" />
+              <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openTeacherAnswerFile(file)">{{ fileLabel(file) }}</button>
+              <button type="button" class="remove-btn" @click="removeAnswerFile(i)">x</button>
             </div>
           </div>
           <div v-if="form.answer_items.length === 0" class="empty small">暂无答案</div>
@@ -185,9 +206,20 @@
                 <button type="button" class="btn-sm batch-action" @click="openBatchAnswerModal">批量新增</button>
                 <button v-if="form.answer_items.length > 0" type="button" class="btn-sm ghost-action" @click="showAnswerPreview = !showAnswerPreview">{{ showAnswerPreview ? '收起预览' : '查看预览' }}</button>
                 <label class="btn-sm file-button">
-                  {{ answerParsing ? '解析中...' : '上传答案文件' }}
+                  上传答案附件
+                  <input type="file" multiple accept="image/*,.pdf,.doc,.docx" @change="handleAnswerAttachmentSelect" />
+                </label>
+                <label class="btn-sm file-button">
+                  {{ answerParsing ? '解析中...' : '解析答案文件' }}
                   <input type="file" accept=".pdf,.doc,.docx" :disabled="answerParsing" @change="handleAnswerFileSelect" />
                 </label>
+              </div>
+            </div>
+            <div v-if="form.answer_files.length > 0" class="question-files-preview answer-files-preview">
+              <div v-for="(file, i) in form.answer_files" :key="`answer-file-standalone-${i}`" class="question-file-item">
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="openTeacherAnswerFile(file)" />
+                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openTeacherAnswerFile(file)">{{ fileLabel(file) }}</button>
+                <button type="button" class="remove-btn" @click="removeAnswerFile(i)">x</button>
               </div>
             </div>
             <div v-if="form.answer_items.length === 0" class="empty small">暂无答案</div>
@@ -497,10 +529,23 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
+import { useDingTalk } from '../composables/useDingTalk.js'
 import api from '../utils/api.js'
+import {
+  fileLabel,
+  getAbsoluteMediaUrl,
+  getFileName,
+  getMediaUrl,
+  isDocumentFile,
+  isImageFile,
+  isPdf,
+  toAbsoluteUrl,
+  triggerBrowserDownload,
+} from '../utils/homeworkFiles.js'
 
 const route = useRoute()
 const courseId = route.params.courseId
+const { isDingTalk, previewFile } = useDingTalk()
 
 const loading = ref(false)
 const sections = ref([])
@@ -555,6 +600,7 @@ function emptyForm() {
     title: '',
     description: '',
     question_files: [],
+    answer_files: [],
     grading_prompt: '',
     grading_mode: 'auto',
     deadline: '',
@@ -579,44 +625,6 @@ onUnmounted(() => {
 
 function getAssignment(sectionId) {
   return assignmentMap.value[sectionId]
-}
-
-function getMediaUrl(url) {
-  if (!url) return ''
-  const normalized = typeof url === 'string' ? url.trim() : ''
-  if (!normalized) return ''
-  if (/^https?:\/\//i.test(normalized)) return normalized
-  if (normalized.startsWith('/api/')) return normalized
-  if (normalized.startsWith('/uploads/')) return `/api${normalized}`
-  if (normalized.startsWith('uploads/')) return `/api/${normalized}`
-  if (normalized.startsWith('homework/')) return `/api/${normalized}`
-  if (!normalized.includes('/')) return `/api/uploads/${normalized}`
-  return normalized
-}
-
-function getFileExtension(file) {
-  if (typeof file !== 'string') return ''
-  const normalized = file.trim().split('?')[0].split('#')[0]
-  const match = normalized.match(/\.([a-z0-9]+)$/i)
-  return match ? match[1].toLowerCase() : ''
-}
-
-function isImageFile(file) {
-  return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(getFileExtension(file))
-}
-
-function isPdf(file) {
-  return getFileExtension(file) === 'pdf'
-}
-
-function isDocumentFile(file) {
-  return ['doc', 'docx'].includes(getFileExtension(file))
-}
-
-function fileLabel(file) {
-  if (isPdf(file)) return 'PDF'
-  if (isDocumentFile(file)) return getFileExtension(file).toUpperCase()
-  return '文件'
 }
 
 function normalizeAnswerType(type) {
@@ -952,6 +960,7 @@ function openEditForSection(section) {
     title: assignment.title || '',
     description: assignment.description || '',
     question_files: assignment.question_files ? [...assignment.question_files] : [],
+    answer_files: assignment.answer_files ? [...assignment.answer_files] : [],
     grading_prompt: assignment.grading_prompt || '',
     grading_mode: assignment.grading_mode || 'auto',
     deadline: assignment.deadline ? assignment.deadline.slice(0, 16) : '',
@@ -971,6 +980,7 @@ function openAnswerForSection(section) {
   form.value = {
     ...emptyForm(),
     section_id: section.id,
+    answer_files: assignment.answer_files ? [...assignment.answer_files] : [],
     answer_items: parseAnswerItems(assignment.reference_answer),
   }
   showAnswerPreview.value = false
@@ -993,6 +1003,7 @@ async function saveAssignment() {
     title: form.value.title.trim(),
     description: form.value.description,
     question_files: form.value.question_files,
+    answer_files: form.value.answer_files,
     grading_prompt: form.value.grading_prompt,
     reference_answer: items.length ? JSON.stringify(serializeAnswerItems(items)) : '',
     grading_mode: form.value.grading_mode,
@@ -1051,6 +1062,7 @@ async function saveAnswer() {
   try {
     await api.put(`/homework/assignments/${form.value.section_id}/answer`, {
       answer: items.length ? JSON.stringify(serializeAnswerItems(items)) : '',
+      answer_files: form.value.answer_files,
     })
     closeAnswerModal()
     await loadData()
@@ -1095,8 +1107,29 @@ async function handleAnswerFileSelect(e) {
   }
 }
 
+async function handleAnswerAttachmentSelect(e) {
+  const files = Array.from(e.target.files || [])
+  for (const file of files) {
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const res = await api.post('/homework/upload-answer', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      form.value.answer_files.push(res.data.data.url)
+    } catch (err) {
+      alert('答案附件上传失败：' + (err.response?.data?.detail || err.message))
+    }
+  }
+  e.target.value = ''
+}
+
 function removeQuestionFile(index) {
   form.value.question_files.splice(index, 1)
+}
+
+function removeAnswerFile(index) {
+  form.value.answer_files.splice(index, 1)
 }
 
 async function loadSubmissions(sectionId) {
@@ -1232,6 +1265,65 @@ function questionStatusClass(question) {
 
 function previewImage(url) {
   window.open(url, '_blank')
+}
+
+async function requestAnswerFileAccessUrl(payload) {
+  const res = await api.post('/homework/answer-files/access', payload)
+  return toAbsoluteUrl(res.data.data?.url || '')
+}
+
+async function openTeacherAnswerFile(file) {
+  try {
+    const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
+    if (!accessUrl) return
+
+    if (isPdf(file)) {
+      if (isDingTalk) {
+        previewFile(accessUrl, getFileName(file))
+        return
+      }
+      window.open(accessUrl, '_blank')
+      return
+    }
+
+    if (isDocumentFile(file)) {
+      if (isDingTalk) {
+        previewFile(accessUrl, getFileName(file))
+        return
+      }
+      triggerBrowserDownload(accessUrl, getFileName(file))
+      return
+    }
+
+    window.open(accessUrl, '_blank')
+  } catch (e) {
+    alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+function openQuestionFile(file) {
+  const mediaUrl = getMediaUrl(file)
+  if (!mediaUrl) return
+
+  if (isPdf(file)) {
+    if (isDingTalk) {
+      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      return
+    }
+    window.open(mediaUrl, '_blank')
+    return
+  }
+
+  if (isDocumentFile(file)) {
+    if (isDingTalk) {
+      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      return
+    }
+    triggerBrowserDownload(mediaUrl, getFileName(file))
+    return
+  }
+
+  window.open(mediaUrl, '_blank')
 }
 
 async function openReportModal(submission) {
@@ -1714,6 +1806,10 @@ async function pollGradingStatus(assignmentId) {
   border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  appearance: none;
 }
 
 .remove-btn {

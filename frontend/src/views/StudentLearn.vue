@@ -47,6 +47,8 @@
       </div>
       <!-- 快捷跳转到"我的进度"页 -->
       <router-link to="/my-progress" class="link">我的进度</router-link>
+      <!-- 评价本课 -->
+      <router-link :to="`/feedback/${sectionId}`" class="link">课程评价</router-link>
     </div>
 
     <!-- ==================== 进度条 ==================== -->
@@ -119,6 +121,13 @@
     <div class="homework-entry">
       <router-link :to="`/student-homework/${courseId}`" class="hw-btn">
         查看课程作业 &rarr;
+      </router-link>
+    </div>
+
+    <!-- ==================== 评价本课入口 ==================== -->
+    <div class="feedback-entry">
+      <router-link :to="`/feedback/${sectionId}`" class="fb-btn">
+        评价本课 &rarr;
       </router-link>
     </div>
 
@@ -466,6 +475,31 @@ watch(lastVideoProgress, (val) => {
   background: #0050b3;
 }
 
+/* 评价本课入口按钮 */
+.feedback-entry {
+  padding: 0 16px 16px;
+  text-align: center;
+}
+.fb-btn {
+  display: inline-block;
+  padding: 10px 28px;
+  background: #fff;
+  color: #fa8c16;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.fb-btn:hover {
+  background: #fff7e6;
+  border-color: #fa8c16;
+}
+.fb-btn:active {
+  background: #ffe7ba;
+}
+
 /* 防挂机验证弹窗遮罩：全屏半透明黑色覆盖 */
 .verify-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -542,6 +576,10 @@ watch(lastVideoProgress, (val) => {
   /* 作业入口 */
   .homework-entry { padding: 12px; }
   .hw-btn { padding: 8px 20px; font-size: 13px; }
+
+  /* 评价入口 */
+  .feedback-entry { padding: 0 12px 12px; }
+  .fb-btn { padding: 8px 20px; font-size: 13px; }
 
   /* 验证弹窗 */
   .verify-dialog { width: 260px; padding: 24px 18px; }

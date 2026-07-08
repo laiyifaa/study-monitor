@@ -50,6 +50,7 @@
       <template v-if="selectedCourseId">
         <router-link :to="`/course-edit/${selectedCourseId}`" class="btn">编辑课程</router-link>
         <router-link :to="`/homework/${selectedCourseId}`" class="btn success">作业管理</router-link>
+        <router-link :to="`/feedback-overview/${selectedCourseId}`" class="btn">课程评价</router-link>
         <router-link :to="`/leaderboard/${selectedCourseId}`" class="btn">排行榜</router-link>
         <button v-if="isAdmin" class="btn danger" @click="deleteCourse">删除课程</button>
       </template>

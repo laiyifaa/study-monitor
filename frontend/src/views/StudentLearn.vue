@@ -59,7 +59,8 @@
     </div>
 
     <!-- ==================== 未开播提示（v4.0） ==================== -->
-    <div v-if="sectionLocked" class="locked-overlay">
+    <!-- 学生：锁屏不可观看；教师/管理员：仅提示条，可正常查看 -->
+    <div v-if="sectionLocked && !isTeacherOrAdmin" class="locked-overlay">
       <div class="locked-card">
         <div class="locked-icon">🔒</div>
         <h3>课程尚未开播</h3>
@@ -67,10 +68,15 @@
         <p class="locked-hint">开播后即可开始学习</p>
       </div>
     </div>
+    <div v-if="sectionLocked && isTeacherOrAdmin" class="teacher-preview-hint">
+      <span class="tph-icon">👁</span>
+      <span>该课程尚未开播（{{ openTimeInfo }}），当前为教师预览模式</span>
+    </div>
 
     <!-- ==================== 视频播放区域 ==================== -->
     <!-- 根据 video_type 切换 iframe / HTML5 video 两种播放方式 -->
-    <div v-if="!sectionLocked" class="video-container">
+    <!-- 教师预览模式：不锁屏，显示视频 -->
+    <div v-if="!sectionLocked || isTeacherOrAdmin" class="video-container">
       <!-- 外部链接模式：iframe 嵌入第三方视频播放页 -->
       <iframe
         v-if="videoType === 'url' && videoUrl"
@@ -134,10 +140,17 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useStudyTracker } from '../composables/useStudyTracker'
 import { useDingTalk } from '../composables/useDingTalk'
+import { useAuthStore } from '../utils/auth'
 import api from '../utils/api'
 
 /** 当前路由实例，用于获取路径参数 courseId */
 const route = useRoute()
+
+/** 认证状态，用于判断用户角色 */
+const auth = useAuthStore()
+
+/** 当前用户是否为教师或管理员 */
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
 
 /** 从路由参数解构出课程ID和小节ID */
 const courseId = parseInt(route.params.courseId)
@@ -488,6 +501,15 @@ watch(lastVideoProgress, (val) => {
 .locked-card h3 { font-size: 18px; margin-bottom: 8px; color: #333; }
 .locked-card p { font-size: 14px; color: #666; }
 .locked-hint { color: #999; font-size: 13px; margin-top: 8px; }
+
+/* 教师预览提示条 */
+.teacher-preview-hint {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px; margin: 0 0 8px 0;
+  background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 6px;
+  font-size: 13px; color: #096dd9;
+}
+.tph-icon { font-size: 16px; }
 
 /* 返回导航栏 */
 .back-nav-bar {

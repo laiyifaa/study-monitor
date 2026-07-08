@@ -59,8 +59,9 @@
               <span v-if="sec.video_type === 'local'">本地上传</span>
               <span v-else>外部链接</span>
               <span v-if="sec.duration_seconds > 0">{{ formatDuration(sec.duration_seconds) }}</span>
-              <!-- v4.0: 开播时间状态 -->
-              <span v-if="sec.open_time && !isSectionOpen(sec)" class="sc-locked">未开播 {{ formatOpenTime(sec.open_time) }}</span>
+              <!-- v4.0: 开播时间状态 — 教师/管理员显示"预览" -->
+              <span v-if="sec.open_time && !isSectionOpen(sec) && !isTeacherOrAdmin" class="sc-locked">未开播 {{ formatOpenTime(sec.open_time) }}</span>
+              <span v-if="sec.open_time && !isSectionOpen(sec) && isTeacherOrAdmin" class="sc-preview">未开播 {{ formatOpenTime(sec.open_time) }}</span>
             </div>
             <!-- 小节进度条 -->
             <div v-if="getSectionProgress(sec.id)" class="sc-progress">
@@ -72,7 +73,8 @@
           </div>
           <div class="sc-action">
             <span v-if="getSectionProgress(sec.id)?.is_completed" class="sc-done">已完成</span>
-            <span v-else-if="sec.open_time && !isSectionOpen(sec)" class="sc-locked-tag">未开播</span>
+            <span v-else-if="sec.open_time && !isSectionOpen(sec) && !isTeacherOrAdmin" class="sc-locked-tag">未开播</span>
+            <span v-else-if="sec.open_time && !isSectionOpen(sec) && isTeacherOrAdmin" class="sc-preview-tag">预览</span>
             <span v-else class="sc-go">去学习</span>
           </div>
         </div>
@@ -96,11 +98,16 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '../utils/auth'
 import api from '../utils/api'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const courseId = computed(() => parseInt(route.params.courseId) || 0)
+
+/** 当前用户是否为教师或管理员 */
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
 
 const course = ref(null)
 const sections = ref([])
@@ -243,6 +250,10 @@ onMounted(async () => {
 /* v4.0: 未开播状态 */
 .sc-locked { color: #fa8c16; font-size: 11px; }
 .sc-locked-tag { font-size: 12px; color: #fa8c16; font-weight: 500; }
+
+/* 教师/管理员预览状态 */
+.sc-preview { color: #1890ff; font-size: 11px; }
+.sc-preview-tag { font-size: 12px; color: #1890ff; font-weight: 500; }
 
 /* 作业入口 */
 .homework-entry {

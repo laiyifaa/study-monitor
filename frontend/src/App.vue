@@ -31,7 +31,7 @@
   <!-- 全局顶栏：显示用户信息和退出按钮，登录页不显示 -->
   <header v-if="showHeader" class="app-header">
     <div class="header-left">
-      <a href="javascript:void(0)" class="app-title" @click="goHome">在线学习平台</a>
+      <span class="app-title" @click="goHome">在线学习平台</span>
     </div>
     <div v-if="auth.isLoggedIn.value" class="header-right">
       <!-- 运维面板入口：管理员可见 -->
@@ -241,14 +241,22 @@ onMounted(async () => {
 /**
  * 点击标题回到主页
  * 学生 → /my-progress，教师/管理员 → /teacher
+ *
+ * 使用 router.replace() 代替 router.push()：
+ *   钉钉 WebView 的 history 管理与标准浏览器不同，
+ *   push() 可能导致返回键陷入死循环（当前页→目标页→返回→当前页…）
+ *
+ * 加 DingTalk fallback（window.location.hash）：
+ *   极端情况下 replace() 也可能被钉钉吞掉，
+ *   直接改 hash 可确保页面一定会跳转
  */
 function goHome() {
   const role = auth.user.value?.role
-  if (role === 'student') {
-    router.push('/my-progress')
-  } else {
-    router.push('/teacher')
-  }
+  const target = role === 'student' ? '/my-progress' : '/teacher'
+  router.replace(target).catch(() => {
+    // replace 失败（钉钉 WebView 兼容性问题），降级为直接改 hash
+    window.location.hash = target
+  })
 }
 </script>
 

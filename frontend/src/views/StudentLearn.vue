@@ -47,6 +47,8 @@
       </div>
       <!-- 快捷跳转到"我的进度"页 -->
       <router-link to="/my-progress" class="link">我的进度</router-link>
+      <!-- 评价本课 -->
+      <router-link :to="`/feedback/${sectionId}`" class="link">课程评价</router-link>
     </div>
 
     <!-- ==================== 进度条 ==================== -->
@@ -59,7 +61,8 @@
     </div>
 
     <!-- ==================== 未开播提示（v4.0） ==================== -->
-    <div v-if="sectionLocked" class="locked-overlay">
+    <!-- 学生：锁屏不可观看；教师/管理员：仅提示条，可正常查看 -->
+    <div v-if="sectionLocked && !isTeacherOrAdmin" class="locked-overlay">
       <div class="locked-card">
         <div class="locked-icon">🔒</div>
         <h3>课程尚未开播</h3>
@@ -67,10 +70,15 @@
         <p class="locked-hint">开播后即可开始学习</p>
       </div>
     </div>
+    <div v-if="sectionLocked && isTeacherOrAdmin" class="teacher-preview-hint">
+      <span class="tph-icon">👁</span>
+      <span>该课程尚未开播（{{ openTimeInfo }}），当前为教师预览模式</span>
+    </div>
 
     <!-- ==================== 视频播放区域 ==================== -->
     <!-- 根据 video_type 切换 iframe / HTML5 video 两种播放方式 -->
-    <div v-if="!sectionLocked" class="video-container">
+    <!-- 教师预览模式：不锁屏，显示视频 -->
+    <div v-if="!sectionLocked || isTeacherOrAdmin" class="video-container">
       <!-- 外部链接模式：iframe 嵌入第三方视频播放页 -->
       <iframe
         v-if="videoType === 'url' && videoUrl"
@@ -116,6 +124,13 @@
       </router-link>
     </div>
 
+    <!-- ==================== 评价本课入口 ==================== -->
+    <div class="feedback-entry">
+      <router-link :to="`/feedback/${sectionId}`" class="fb-btn">
+        评价本课 &rarr;
+      </router-link>
+    </div>
+
     <!-- ==================== 防挂机验证弹窗 ==================== -->
     <!-- 由 useStudyTracker 的 showVerify 控制，长时间无操作时弹出 -->
     <div v-if="showVerify" class="verify-overlay">
@@ -134,10 +149,17 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useStudyTracker } from '../composables/useStudyTracker'
 import { useDingTalk } from '../composables/useDingTalk'
+import { useAuthStore } from '../utils/auth'
 import api from '../utils/api'
 
 /** 当前路由实例，用于获取路径参数 courseId */
 const route = useRoute()
+
+/** 认证状态，用于判断用户角色 */
+const auth = useAuthStore()
+
+/** 当前用户是否为教师或管理员 */
+const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
 
 /** 从路由参数解构出课程ID和小节ID */
 const courseId = parseInt(route.params.courseId)
@@ -453,6 +475,31 @@ watch(lastVideoProgress, (val) => {
   background: #0050b3;
 }
 
+/* 评价本课入口按钮 */
+.feedback-entry {
+  padding: 0 16px 16px;
+  text-align: center;
+}
+.fb-btn {
+  display: inline-block;
+  padding: 10px 28px;
+  background: #fff;
+  color: #fa8c16;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.fb-btn:hover {
+  background: #fff7e6;
+  border-color: #fa8c16;
+}
+.fb-btn:active {
+  background: #ffe7ba;
+}
+
 /* 防挂机验证弹窗遮罩：全屏半透明黑色覆盖 */
 .verify-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -489,6 +536,15 @@ watch(lastVideoProgress, (val) => {
 .locked-card p { font-size: 14px; color: #666; }
 .locked-hint { color: #999; font-size: 13px; margin-top: 8px; }
 
+/* 教师预览提示条 */
+.teacher-preview-hint {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px; margin: 0 0 8px 0;
+  background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 6px;
+  font-size: 13px; color: #096dd9;
+}
+.tph-icon { font-size: 16px; }
+
 /* 返回导航栏 */
 .back-nav-bar {
   padding: 10px 16px; background: #fff; border-bottom: 1px solid #eee;
@@ -520,6 +576,10 @@ watch(lastVideoProgress, (val) => {
   /* 作业入口 */
   .homework-entry { padding: 12px; }
   .hw-btn { padding: 8px 20px; font-size: 13px; }
+
+  /* 评价入口 */
+  .feedback-entry { padding: 0 12px 12px; }
+  .fb-btn { padding: 8px 20px; font-size: 13px; }
 
   /* 验证弹窗 */
   .verify-dialog { width: 260px; padding: 24px 18px; }

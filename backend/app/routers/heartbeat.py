@@ -82,8 +82,8 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
 
     权限要求：已登录用户
     """
-    # 开播时间检查：如果小节设置了 open_time 且当前时间未到，拒绝开始学习
-    if req.section_id:
+    # 开播时间检查：仅限制学生，教师/管理员可提前查看
+    if req.section_id and user.role == 'student':
         section_result = await db.execute(select(Section).where(Section.id == req.section_id))
         section = section_result.scalar_one_or_none()
         if section and section.open_time and datetime.now() < section.open_time:

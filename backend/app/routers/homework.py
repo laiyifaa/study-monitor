@@ -317,6 +317,90 @@ def _load_url_list(raw: str | None) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
+def _load_report_detail(report: GradingReport | None) -> dict:
+    if not report or not report.detail:
+        return {}
+    try:
+        value = json.loads(report.detail)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _load_review_questions(raw: str | None) -> list:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _student_questions_from_detail(detail: dict) -> list[dict]:
+    questions: list[dict] = []
+
+    raw_questions = detail.get("questions")
+    if isinstance(raw_questions, list):
+        for item in raw_questions:
+            if not isinstance(item, dict):
+                continue
+            index = item.get("index") or item.get("qid") or item.get("no") or item.get("key")
+            correct = item.get("correct")
+            if correct is None and item.get("ok") is not None:
+                correct = item.get("ok")
+            if index in {None, ""} or correct is None:
+                continue
+            questions.append({
+                "index": str(index),
+                "correct": bool(correct),
+            })
+        if questions:
+            return questions
+
+    raw_details = detail.get("details")
+    if not isinstance(raw_details, list):
+        return questions
+
+    for item in raw_details:
+        if not isinstance(item, dict):
+            continue
+        index = item.get("qid")
+        correct = item.get("ok")
+        if index in {None, ""} or correct is None:
+            continue
+        questions.append({
+            "index": str(index),
+            "correct": bool(correct),
+        })
+    return questions
+
+
+def _report_to_staff_summary(report: GradingReport) -> dict:
+    return {
+        "score": report.score,
+        "full_score": report.full_score,
+        "status": report.status,
+        "accuracy": report.accuracy,
+        "correct_count": report.correct_count,
+        "wrong_count": report.wrong_count,
+        "feedback": report.feedback,
+        "generated_by": report.generated_by,
+        "created_at": report.created_at.isoformat(),
+    }
+
+
+def _report_to_student_summary(report: GradingReport) -> dict:
+    detail = _load_report_detail(report)
+    return {
+        "status": report.status,
+        "correct_count": report.correct_count,
+        "wrong_count": report.wrong_count,
+        "feedback": report.feedback,
+        "questions": _student_questions_from_detail(detail),
+    }
+
+
 def _normalize_homework_file_url(file_url: str) -> str:
     normalized = image_url_to_local_path(str(file_url or "").strip())
     normalized = os.path.normpath(normalized).replace("\\", "/")
@@ -372,7 +456,13 @@ async def _student_can_view_answer_files(assignment_id: int, student_id: int, db
             )
         )
     )).scalar_one_or_none()
-    return bool(latest_submission and latest_submission.status == "graded")
+    if not latest_submission:
+        return False
+
+    report_id = await db.scalar(
+        select(GradingReport.id).where(GradingReport.submission_id == latest_submission.id)
+    )
+    return report_id is not None
 
 
 async def _resolve_assignment_answer_file(
@@ -1052,21 +1142,23 @@ async def get_grading_report(
     if not report:
         raise HTTPException(status_code=404, detail="批改报告尚未生成")
 
+    if current_user.role == "student":
+        return {
+            "code": 0,
+            "data": {
+                "submission_id": submission_id,
+                **_report_to_student_summary(report),
+                "created_at": report.created_at.isoformat(),
+            },
+        }
+
     return {
         "code": 0,
         "data": {
             "submission_id": submission_id,
-            "score": report.score,
-            "full_score": report.full_score,
-            "status": report.status,
-            "accuracy": report.accuracy,
-            "correct_count": report.correct_count,
-            "wrong_count": report.wrong_count,
-            "feedback": report.feedback,
-            "detail": json.loads(report.detail),
-            "review_questions": json.loads(report.review_questions) if report.review_questions else [],
-            "generated_by": report.generated_by,
-            "created_at": report.created_at.isoformat(),
+            **_report_to_staff_summary(report),
+            "detail": _load_report_detail(report),
+            "review_questions": _load_review_questions(report.review_questions),
         },
     }
 
@@ -1105,7 +1197,10 @@ async def create_submission(
 
     next_version = 1
     if existing:
-        if existing.status == "graded":
+        existing_report_id = await db.scalar(
+            select(GradingReport.id).where(GradingReport.submission_id == existing.id)
+        )
+        if existing.status == "graded" or existing_report_id is not None:
             raise HTTPException(status_code=400, detail="当前提交已批改，不能再次提交")
         existing.is_latest = False
         next_version = existing.version + 1
@@ -1165,6 +1260,7 @@ async def list_my_submissions(
             select(GradingReport).where(GradingReport.submission_id == s.id)
         )
         report = report_result.scalar_one_or_none()
+        can_view_answer_files = bool(assignment and s.is_latest and report)
 
         data.append({
             "id": s.id,
@@ -1178,17 +1274,9 @@ async def list_my_submissions(
             "status": s.status,
             "is_late": s.is_late,  # v4.0
             "submitted_at": s.submitted_at.isoformat(),
-            "can_view_answer_files": bool(assignment and s.is_latest and s.status == "graded"),
-            "answer_files": _answer_files_to_student_entries(_load_url_list(getattr(assignment, "answer_files", None))) if assignment and s.is_latest and s.status == "graded" else [],
-            "report": {
-                "score": report.score,
-                "full_score": report.full_score,
-                "status": report.status,
-                "accuracy": report.accuracy,
-                "correct_count": report.correct_count,
-                "wrong_count": report.wrong_count,
-                "feedback": report.feedback,
-            } if report else None,
+            "can_view_answer_files": can_view_answer_files,
+            "answer_files": _answer_files_to_student_entries(_load_url_list(getattr(assignment, "answer_files", None))) if can_view_answer_files else [],
+            "report": _report_to_student_summary(report) if report else None,
         })
 
     return {"code": 0, "data": data}
@@ -1330,16 +1418,13 @@ async def get_grading_task_status(
             "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
             "error_message": task.error_message if task else None,
             "retry_count": task.retry_count if task else 0,
-            "report": {
-                "score": report.score,
-                "full_score": report.full_score,
-                "status": report.status,
-                "accuracy": report.accuracy,
-                "correct_count": report.correct_count,
-                "wrong_count": report.wrong_count,
-                "feedback": report.feedback,
-                "generated_by": report.generated_by,
-            } if report else None,
+            "report": (
+                _report_to_student_summary(report)
+                if report and current_user.role == "student"
+                else _report_to_staff_summary(report)
+                if report
+                else None
+            ),
         },
     }
 

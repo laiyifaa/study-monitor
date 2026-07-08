@@ -21,12 +21,22 @@
             <span class="status-badge" :class="assignmentMap[section.id].status">{{ statusText(assignmentMap[section.id].status) }}</span>
           </div>
           <p class="desc">{{ assignmentMap[section.id].description || '暂无描述' }}</p>
-          <div v-if="assignmentMap[section.id].question_files && assignmentMap[section.id].question_files.length > 0" class="question-files">
-            <h4>题目文件</h4>
-            <div class="question-files-list">
-              <div v-for="(file, i) in assignmentMap[section.id].question_files" :key="i" class="question-file">
-                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
-                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
+          <div v-if="hasAttachmentGroup(section.id)" class="attachment-grid">
+            <div v-if="hasQuestionFiles(section.id)" class="attachment-group">
+              <h4>题目附件</h4>
+              <div class="question-files-list">
+                <div v-for="(file, i) in getQuestionFiles(section.id)" :key="`q-${i}`" class="question-file">
+                  <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
+                  <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
+                </div>
+              </div>
+            </div>
+            <div v-if="hasAnswerFiles(section.id)" class="attachment-group">
+              <h4>答案附件</h4>
+              <div class="question-files-list">
+                <div v-for="file in getAnswerFiles(section.id)" :key="`a-${section.id}-${file.index}`" class="question-file">
+                  <button type="button" class="file-link" :title="file.name" @click="openStudentAnswerFile(section.id, file)">{{ fileLabel(file.name) }}</button>
+                </div>
               </div>
             </div>
           </div>
@@ -42,10 +52,21 @@
               {{ isSubmissionLocked(section.id) ? '已批改，不可再提交' : (mySubmissionMap[section.id] ? '修改提交' : '提交作业') }}
             </button>
           </div>
-        </div>
+          </div>
 
           <div v-if="mySubmissionMap[section.id]" class="my-submission">
-            <h4>我的提交</h4>
+            <div class="submission-head">
+              <h4>我的提交</h4>
+              <button
+                v-if="mySubmissionMap[section.id].report"
+                type="button"
+                class="btn-sm report-toggle"
+                :aria-expanded="isReportExpanded(section.id)"
+                @click="toggleReport(section.id)"
+              >
+                {{ isReportExpanded(section.id) ? '收起批改' : '查看批改' }}
+              </button>
+            </div>
             <div class="submission-images">
               <img
                 v-for="(img, i) in mySubmissionMap[section.id].images"
@@ -55,37 +76,26 @@
                 @click="previewImage(getMediaUrl(img))"
               />
             </div>
-            <div v-if="mySubmissionMap[section.id].report" class="report">
-              <div class="score">
-                分数：{{ mySubmissionMap[section.id].report.score }}
-                <span v-if="mySubmissionMap[section.id].report.full_score">/ {{ mySubmissionMap[section.id].report.full_score }}</span>
-                <span v-if="mySubmissionMap[section.id].report.accuracy" class="accuracy">（正确率 {{ (mySubmissionMap[section.id].report.accuracy * 100).toFixed(0) }}%）</span>
-                <span v-if="mySubmissionMap[section.id].report.status" class="status-tag" :class="mySubmissionMap[section.id].report.status">{{ mySubmissionMap[section.id].report.status }}</span>
-              </div>
-              <div v-if="getQuestions(mySubmissionMap[section.id].report)" class="questions-detail">
-                <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
-                  <span class="q-index">第{{ q.index }}题</span>
-                  <span class="q-score" :class="{ correct: q.correct }">{{ q.score }}/{{ q.max_score }}</span>
-                     <span class="q-status">{{ q.correct ? '✓' : '✗' }}</span>
-                  <div v-if="q.comment" class="q-comment">{{ q.comment }}</div>
+            <div v-if="mySubmissionMap[section.id].report" class="report-accordion">
+              <div class="report-summary-row">
+                <div class="report-summary-text">
+                  <span class="report-pill">已批改</span>
+                  <span v-if="hasQuestionStats(mySubmissionMap[section.id].report)" class="report-counts">
+                    对{{ mySubmissionMap[section.id].report.correct_count ?? 0 }}题 / 错{{ mySubmissionMap[section.id].report.wrong_count ?? 0 }}题
+                  </span>
                 </div>
               </div>
-              <div v-if="getIssues(mySubmissionMap[section.id].report)" class="issues-list">
-                <h5>问题汇总</h5>
-                <ul>
-                  <li v-for="(issue, i) in getIssues(mySubmissionMap[section.id].report)" :key="i">{{ issue }}</li>
-                </ul>
+              <div v-if="isReportExpanded(section.id)" class="report-body">
+                <div class="feedback">总评：{{ mySubmissionMap[section.id].report.feedback || '暂无评语' }}</div>
+                <div v-if="getQuestions(mySubmissionMap[section.id].report)" class="questions-detail">
+                  <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
+                    <span class="q-index">第{{ q.index }}题</span>
+                    <span class="q-status" :class="q.correct ? 'correct' : 'wrong'">{{ q.correct ? '正确' : '错误' }}</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div v-else class="pending">等待批改中...</div>
-            <div v-if="mySubmissionMap[section.id].can_view_answer_files && mySubmissionMap[section.id].answer_files?.length" class="question-files answer-files">
-              <h4>答案附件</h4>
-              <div class="question-files-list">
-                <div v-for="file in mySubmissionMap[section.id].answer_files" :key="`${section.id}-${file.index}`" class="question-file">
-                  <button type="button" class="file-link" :title="file.name" @click="openStudentAnswerFile(section.id, file)">{{ fileLabel(file.name) }}</button>
-                </div>
-              </div>
-            </div>
           </div>
           <div v-else class="pending">暂未提交作业</div>
         </div>
@@ -142,6 +152,7 @@ const loading = ref(false)
 const sections = ref([])
 const assignmentMap = ref({})
 const mySubmissionMap = ref({})
+const expandedReports = ref({})
 const showSubmitModal = ref(false)
 const currentSectionId = ref(null)
 
@@ -268,7 +279,40 @@ function isOverdue(assignment) {
 }
 
 function isSubmissionLocked(sectionId) {
-  return mySubmissionMap.value[sectionId]?.status === 'graded'
+  return Boolean(mySubmissionMap.value[sectionId]?.report)
+}
+
+function isReportExpanded(sectionId) {
+  return Boolean(expandedReports.value[sectionId])
+}
+
+function toggleReport(sectionId) {
+  expandedReports.value = {
+    ...expandedReports.value,
+    [sectionId]: !expandedReports.value[sectionId],
+  }
+}
+
+function getQuestionFiles(sectionId) {
+  return assignmentMap.value[sectionId]?.question_files || []
+}
+
+function getAnswerFiles(sectionId) {
+  const submission = mySubmissionMap.value[sectionId]
+  if (!submission?.can_view_answer_files) return []
+  return submission.answer_files || []
+}
+
+function hasQuestionFiles(sectionId) {
+  return getQuestionFiles(sectionId).length > 0
+}
+
+function hasAnswerFiles(sectionId) {
+  return getAnswerFiles(sectionId).length > 0
+}
+
+function hasAttachmentGroup(sectionId) {
+  return hasQuestionFiles(sectionId) || hasAnswerFiles(sectionId)
 }
 
 function statusText(status) {
@@ -347,6 +391,13 @@ async function openStudentAnswerFile(sectionId, file) {
 }
 
 function getQuestions(report) {
+  if (Array.isArray(report?.questions) && report.questions.length > 0) {
+    return report.questions.map(item => ({
+      index: item.index,
+      correct: item.correct === true,
+    }))
+  }
+
   if (!report?.detail) return null
   try {
     const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
@@ -355,9 +406,6 @@ function getQuestions(report) {
       return detail.details.map(d => ({
         index: d.qid,
         correct: d.ok,
-        score: d.s,
-        max_score: d.fs,
-        comment: '',
       }))
     }
     return null
@@ -366,22 +414,8 @@ function getQuestions(report) {
   }
 }
 
-function getIssues(report) {
-  if (!report?.detail) return null
-  try {
-    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    if (detail.issues) return detail.issues
-    const issues = []
-    if (Array.isArray(detail.review) && detail.review.length > 0) {
-      issues.push(`需人工复核题号：${detail.review.join('、')}`)
-    }
-    if (detail.error) {
-      issues.push(`批改异常：${detail.error}`)
-    }
-    return issues.length > 0 ? issues : null
-  } catch {
-    return null
-  }
+function hasQuestionStats(report) {
+  return typeof report?.correct_count === 'number' || typeof report?.wrong_count === 'number'
 }
 </script>
 
@@ -608,9 +642,39 @@ function getIssues(report) {
   border-top: 1px dashed #d6e1dc;
 }
 
-.my-submission h4 {
-  margin: 0 0 12px;
+.submission-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.submission-head h4 {
+  margin: 0;
   color: #17324d;
+}
+
+.report-toggle {
+  flex: 0 0 auto;
+}
+
+.attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.attachment-group {
+  padding-top: 12px;
+  border-top: 1px solid #dfe9e5;
+}
+
+.attachment-group h4 {
+  margin: 0 0 10px;
+  color: #40515f;
+  font-size: 14px;
 }
 
 .submission-images,
@@ -630,56 +694,21 @@ function getIssues(report) {
   cursor: pointer;
 }
 
-.report {
-  background: #edf9f1;
-  border: 1px solid #c8ecd4;
-  padding: 12px;
-  border-radius: 8px;
+.report-accordion {
+  margin-top: 6px;
 }
-
-.score {
-  font-weight: 800;
-  color: #15803d;
-  font-size: 20px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.score .accuracy {
-  font-weight: 600;
-  font-size: 14px;
-  color: #607080;
-}
-
-.status-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.status-tag.success { background: #e8f7ef; color: #15803d; }
-.status-tag.partial { background: #fff4df; color: #a16207; }
-.status-tag.degraded { background: #fff1ee; color: #b42318; }
-.status-tag.failed { background: #fee8e7; color: #b42318; }
 
 .questions-detail {
-  margin: 12px 0;
-  background: #ffffff;
-  border: 1px solid #dfe9e5;
-  border-radius: 8px;
+  margin: 12px 0 0;
+  border-top: 1px solid #dfe9e5;
 }
 
 .question-item {
-  display: grid;
-  grid-template-columns: 68px 70px 72px 1fr;
+  display: flex;
+  justify-content: space-between;
   gap: 8px;
-  align-items: start;
-  padding: 10px;
+  align-items: center;
+  padding: 10px 0;
   border-bottom: 1px solid #edf2f0;
 }
 
@@ -692,52 +721,64 @@ function getIssues(report) {
   color: #40515f;
 }
 
-.q-score {
-  color: #b42318;
-  font-weight: 800;
-}
-
-.q-score.correct {
-  color: #15803d;
-}
-
 .q-status {
   font-size: 12px;
   font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.q-status.correct {
+  background: #e8f7ef;
+  color: #15803d;
+}
+
+.q-status.wrong {
+  background: #fee8e7;
+  color: #b42318;
+}
+
+.report-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-summary-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: #17324d;
+  font-weight: 700;
+}
+
+.report-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e8f7ef;
+  color: #15803d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-counts {
   color: #607080;
-}
-
-.q-comment {
-  color: #566573;
   font-size: 13px;
-  line-height: 1.5;
+  font-weight: 600;
 }
 
-.issues-list {
-  margin: 12px 0 0;
-  padding: 12px;
-  background: #fff4df;
-  border: 1px solid #f8ddb0;
-  border-radius: 8px;
-}
-
-.issues-list h5 {
-  margin: 0 0 8px;
-  color: #a16207;
-}
-
-.issues-list ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.issues-list li {
-  margin: 4px 0;
-  color: #566573;
+.report-body {
+  padding-top: 12px;
 }
 
 .feedback {
-  margin-top: 8px;
+  margin-top: 0;
+  color: #40515f;
+  line-height: 1.6;
 }
 
 .pending {
@@ -843,8 +884,19 @@ function getIssues(report) {
     flex-direction: column;
   }
 
-  .question-item {
+  .submission-head,
+  .report-summary-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .attachment-grid {
     grid-template-columns: 1fr;
+  }
+
+  .question-item {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

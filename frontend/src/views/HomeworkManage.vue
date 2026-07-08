@@ -62,6 +62,7 @@
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
             <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
             <button class="btn-sm" @click="openUnsubmittedModal">未交名单</button>
+            <button class="btn-sm" @click="openLateModal(section.id)">迟交名单</button>
             <button
               v-if="getAssignment(section.id).status === 'published' && getAssignment(section.id).grading_mode !== 'manual'"
               class="btn-sm ai-grade-btn"
@@ -505,6 +506,31 @@
       </div>
     </div>
 
+    <div v-if="showLateModal" class="modal-overlay" @click.self="showLateModal = false">
+      <div class="modal modal-lg">
+        <h3>迟交名单{{ currentViewSectionId ? ` - ${getSectionTitle(currentViewSectionId)}` : '' }}</h3>
+        <div v-if="lateSubmissions.length === 0" class="empty">暂无迟交学生</div>
+        <div v-else class="submissions-list">
+          <div v-for="s in lateSubmissions" :key="s.id" class="submission-item">
+            <div class="submission-header">
+              <span class="student-name">{{ s.user?.name }}</span>
+              <div class="status-group">
+                <span class="status-badge late">迟交</span>
+                <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
+              </div>
+            </div>
+            <div class="submission-meta">
+              <span>{{ s.user?.class_name || '未分配班级' }}</span>
+              <span>提交时间：{{ formatDate(s.submitted_at) }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showLateModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showGradeModal" class="modal-overlay" @click.self="showGradeModal = false">
       <div class="modal">
         <h3>手动批改 - {{ gradingSubmission?.user?.name }}</h3>
@@ -552,6 +578,7 @@ const sections = ref([])
 const assignmentMap = ref({})
 const submissions = ref([])
 const unsubmittedStudents = ref([])
+const lateSubmissions = computed(() => submissions.value.filter(s => s.is_late))
 const ANSWER_TYPE_DEFAULT_SCORE = {
   option_letter: 2,
   true_false: 1,
@@ -563,6 +590,7 @@ const showAnswerModal = ref(false)
 const showBatchAnswerModal = ref(false)
 const showSubmissionsModal = ref(false)
 const showUnsubmittedModal = ref(false)
+const showLateModal = ref(false)
 const showGradeModal = ref(false)
 const showReportModal = ref(false)
 const gradingSubmission = ref(null)
@@ -1133,14 +1161,29 @@ function removeAnswerFile(index) {
 }
 
 async function loadSubmissions(sectionId) {
-  currentViewSectionId.value = sectionId
   try {
-    const res = await api.get(`/homework/assignments/${sectionId}/submissions`)
-    submissions.value = res.data.data || []
+    await loadSectionSubmissions(sectionId)
     showSubmissionsModal.value = true
+    showLateModal.value = false
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   }
+}
+
+async function openLateModal(sectionId) {
+  try {
+    await loadSectionSubmissions(sectionId)
+    showLateModal.value = true
+    showSubmissionsModal.value = false
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function loadSectionSubmissions(sectionId) {
+  currentViewSectionId.value = sectionId
+  const res = await api.get(`/homework/assignments/${sectionId}/submissions`)
+  submissions.value = res.data.data || []
 }
 
 async function openUnsubmittedModal() {
@@ -1159,6 +1202,10 @@ function statusText(status) {
 
 function gradingStatusText(status) {
   return { pending: '待批改', graded: '已批改' }[status] || status
+}
+
+function getSectionTitle(sectionId) {
+  return sections.value.find(section => section.id === sectionId)?.title || ''
 }
 
 function taskStatusText(status) {
@@ -2068,6 +2115,14 @@ async function pollGradingStatus(assignmentId) {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.submission-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #7b8790;
+  font-size: 12px;
 }
 
 .student-name {

@@ -964,7 +964,7 @@ async def list_submissions(
 
         data.append({
             "id": s.id,
-            "user": {"id": user.id, "name": user.name} if user else None,
+            "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
             "images": json.loads(s.images),
             "status": s.status,
             "is_late": s.is_late,  # v4.0: 迟交标记
@@ -1057,7 +1057,7 @@ async def list_submissions_summary(
         task = tasks.get(s.id)
         data.append({
             "id": s.id,
-            "user": {"id": user.id, "name": user.name} if user else None,
+            "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
             "images": json.loads(s.images),
             "status": s.status,
             "submitted_at": s.submitted_at.isoformat(),

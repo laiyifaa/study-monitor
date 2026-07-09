@@ -20,6 +20,7 @@ API 列表：
         GET    /api/homework/course/{course_id}         — 获取课程下所有小节作业
         GET    /api/homework/assignments/{section_id}/submissions — 查看提交列表
         GET    /api/homework/reports/{submission_id}   — 查看批改报告
+        POST   /api/homework/regrade/{submission_id}   — 重新触发单条提交智能批改
         POST   /api/homework/trigger-grading/{assignment_id} — 手动触发智能体批改
 
     学生端：
@@ -94,13 +95,13 @@ async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
             assignment.grading_status = "graded"
 
 
-async def _prepare_grading_task(session: AsyncSession, submission_id: int) -> GradingTask | None:
+async def _prepare_grading_task(session: AsyncSession, submission_id: int, force: bool = False) -> GradingTask | None:
     existing_result = await session.execute(
         select(GradingTask).where(GradingTask.submission_id == submission_id)
     )
     task = existing_result.scalar_one_or_none()
 
-    if task and task.status in {"graded", "sent"}:
+    if task and task.status in {"graded", "sent"} and not force:
         return None
 
     if not task:
@@ -122,6 +123,54 @@ async def _prepare_grading_task(session: AsyncSession, submission_id: int) -> Gr
     await session.commit()
     await session.refresh(task)
     return task
+
+
+async def _execute_grading_for_submission(
+    submission_id: int,
+    prompt: str,
+    answer_json: str = "",
+    force: bool = False,
+) -> bool:
+    task_id = None
+
+    try:
+        async with async_session() as session:
+            submission_result = await session.execute(select(Submission).where(Submission.id == submission_id))
+            submission = submission_result.scalar_one_or_none()
+            if not submission:
+                raise Exception(f"提交 {submission_id} 不存在")
+
+            images = json.loads(submission.images)
+            if not images:
+                raise ValueError("提交未包含可批改图片")
+
+            local_paths = [image_url_to_local_path(url) for url in images]
+            missing_paths = [path for path in local_paths if not os.path.exists(path)]
+            if missing_paths:
+                raise FileNotFoundError("原始作业图片缺失，无法重新批改")
+
+            task = await _prepare_grading_task(session, submission_id, force=force)
+            if not task:
+                return False
+
+            task_id = task.id
+            output_filename = f"stitched_{submission.id}.jpg"
+            stitched_url = stitch_images(local_paths, output_filename)
+
+            task.stitched_image_url = stitched_url
+            await session.commit()
+
+        return await call_grading_agent(
+            task_id=task_id,
+            submission_id=submission_id,
+            stitched_image_url=stitched_url,
+            prompt=prompt,
+            answer_json=answer_json,
+        )
+    except Exception as e:
+        if task_id is not None:
+            await _mark_task_failed(task_id, str(e))
+        raise
 
 
 async def _mark_task_failed(task_id: int, error_message: str):
@@ -345,10 +394,12 @@ def _student_questions_from_detail(detail: dict) -> list[dict]:
         for item in raw_questions:
             if not isinstance(item, dict):
                 continue
-            index = item.get("index") or item.get("qid") or item.get("no") or item.get("key")
+            index = item.get("index") or item.get("qid") or item.get("question_id") or item.get("no") or item.get("key")
             correct = item.get("correct")
-            if correct is None and item.get("ok") is not None:
+            if correct is None:
                 correct = item.get("ok")
+            if correct is None:
+                correct = item.get("is_correct")
             if index in {None, ""} or correct is None:
                 continue
             questions.append({
@@ -359,14 +410,22 @@ def _student_questions_from_detail(detail: dict) -> list[dict]:
             return questions
 
     raw_details = detail.get("details")
+    if not isinstance(raw_details, list) or not raw_details:
+        nested = detail.get("result")
+        if isinstance(nested, dict):
+            raw_details = nested.get("details")
     if not isinstance(raw_details, list):
         return questions
 
     for item in raw_details:
         if not isinstance(item, dict):
             continue
-        index = item.get("qid")
-        correct = item.get("ok")
+        index = item.get("index") or item.get("qid") or item.get("question_id") or item.get("no") or item.get("key")
+        correct = item.get("correct")
+        if correct is None:
+            correct = item.get("ok")
+        if correct is None:
+            correct = item.get("is_correct")
         if index in {None, ""} or correct is None:
             continue
         questions.append({
@@ -964,7 +1023,7 @@ async def list_submissions(
 
         data.append({
             "id": s.id,
-            "user": {"id": user.id, "name": user.name} if user else None,
+            "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
             "images": json.loads(s.images),
             "status": s.status,
             "is_late": s.is_late,  # v4.0: 迟交标记
@@ -1057,7 +1116,7 @@ async def list_submissions_summary(
         task = tasks.get(s.id)
         data.append({
             "id": s.id,
-            "user": {"id": user.id, "name": user.name} if user else None,
+            "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
             "images": json.loads(s.images),
             "status": s.status,
             "submitted_at": s.submitted_at.isoformat(),
@@ -1384,6 +1443,76 @@ async def review_grade(
     }
 
 
+@router.post("/regrade/{submission_id}")
+async def regrade_submission(
+    submission_id: int,
+    background_tasks: BackgroundTasks,
+    _current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Submission).where(Submission.id == submission_id))
+    submission = result.scalar_one_or_none()
+    if not submission:
+        raise HTTPException(status_code=404, detail="提交不存在")
+
+    assignment_result = await db.execute(
+        select(Assignment).where(Assignment.id == submission.assignment_id)
+    )
+    assignment = assignment_result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+
+    if assignment.status != "published":
+        raise HTTPException(status_code=400, detail="作业未发布")
+
+    report_result = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id == submission_id)
+    )
+    report = report_result.scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=400, detail="该提交尚未批改，不能重新智能批改")
+
+    generated_by = str(report.generated_by or "").lower()
+    if report.review_status == "modified" or "teacher" in generated_by:
+        raise HTTPException(status_code=400, detail="该提交已被人工修改，不可重新智能批改")
+
+    task_result = await db.execute(
+        select(GradingTask).where(GradingTask.submission_id == submission_id)
+    )
+    task = task_result.scalar_one_or_none()
+    if task and task.status in {"pending", "sent"}:
+        raise HTTPException(status_code=400, detail="当前已有批改任务在进行")
+
+    images = json.loads(submission.images)
+    if not images:
+        raise HTTPException(status_code=400, detail="提交未包含可批改图片")
+    local_paths = [image_url_to_local_path(url) for url in images]
+    missing_paths = [path for path in local_paths if not os.path.exists(path)]
+    if missing_paths:
+        raise HTTPException(status_code=404, detail="原始作业图片缺失，无法重新批改")
+
+    async def _run_regrading():
+        try:
+            await _execute_grading_for_submission(
+                submission_id=submission_id,
+                prompt=assignment.grading_prompt,
+                answer_json=assignment.reference_answer or "",
+                force=True,
+            )
+        except Exception as e:
+            logger.error(f"重新触发批改失败: submission_id={submission_id}, error={e}")
+
+    background_tasks.add_task(_run_regrading)
+
+    return {
+        "code": 0,
+        "data": {
+            "message": "重新批改任务已启动",
+            "submission_id": submission_id,
+        },
+    }
+
+
 @router.get("/tasks/{submission_id}")
 async def get_grading_task_status(
     submission_id: int,
@@ -1468,36 +1597,13 @@ async def trigger_grading(
 
     async def _run_grading():
         for submission in submissions:
-            task_id = None
             try:
-                async with async_session() as session:
-                    task = await _prepare_grading_task(session, submission.id)
-                    if not task:
-                        continue
-
-                    task_id = task.id
-
-                    images = json.loads(submission.images)
-                    if not images:
-                        raise ValueError("提交未包含可批改图片")
-
-                    local_paths = [image_url_to_local_path(url) for url in images]
-                    output_filename = f"stitched_{submission.id}.jpg"
-                    stitched_url = stitch_images(local_paths, output_filename)
-
-                    task.stitched_image_url = stitched_url
-                    await session.commit()
-
-                await call_grading_agent(
-                    task_id=task_id,
+                await _execute_grading_for_submission(
                     submission_id=submission.id,
-                    stitched_image_url=stitched_url,
                     prompt=assignment.grading_prompt,
                     answer_json=assignment.reference_answer or "",
                 )
             except Exception as e:
-                if task_id is not None:
-                    await _mark_task_failed(task_id, str(e))
                 logger.error(f"手动触发批改失败: submission_id={submission.id}, error={e}")
 
     background_tasks.add_task(_run_grading)

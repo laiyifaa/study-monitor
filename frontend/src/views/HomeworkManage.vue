@@ -62,6 +62,7 @@
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
             <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
             <button class="btn-sm" @click="openUnsubmittedModal">未交名单</button>
+            <button class="btn-sm" @click="openLateModal(section.id)">迟交名单</button>
             <button
               v-if="getAssignment(section.id).status === 'published' && getAssignment(section.id).grading_mode !== 'manual'"
               class="btn-sm ai-grade-btn"
@@ -384,6 +385,9 @@
             <div v-if="s.task && s.task.status === 'pending'" class="task-info">等待批改...</div>
             <div class="submission-actions">
               <button v-if="s.report || s.status === 'graded'" class="btn-sm" @click="openReportModal(s)">查看报告</button>
+              <button v-if="canRegradeSubmission(s)" class="btn-sm" :disabled="regradingSubmissionId === s.id" @click="regradeSubmission(s)">
+                {{ regradingSubmissionId === s.id ? '重批中...' : '重新智能批改' }}
+              </button>
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
             </div>
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
@@ -505,6 +509,31 @@
       </div>
     </div>
 
+    <div v-if="showLateModal" class="modal-overlay" @click.self="showLateModal = false">
+      <div class="modal modal-lg">
+        <h3>迟交名单{{ currentViewSectionId ? ` - ${getSectionTitle(currentViewSectionId)}` : '' }}</h3>
+        <div v-if="lateSubmissions.length === 0" class="empty">暂无迟交学生</div>
+        <div v-else class="submissions-list">
+          <div v-for="s in lateSubmissions" :key="s.id" class="submission-item">
+            <div class="submission-header">
+              <span class="student-name">{{ s.user?.name }}</span>
+              <div class="status-group">
+                <span class="status-badge late">迟交</span>
+                <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
+              </div>
+            </div>
+            <div class="submission-meta">
+              <span>{{ s.user?.class_name || '未分配班级' }}</span>
+              <span>提交时间：{{ formatDate(s.submitted_at) }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showLateModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showGradeModal" class="modal-overlay" @click.self="showGradeModal = false">
       <div class="modal">
         <h3>手动批改 - {{ gradingSubmission?.user?.name }}</h3>
@@ -552,6 +581,7 @@ const sections = ref([])
 const assignmentMap = ref({})
 const submissions = ref([])
 const unsubmittedStudents = ref([])
+const lateSubmissions = computed(() => submissions.value.filter(s => s.is_late))
 const ANSWER_TYPE_DEFAULT_SCORE = {
   option_letter: 2,
   true_false: 1,
@@ -563,6 +593,7 @@ const showAnswerModal = ref(false)
 const showBatchAnswerModal = ref(false)
 const showSubmissionsModal = ref(false)
 const showUnsubmittedModal = ref(false)
+const showLateModal = ref(false)
 const showGradeModal = ref(false)
 const showReportModal = ref(false)
 const gradingSubmission = ref(null)
@@ -578,10 +609,12 @@ const currentSection = ref(null)
 const currentViewSectionId = ref(null)
 const triggeringSection = ref(null)
 const triggerStatus = ref(null)
+const regradingSubmissionId = ref(null)
 const showAnswerPreview = ref(false)
 const quickAnswerFieldRef = ref(null)
 const quickAnswerBarRef = ref(null)
 let pollTimer = null
+let regradeTimer = null
 
 function getNextAnswerNo(rows = form.value?.answer_items || []) {
   const numericNos = rows
@@ -621,6 +654,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPolling()
+  stopRegradePolling()
 })
 
 function getAssignment(sectionId) {
@@ -1133,14 +1167,29 @@ function removeAnswerFile(index) {
 }
 
 async function loadSubmissions(sectionId) {
-  currentViewSectionId.value = sectionId
   try {
-    const res = await api.get(`/homework/assignments/${sectionId}/submissions`)
-    submissions.value = res.data.data || []
+    await loadSectionSubmissions(sectionId)
     showSubmissionsModal.value = true
+    showLateModal.value = false
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   }
+}
+
+async function openLateModal(sectionId) {
+  try {
+    await loadSectionSubmissions(sectionId)
+    showLateModal.value = true
+    showSubmissionsModal.value = false
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function loadSectionSubmissions(sectionId) {
+  currentViewSectionId.value = sectionId
+  const res = await api.get(`/homework/assignments/${sectionId}/submissions`)
+  submissions.value = res.data.data || []
 }
 
 async function openUnsubmittedModal() {
@@ -1159,6 +1208,10 @@ function statusText(status) {
 
 function gradingStatusText(status) {
   return { pending: '待批改', graded: '已批改' }[status] || status
+}
+
+function getSectionTitle(sectionId) {
+  return sections.value.find(section => section.id === sectionId)?.title || ''
 }
 
 function taskStatusText(status) {
@@ -1194,13 +1247,40 @@ function parseReportDetail(report) {
   }
 }
 
+function normalizeReportQuestionRef(item) {
+  if (item === null || item === undefined) return ''
+  if (typeof item === 'object') {
+    return String(item.question_id ?? item.qid ?? item.index ?? item.no ?? item.key ?? '').trim()
+  }
+  return String(item).trim()
+}
+
+function formatReportError(error) {
+  if (!error) return ''
+  if (typeof error === 'string') return error.trim()
+  if (typeof error === 'object') {
+    const code = String(error.code ?? '').trim()
+    const message = String(error.message ?? error.detail ?? error.msg ?? '').trim()
+    if (code && message) return `${code}: ${message}`
+    if (message) return message
+    try {
+      return JSON.stringify(error)
+    } catch {
+      return ''
+    }
+  }
+  return String(error).trim()
+}
+
 function getReportReviewQuestions(report) {
   const detail = parseReportDetail(report)
   const merged = [
     ...(Array.isArray(report?.review_questions) ? report.review_questions : []),
     ...(Array.isArray(detail?.review) ? detail.review : []),
+    ...(Array.isArray(detail?.low_confidence_questions) ? detail.low_confidence_questions : []),
+    ...(Array.isArray(detail?.result?.low_confidence_questions) ? detail.result.low_confidence_questions : []),
   ]
-  return [...new Set(merged.map(item => String(item ?? '').trim()).filter(Boolean))]
+  return [...new Set(merged.map(normalizeReportQuestionRef).filter(Boolean))]
 }
 
 function getReportIssues(report) {
@@ -1211,8 +1291,9 @@ function getReportIssues(report) {
   if (Array.isArray(detail.issues)) {
     issues.push(...detail.issues.map(item => String(item ?? '').trim()).filter(Boolean))
   }
-  if (detail.error) {
-    issues.push(`批改异常：${detail.error}`)
+  const errorText = formatReportError(detail.error ?? detail.result?.error)
+  if (errorText) {
+    issues.push(`批改异常：${errorText}`)
   }
   return issues
 }
@@ -1221,23 +1302,31 @@ function getReportQuestions(report) {
   const detail = parseReportDetail(report)
   if (!detail) return null
 
-  const source = Array.isArray(detail.questions)
-    ? detail.questions
-    : Array.isArray(detail.details)
-      ? detail.details
-      : null
+  const source = [
+    Array.isArray(detail.questions) && detail.questions.length ? detail.questions : null,
+    Array.isArray(detail.details) && detail.details.length ? detail.details : null,
+    Array.isArray(detail.result?.details) && detail.result.details.length ? detail.result.details : null,
+  ].find(Boolean)
 
   if (!source?.length) return null
 
   return source.map((item, index) => ({
-    key: `${item?.index ?? item?.qid ?? item?.no ?? index + 1}-${index}`,
-    index: item?.index ?? item?.qid ?? item?.no ?? index + 1,
-    correct: typeof item?.correct === 'boolean' ? item.correct : (typeof item?.ok === 'boolean' ? item.ok : null),
+    key: `${item?.index ?? item?.qid ?? item?.question_id ?? item?.no ?? index + 1}-${index}`,
+    index: item?.index ?? item?.qid ?? item?.question_id ?? item?.no ?? index + 1,
+    correct: typeof item?.correct === 'boolean'
+      ? item.correct
+      : typeof item?.ok === 'boolean'
+        ? item.ok
+        : typeof item?.is_correct === 'boolean'
+          ? item.is_correct
+          : null,
     score: item?.score ?? item?.s ?? item?.obtained_score ?? item?.points ?? null,
-    maxScore: item?.max_score ?? item?.fs ?? item?.full_score ?? item?.total_score ?? null,
+    maxScore: item?.max_score ?? item?.fs ?? item?.full_score ?? item?.total_score ?? item?.fullScore ?? null,
     comment: item?.comment ?? item?.feedback ?? item?.reason ?? item?.analysis ?? '',
-    answer: item?.answer ?? item?.student_answer ?? '',
-    expectedAnswer: item?.expected_answer ?? item?.reference_answer ?? '',
+    answer: item?.answer ?? item?.student_answer ?? item?.studentAnswer ?? '',
+    expectedAnswer: item?.expected_answer ?? item?.reference_answer ?? item?.correct_answer ?? item?.answer_key ?? '',
+    matchStatus: item?.match_status ?? item?.status ?? '',
+    confidence: item?.confidence ?? '',
   }))
 }
 
@@ -1384,11 +1473,25 @@ function stopPolling() {
   }
 }
 
+function stopRegradePolling() {
+  if (regradeTimer) {
+    clearInterval(regradeTimer)
+    regradeTimer = null
+  }
+}
+
+function canRegradeSubmission(submission) {
+  const generatedBy = String(submission?.report?.generated_by || '').toLowerCase()
+  if (!submission?.report) return false
+  return !generatedBy.includes('teacher')
+}
+
 async function triggerAiGrading(sectionId) {
   const assignment = getAssignment(sectionId)
   if (!assignment) return
 
   stopPolling()
+  stopRegradePolling()
   triggeringSection.value = sectionId
   triggerStatus.value = null
 
@@ -1412,6 +1515,53 @@ async function triggerAiGrading(sectionId) {
   } catch (e) {
     alert('触发失败：' + (e.response?.data?.detail || e.message))
     triggeringSection.value = null
+  }
+}
+
+async function regradeSubmission(submission) {
+  const sectionId = currentViewSectionId.value
+  if (!sectionId) return
+
+  const assignment = getAssignment(sectionId)
+  if (!assignment) return
+
+  if (!canRegradeSubmission(submission)) {
+    alert('该提交已被人工修改，不可重新智能批改')
+    return
+  }
+
+  if (!confirm('确认重新触发智能批改？当前 AI 报告会在新结果返回后覆盖。')) return
+
+  stopPolling()
+  stopRegradePolling()
+  regradingSubmissionId.value = submission.id
+
+  try {
+    await api.post(`/homework/regrade/${submission.id}`)
+    regradeTimer = setInterval(() => pollRegradeStatus(submission.id, sectionId), 3000)
+    await pollRegradeStatus(submission.id, sectionId)
+  } catch (e) {
+    alert('重新触发失败：' + (e.response?.data?.detail || e.message))
+    regradingSubmissionId.value = null
+  }
+}
+
+async function pollRegradeStatus(submissionId, sectionId) {
+  try {
+    const res = await api.get(`/homework/tasks/${submissionId}`)
+    const task = res.data.data || {}
+    if (task.status === 'graded' || task.status === 'failed') {
+      stopRegradePolling()
+      regradingSubmissionId.value = null
+      await loadSubmissions(sectionId)
+      if (reportSubmission.value?.id === submissionId) {
+        await openReportModal({ id: submissionId })
+      }
+    }
+  } catch (e) {
+    console.error('重批轮询失败', e)
+    stopRegradePolling()
+    regradingSubmissionId.value = null
   }
 }
 
@@ -2068,6 +2218,14 @@ async function pollGradingStatus(assignmentId) {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.submission-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #7b8790;
+  font-size: 12px;
 }
 
 .student-name {

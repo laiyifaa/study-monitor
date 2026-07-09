@@ -40,8 +40,8 @@
             <h4>题目文件</h4>
             <div class="question-files-list">
               <div v-for="(file, i) in getAssignment(section.id).question_files" :key="`qf-${i}`" class="question-file-item">
-                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
-                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" :title="getAttachmentDisplayName(section.title, 'homework', i, getAssignment(section.id).question_files.length)" class="question-thumb" @click="previewImage(getMediaUrl(file))" />
+                <button v-else type="button" class="file-link" :title="getAttachmentDisplayName(section.title, 'homework', i, getAssignment(section.id).question_files.length)" @click="openQuestionFile(section.title, file, i, getAssignment(section.id).question_files.length)">{{ getAttachmentDisplayName(section.title, 'homework', i, getAssignment(section.id).question_files.length) }}</button>
               </div>
             </div>
           </div>
@@ -50,8 +50,8 @@
             <h4>答案附件</h4>
             <div class="question-files-list">
               <div v-for="(file, i) in getAssignment(section.id).answer_files" :key="`af-${i}`" class="question-file-item">
-                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="openTeacherAnswerFile(file)" />
-                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openTeacherAnswerFile(file)">{{ fileLabel(file) }}</button>
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" :title="getAttachmentDisplayName(section.title, 'answer', i, getAssignment(section.id).answer_files.length)" class="question-thumb" @click="openTeacherAnswerFile(section.title, file, i, getAssignment(section.id).answer_files.length)" />
+                <button v-else type="button" class="file-link" :title="getAttachmentDisplayName(section.title, 'answer', i, getAssignment(section.id).answer_files.length)" @click="openTeacherAnswerFile(section.title, file, i, getAssignment(section.id).answer_files.length)">{{ getAttachmentDisplayName(section.title, 'answer', i, getAssignment(section.id).answer_files.length) }}</button>
               </div>
             </div>
           </div>
@@ -105,8 +105,8 @@
           <input type="file" multiple accept="image/*,.pdf,.doc,.docx" @change="handleQuestionFileSelect" />
           <div v-if="form.question_files.length > 0" class="question-files-preview">
             <div v-for="(file, i) in form.question_files" :key="i" class="question-file-item">
-              <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" />
-              <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
+              <img v-if="isImageFile(file)" :src="getMediaUrl(file)" :title="getAttachmentDisplayName(currentSection?.title, 'homework', i, form.question_files.length)" class="question-thumb" />
+              <button v-else type="button" class="file-link" :title="getAttachmentDisplayName(currentSection?.title, 'homework', i, form.question_files.length)" @click="openQuestionFile(currentSection?.title, file, i, form.question_files.length)">{{ getAttachmentDisplayName(currentSection?.title, 'homework', i, form.question_files.length) }}</button>
               <button type="button" class="remove-btn" @click="removeQuestionFile(i)">x</button>
             </div>
           </div>
@@ -130,8 +130,8 @@
             </div>
           <div v-if="form.answer_files.length > 0" class="question-files-preview answer-files-preview">
             <div v-for="(file, i) in form.answer_files" :key="`answer-file-${i}`" class="question-file-item">
-              <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="openTeacherAnswerFile(file)" />
-              <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openTeacherAnswerFile(file)">{{ fileLabel(file) }}</button>
+              <img v-if="isImageFile(file)" :src="getMediaUrl(file)" :title="getAttachmentDisplayName(currentSection?.title, 'answer', i, form.answer_files.length)" class="question-thumb" @click="openTeacherAnswerFile(currentSection?.title, file, i, form.answer_files.length)" />
+              <button v-else type="button" class="file-link" :title="getAttachmentDisplayName(currentSection?.title, 'answer', i, form.answer_files.length)" @click="openTeacherAnswerFile(currentSection?.title, file, i, form.answer_files.length)">{{ getAttachmentDisplayName(currentSection?.title, 'answer', i, form.answer_files.length) }}</button>
               <button type="button" class="remove-btn" @click="removeAnswerFile(i)">x</button>
             </div>
           </div>
@@ -218,8 +218,8 @@
             </div>
             <div v-if="form.answer_files.length > 0" class="question-files-preview answer-files-preview">
               <div v-for="(file, i) in form.answer_files" :key="`answer-file-standalone-${i}`" class="question-file-item">
-                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-thumb" @click="openTeacherAnswerFile(file)" />
-                <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openTeacherAnswerFile(file)">{{ fileLabel(file) }}</button>
+                <img v-if="isImageFile(file)" :src="getMediaUrl(file)" :title="getAttachmentDisplayName(currentSection?.title, 'answer', i, form.answer_files.length)" class="question-thumb" @click="openTeacherAnswerFile(currentSection?.title, file, i, form.answer_files.length)" />
+                <button v-else type="button" class="file-link" :title="getAttachmentDisplayName(currentSection?.title, 'answer', i, form.answer_files.length)" @click="openTeacherAnswerFile(currentSection?.title, file, i, form.answer_files.length)">{{ getAttachmentDisplayName(currentSection?.title, 'answer', i, form.answer_files.length) }}</button>
                 <button type="button" class="remove-btn" @click="removeAnswerFile(i)">x</button>
               </div>
             </div>
@@ -561,9 +561,9 @@ import { useRoute } from 'vue-router'
 import { useDingTalk } from '../composables/useDingTalk.js'
 import api from '../utils/api.js'
 import {
-  fileLabel,
+  getAttachmentDisplayName,
+  getAttachmentDownloadName,
   getAbsoluteMediaUrl,
-  getFileName,
   getMediaUrl,
   isDocumentFile,
   isImageFile,
@@ -1361,14 +1361,15 @@ async function requestAnswerFileAccessUrl(payload) {
   return toAbsoluteUrl(res.data.data?.url || '')
 }
 
-async function openTeacherAnswerFile(file) {
+async function openTeacherAnswerFile(sectionTitle, file, index = 0, total = 1) {
   try {
     const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
     if (!accessUrl) return
+    const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', index, total, file)
 
     if (isPdf(file)) {
       if (isDingTalk) {
-        previewFile(accessUrl, getFileName(file))
+        previewFile(accessUrl, downloadName)
         return
       }
       window.open(accessUrl, '_blank')
@@ -1377,10 +1378,10 @@ async function openTeacherAnswerFile(file) {
 
     if (isDocumentFile(file)) {
       if (isDingTalk) {
-        previewFile(accessUrl, getFileName(file))
+        previewFile(accessUrl, downloadName)
         return
       }
-      triggerBrowserDownload(accessUrl, getFileName(file))
+      triggerBrowserDownload(accessUrl, downloadName)
       return
     }
 
@@ -1390,13 +1391,14 @@ async function openTeacherAnswerFile(file) {
   }
 }
 
-function openQuestionFile(file) {
+function openQuestionFile(sectionTitle, file, index = 0, total = 1) {
   const mediaUrl = getMediaUrl(file)
   if (!mediaUrl) return
+  const downloadName = getAttachmentDownloadName(sectionTitle, 'homework', index, total, file)
 
   if (isPdf(file)) {
     if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      previewFile(getAbsoluteMediaUrl(file), downloadName)
       return
     }
     window.open(mediaUrl, '_blank')
@@ -1405,10 +1407,10 @@ function openQuestionFile(file) {
 
   if (isDocumentFile(file)) {
     if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      previewFile(getAbsoluteMediaUrl(file), downloadName)
       return
     }
-    triggerBrowserDownload(mediaUrl, getFileName(file))
+    triggerBrowserDownload(mediaUrl, downloadName)
     return
   }
 
@@ -1950,16 +1952,23 @@ async function pollGradingStatus(assignmentId) {
   height: 100%;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
   background: #eef5ff;
   color: #2563eb;
   text-decoration: none;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   border: none;
   cursor: pointer;
-  padding: 0;
+  padding: 6px 4px;
   appearance: none;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+  text-align: center;
+  overflow: hidden;
 }
 
 .remove-btn {

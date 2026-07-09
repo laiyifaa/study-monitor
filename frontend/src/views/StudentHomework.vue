@@ -26,8 +26,8 @@
               <h4>题目附件</h4>
               <div class="question-files-list">
                 <div v-for="(file, i) in getQuestionFiles(section.id)" :key="`q-${i}`" class="question-file">
-                  <img v-if="isImageFile(file)" :src="getMediaUrl(file)" class="question-image" @click="previewImage(getMediaUrl(file))" />
-                  <button v-else type="button" class="file-link" :title="getFileName(file)" @click="openQuestionFile(file)">{{ fileLabel(file) }}</button>
+                  <img v-if="isImageFile(file)" :src="getMediaUrl(file)" :title="getAttachmentDisplayName(section.title, 'homework', i, getQuestionFiles(section.id).length)" class="question-image" @click="previewImage(getMediaUrl(file))" />
+                  <button v-else type="button" class="file-link" :title="getAttachmentDisplayName(section.title, 'homework', i, getQuestionFiles(section.id).length)" @click="openQuestionFile(section.id, file, i)">{{ getAttachmentDisplayName(section.title, 'homework', i, getQuestionFiles(section.id).length) }}</button>
                 </div>
               </div>
             </div>
@@ -35,7 +35,7 @@
               <h4>答案附件</h4>
               <div class="question-files-list">
                 <div v-for="file in getAnswerFiles(section.id)" :key="`a-${section.id}-${file.index}`" class="question-file">
-                  <button type="button" class="file-link" :title="file.name" @click="openStudentAnswerFile(section.id, file)">{{ fileLabel(file.name) }}</button>
+                  <button type="button" class="file-link" :title="getAttachmentDisplayName(section.title, 'answer', file.index, getAnswerFiles(section.id).length)" @click="openStudentAnswerFile(section.id, file)">{{ getAttachmentDisplayName(section.title, 'answer', file.index, getAnswerFiles(section.id).length) }}</button>
                 </div>
               </div>
             </div>
@@ -133,9 +133,9 @@ import { useRoute } from 'vue-router'
 import { useDingTalk } from '../composables/useDingTalk.js'
 import api from '../utils/api.js'
 import {
-  fileLabel,
+  getAttachmentDisplayName,
+  getAttachmentDownloadName,
   getAbsoluteMediaUrl,
-  getFileName,
   getMediaUrl,
   isDocumentFile,
   isImageFile,
@@ -328,13 +328,20 @@ function previewImage(url) {
   window.open(url, '_blank')
 }
 
-function openQuestionFile(file) {
+function getSectionTitle(sectionId) {
+  return sections.value.find(section => String(section.id) === String(sectionId))?.title || ''
+}
+
+function openQuestionFile(sectionId, file, index = 0) {
   const mediaUrl = getMediaUrl(file)
   if (!mediaUrl) return
+  const sectionTitle = getSectionTitle(sectionId)
+  const total = getQuestionFiles(sectionId).length
+  const downloadName = getAttachmentDownloadName(sectionTitle, 'homework', index, total, file)
 
   if (isPdf(file)) {
     if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      previewFile(getAbsoluteMediaUrl(file), downloadName)
       return
     }
     window.open(mediaUrl, '_blank')
@@ -343,10 +350,10 @@ function openQuestionFile(file) {
 
   if (isDocumentFile(file)) {
     if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), getFileName(file))
+      previewFile(getAbsoluteMediaUrl(file), downloadName)
       return
     }
-    triggerBrowserDownload(mediaUrl, getFileName(file))
+    triggerBrowserDownload(mediaUrl, downloadName)
     return
   }
 
@@ -365,10 +372,13 @@ async function openStudentAnswerFile(sectionId, file) {
   try {
     const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
     if (!accessUrl) return
+    const sectionTitle = getSectionTitle(sectionId)
+    const total = getAnswerFiles(sectionId).length
+    const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
 
     if (isPdf(file.name)) {
       if (isDingTalk) {
-        previewFile(accessUrl, file.name)
+        previewFile(accessUrl, downloadName)
         return
       }
       window.open(accessUrl, '_blank')
@@ -377,10 +387,10 @@ async function openStudentAnswerFile(sectionId, file) {
 
     if (isDocumentFile(file.name)) {
       if (isDingTalk) {
-        previewFile(accessUrl, file.name)
+        previewFile(accessUrl, downloadName)
         return
       }
-      triggerBrowserDownload(accessUrl, file.name)
+      triggerBrowserDownload(accessUrl, downloadName)
       return
     }
 
@@ -603,9 +613,17 @@ function hasQuestionStats(report) {
   border-radius: 6px;
   text-decoration: none;
   font-weight: 700;
+  font-size: 12px;
   cursor: pointer;
-  padding: 0;
+  padding: 6px 8px;
   appearance: none;
+  box-sizing: border-box;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+  overflow: hidden;
 }
 
 .meta {

@@ -95,7 +95,12 @@ async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
             assignment.grading_status = "graded"
 
 
-async def _prepare_grading_task(session: AsyncSession, submission_id: int, force: bool = False) -> GradingTask | None:
+async def _prepare_grading_task(
+    session: AsyncSession,
+    submission_id: int,
+    force: bool = False,
+    batch_started_at: datetime | None = None,
+) -> GradingTask | None:
     existing_result = await session.execute(
         select(GradingTask).where(GradingTask.submission_id == submission_id)
     )
@@ -109,15 +114,23 @@ async def _prepare_grading_task(session: AsyncSession, submission_id: int, force
             submission_id=submission_id,
             stitched_image_url="",
             status="pending",
+            sent_at=batch_started_at,
         )
         session.add(task)
     else:
+        previous_status = task.status
+        previous_sent_at = task.sent_at
         task.stitched_image_url = ""
         task.agent_task_id = ""
         task.status = "pending"
         task.retry_count = 0
         task.error_message = ""
-        task.sent_at = None
+        if batch_started_at is not None:
+            task.sent_at = batch_started_at
+        elif previous_status == "pending" and previous_sent_at:
+            task.sent_at = previous_sent_at
+        else:
+            task.sent_at = None
         task.graded_at = None
 
     await session.commit()
@@ -1592,19 +1605,37 @@ async def trigger_grading(
     if not submissions:
         return {"code": 0, "data": {"message": "无待批改的提交", "submission_count": 0}}
 
+    batch_started_at = datetime.utcnow()
+    queued_submission_ids: list[int] = []
+    for submission in submissions:
+        task = await _prepare_grading_task(
+            db,
+            submission.id,
+            force=True,
+            batch_started_at=batch_started_at,
+        )
+        if task:
+            queued_submission_ids.append(submission.id)
+
+    if not queued_submission_ids:
+        return {"code": 0, "data": {"message": "无可执行的批改任务", "submission_count": 0}}
+
     assignment.grading_triggered = True
+    assignment.grading_status = "pending"
+    grading_prompt = assignment.grading_prompt
+    answer_json = assignment.reference_answer or ""
     await db.commit()
 
     async def _run_grading():
-        for submission in submissions:
+        for submission_id in queued_submission_ids:
             try:
                 await _execute_grading_for_submission(
-                    submission_id=submission.id,
-                    prompt=assignment.grading_prompt,
-                    answer_json=assignment.reference_answer or "",
+                    submission_id=submission_id,
+                    prompt=grading_prompt,
+                    answer_json=answer_json,
                 )
             except Exception as e:
-                logger.error(f"手动触发批改失败: submission_id={submission.id}, error={e}")
+                logger.error(f"手动触发批改失败: submission_id={submission_id}, error={e}")
 
     background_tasks.add_task(_run_grading)
 
@@ -1612,7 +1643,7 @@ async def trigger_grading(
         "code": 0,
         "data": {
             "message": "批改任务已启动",
-            "submission_count": len(submissions),
+            "submission_count": len(queued_submission_ids),
         },
     }
 
@@ -1638,22 +1669,47 @@ async def trigger_grading_status(
     )
     submissions = result.scalars().all()
 
-    total = len(submissions)
-    task_count = 0
+    latest_batch_started_at = None
+    tasks_by_submission_id: dict[int, GradingTask] = {}
+    for s in submissions:
+        task = (await db.execute(
+            select(GradingTask).where(GradingTask.submission_id == s.id)
+        )).scalar_one_or_none()
+        if not task or not task.sent_at:
+            continue
+
+        tasks_by_submission_id[s.id] = task
+        if latest_batch_started_at is None or task.sent_at > latest_batch_started_at:
+            latest_batch_started_at = task.sent_at
+
+    if latest_batch_started_at is None:
+        return {
+            "code": 0,
+            "data": {
+                "total": 0,
+                "task_count": 0,
+                "pending": 0,
+                "processing": 0,
+                "graded": 0,
+                "failed": 0,
+                "done": 0,
+            },
+        }
+
+    current_batch_tasks = [
+        task for task in tasks_by_submission_id.values()
+        if task.sent_at == latest_batch_started_at
+    ]
+
+    total = len(current_batch_tasks)
+    task_count = len(current_batch_tasks)
     pending = 0
     processing = 0
     graded = 0
     failed = 0
 
-    for s in submissions:
-        task = (await db.execute(
-            select(GradingTask).where(GradingTask.submission_id == s.id)
-        )).scalar_one_or_none()
-
-        if task:
-            task_count += 1
-
-        if not task or task.status == "pending":
+    for task in current_batch_tasks:
+        if task.status == "pending":
             pending += 1
         elif task.status == "sent":
             processing += 1

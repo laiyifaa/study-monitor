@@ -87,6 +87,24 @@
       </div>
     </div>
   </div>
+
+  <!-- ====== 绑定账号弹窗（钉钉免登无法自动匹配时弹出） ====== -->
+  <div v-if="auth.bindInfo.value" class="modal-overlay">
+    <div class="modal-card">
+      <h3>绑定账号</h3>
+      <p class="bind-hint">钉钉用户「{{ auth.bindInfo.value.dingtalk_name }}」需要绑定学习平台账号</p>
+      <div class="form-item">
+        <label>请输入您的账号</label>
+        <input v-model="bindAccountInput" type="text" placeholder="请输入账号（如准考证号）" />
+      </div>
+      <div v-if="bindError" class="pw-error">{{ bindError }}</div>
+      <div class="modal-actions">
+        <button class="btn-sm primary" @click="doBindAccount" :disabled="bindLoading">
+          {{ bindLoading ? '绑定中...' : '确认绑定' }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -122,6 +140,38 @@ const pwForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const hasPassword = computed(() => !!auth.user.value?.has_password)
 const pwLoading = ref(false)
 const pwError = ref('')
+
+/** ============ 绑定账号弹窗状态 ============ */
+const bindAccountInput = ref('')
+const bindError = ref('')
+const bindLoading = ref(false)
+
+/**
+ * 执行绑定账号
+ */
+async function doBindAccount() {
+  bindError.value = ''
+  if (!bindAccountInput.value.trim()) {
+    bindError.value = '请输入账号'
+    return
+  }
+  bindLoading.value = true
+  try {
+    const result = await auth.bindAccount(bindAccountInput.value.trim())
+    if (result === true) {
+      // 绑定成功
+      bindAccountInput.value = ''
+      bindError.value = ''
+    } else {
+      // 绑定失败，显示错误信息
+      bindError.value = typeof result === 'string' ? result : '绑定失败'
+    }
+  } catch (e) {
+    bindError.value = '网络异常，请稍后重试'
+  } finally {
+    bindLoading.value = false
+  }
+}
 
 /**
  * 是否显示顶栏
@@ -230,8 +280,13 @@ onMounted(async () => {
       }
     }
   }
-  // 登录后获取未读公告数
+
+  // 登录后：检查是否需要设置密码或获取未读公告数
   if (auth.isLoggedIn.value) {
+    // 免登用户首次登录且未设置密码 → 自动弹出设置密码弹窗
+    if (!auth.user.value?.has_password) {
+      showChangePw.value = true
+    }
     fetchUnreadCount()
     // 每60秒轮询一次未读数
     setInterval(fetchUnreadCount, 60000)
@@ -447,6 +502,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .pw-error { color: #ff4d4f; font-size: 13px; margin-bottom: 10px; }
+
+/* 绑定账号弹窗提示 */
+.bind-hint {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
 
 /* ====== 全局响应式：顶栏适配 ====== */
 @media (max-width: 600px) {

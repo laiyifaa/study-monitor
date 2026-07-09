@@ -103,6 +103,11 @@ export function useAuthStore() {
   const isTeacher = computed(() => user.value?.role === 'teacher' || user.value?.role === 'admin')
 
   /**
+   * 钉钉免登返回的绑定信息（code=2 时保存，供 App.vue 弹窗使用）
+   */
+  const bindInfo = ref(null)
+
+  /**
    * 尝试钉钉免登
    *
    * 核心流程：
@@ -111,19 +116,14 @@ export function useAuthStore() {
    *   3. 将 authCode 发送到后端换取 JWT + 用户信息
    *   4. 成功后调用 setAuth 保存凭证
    *
+   * 返回逻辑：
+   *   - code=0：免登成功，已 setAuth
+   *   - code=2：需要绑定账号，保存 bindInfo，由 App.vue 弹出绑定弹窗
+   *
    * 异常处理策略：
    *   - 整个 try-catch 包裹，任何环节失败都静默降级
    *   - 不抛出错误，不阻塞应用加载，用户以游客身份浏览
    *   - console.warn 输出警告日志，便于开发调试
-   *
-   * dd.ready() 的作用：
-   *   钉钉 JSAPI 需要在 dd.ready 回调中调用，确保运行环境已就绪。
-   *   用 Promise 包装使代码可以用 await 同步书写，避免回调地狱。
-   *
-   * corpId 来源：
-   *   import.meta.env.VITE_DINGTALK_CORPID — 构建时从 .env 文件注入，
-   *   是钉钉企业的唯一标识，requestAuthCode 需要此参数。
-   *   缺少 corpId 时 authCode 获取会失败，但不影响非钉钉环境使用。
    */
   async function tryDingTalkLogin() {
     try {
@@ -163,13 +163,16 @@ export function useAuthStore() {
       })
 
       // 【交互】通过 api.js 向后端发送 authCode 换取 JWT
-      // 后端接口：POST /api/auth/dingtalk，参数 { auth_code: string }
-      // 后端逻辑：authCode → 钉钉服务端换用户信息 → 创建/查找用户 → 签发 JWT
       const resp = await api.post('/auth/dingtalk', { auth_code: authCode })
       if (resp.data.code === 0) {
         // 后端返回 code=0 表示成功，data 中包含 token 和 user
+        bindInfo.value = null
         setAuth(resp.data.data.token, resp.data.data.user)
         console.log('[免登调试] 免登成功，用户:', resp.data.data.user.name)
+      } else if (resp.data.code === 2) {
+        // 需要绑定账号：保存绑定信息，由 App.vue 弹出绑定弹窗
+        bindInfo.value = resp.data.data
+        console.log('[免登调试] 需要绑定账号，钉钉用户:', resp.data.data.dingtalk_name)
       } else {
         console.error('[免登调试] 后端返回失败:', resp.data.msg)
       }
@@ -177,6 +180,33 @@ export function useAuthStore() {
       // 免登失败可能的原因：网络异常、corpId 无效、authCode 过期、后端异常、不在钉钉环境
       // 不阻断应用运行，用户可手动刷新重试
       console.warn('[免登调试] 钉钉免登失败:', e?.message || e)
+    }
+  }
+
+  /**
+   * 绑定钉钉账号（用户在弹窗中输入账号后调用）
+   *
+   * 流程：调用 POST /auth/bind-account → 成功后 setAuth
+   */
+  async function bindAccount(account) {
+    if (!bindInfo.value) return false
+    try {
+      const resp = await api.post('/auth/bind-account', {
+        account: account.trim(),
+        dingtalk_user_id: bindInfo.value.dingtalk_user_id,
+        dingtalk_name: bindInfo.value.dingtalk_name || '',
+        dingtalk_mobile: bindInfo.value.dingtalk_mobile || '',
+        dingtalk_avatar: bindInfo.value.dingtalk_avatar || '',
+      })
+      if (resp.data.code === 0) {
+        bindInfo.value = null
+        setAuth(resp.data.data.token, resp.data.data.user)
+        return true
+      } else {
+        return resp.data.msg || '绑定失败'
+      }
+    } catch (e) {
+      return '网络异常，请稍后重试'
     }
   }
 
@@ -215,5 +245,5 @@ export function useAuthStore() {
     localStorage.removeItem('user')
   }
 
-  return { token, user, isLoggedIn, isStudent, isTeacher, tryDingTalkLogin, setAuth, logout }
+  return { token, user, isLoggedIn, isStudent, isTeacher, bindInfo, tryDingTalkLogin, bindAccount, setAuth, logout }
 }

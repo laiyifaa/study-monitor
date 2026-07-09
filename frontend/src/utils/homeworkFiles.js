@@ -58,6 +58,19 @@ export function fileLabel(file) {
   return '文件'
 }
 
+export function getAttachmentDisplayName(sectionTitle, kind, index = 0, total = 1) {
+  const title = typeof sectionTitle === 'string' && sectionTitle.trim() ? sectionTitle.trim() : '附件'
+  const kindLabel = kind === 'answer' ? '答案' : '作业'
+  const suffix = total > 1 ? `${index + 1}` : ''
+  return `${title} ${kindLabel}${suffix}`.trim()
+}
+
+export function getAttachmentDownloadName(sectionTitle, kind, index = 0, total = 1, file = '') {
+  const baseName = getAttachmentDisplayName(sectionTitle, kind, index, total)
+  const extension = getFileExtension(file)
+  return extension ? `${baseName}.${extension}` : baseName
+}
+
 export function triggerBrowserDownload(url, filename = '') {
   const link = document.createElement('a')
   link.href = url

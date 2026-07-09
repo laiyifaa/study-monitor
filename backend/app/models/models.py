@@ -37,43 +37,47 @@ class User(Base):
     """
     用户模型
 
-    用途：存储通过钉钉免登获取的用户信息，支撑权限控制和数据关联。
+    用途：存储用户信息，支撑认证、权限控制和数据关联。
 
     字段说明：
         id               — 自增主键
-        dingtalk_user_id — 钉钉用户唯一标识，作为钉钉 API 交互的 key，
-                           设为 unique + index 防止重复注册并加速查询
-        name             — 用户姓名（来自钉钉通讯录）
-        real_name        — 真实姓名（钉钉通讯录详解接口获取，用于实名展示）
-        phone            — 手机号（钉钉通讯录获取，用于实名信息核验）
-        role             — 角色：student 教师/管理员/学生，控制前端页面和 API 权限
+        account          — 账号（唯一标识），学生用中考准考证号，教师/管理员手动分配
+        dingtalk_user_id — 钉钉用户唯一标识，用于免登绑定（预创建用户可为空）
+        name             — 用户姓名
+        real_name        — 真实姓名（钉钉通讯录获取，用于实名展示）
+        phone            — 手机号（钉钉通讯录获取）
+        contact_phones   — 家长联系电话（逗号分隔，用于免登自动绑定匹配）
+        role             — 角色：student/teacher/admin，控制前端页面和 API 权限
         class_name       — 班级名称（如"高三1班"），用于按班级筛选统计
         class_id         — 班级 ID，关联钉钉部门体系（预留）
         avatar           — 头像 URL，前端展示用
+        password_hash    — 浏览器登录密码哈希（空=未设置密码，首次登录需设置）
+        api_key          — API Key，供智能体/外部程序调用
         created_at       — 首次登录时间
-        updated_at       — 信息更新时间（如角色变更）
+        updated_at       — 信息更新时间
     """
     __tablename__ = "users"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    dingtalk_user_id = Column(String(64), unique=True, nullable=False, index=True)
+    # 账号：系统唯一标识，学生用准考证号，教师/管理员手动分配
+    account = Column(String(50), unique=True, nullable=False, index=True, comment="登录账号（唯一标识）")
+    # 钉钉用户ID：预创建用户可为空，首次免登绑定时填入
+    dingtalk_user_id = Column(String(64), unique=True, nullable=True, index=True, comment="钉钉用户ID(null=未绑定)")
     name = Column(String(50), nullable=False)
     role = Column(Enum("student", "teacher", "admin"), default="student", nullable=False)
     class_name = Column(String(50), default="", comment="班级名称")
     class_id = Column(BigInteger, default=0, comment="班级ID")
     avatar = Column(String(500), default="")
-    # 浏览器登录密码哈希：钉钉免登用户没有密码，浏览器登录用户必须有
-    # 使用 PBKDF2-SHA256 算法，格式为 "盐:哈希值"
-    password_hash = Column(String(200), default="", comment="浏览器登录密码哈希(空=仅钉钉登录)")
+    # 浏览器登录密码哈希：首次登录需设置密码，格式为 "盐:哈希值"
+    password_hash = Column(String(200), default="", comment="浏览器登录密码哈希(空=未设置)")
     # 实名信息：钉钉免登时从通讯录API自动获取
     real_name = Column(String(50), default="", comment="真实姓名（钉钉通讯录获取）")
     phone = Column(String(20), default="", comment="手机号（钉钉通讯录获取）")
+    # 家长联系电话（逗号分隔），用于免登自动绑定：钉钉手机号匹配到此字段则自动绑定
+    contact_phones = Column(String(200), default="", comment="家长联系电话(逗号分隔,用于免登自动绑定)")
     # API Key：供智能体/外部程序调用系统接口的长期密钥
-    # 格式为 "sk_" + 32字节随机十六进制字符串，共67字符
-    # 教师和管理员可通过管理后台生成，智能体携带此Key即可代替JWT访问API
     api_key = Column(String(100), default=None, nullable=True, unique=True, comment="API Key(null=未生成)")
     created_at = Column(DateTime, server_default=func.now())
-    # onupdate=func.now() — 当任意字段被 UPDATE 时自动刷新时间戳
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 

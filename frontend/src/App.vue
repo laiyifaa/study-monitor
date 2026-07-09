@@ -62,12 +62,17 @@
        都在此处渲染，由 router/index.js 的路由表决定显示哪个 -->
   <router-view />
 
-  <!-- ====== 修改密码弹窗 ====== -->
-  <div v-if="showChangePw" class="modal-overlay" @click.self="showChangePw = false">
+  <!-- ====== 修改密码弹窗（must_change_password时不可关闭） ====== -->
+  <div v-if="showChangePw" class="modal-overlay" @click.self="!mustChangePw && (showChangePw = false)">
     <div class="modal-card">
-      <h3>{{ hasPassword ? '修改密码' : '设置密码' }}</h3>
-      <div v-if="hasPassword" class="form-item">
+      <h3>{{ mustChangePw ? '首次登录，请修改密码' : (hasPassword ? '修改密码' : '设置密码') }}</h3>
+      <p v-if="mustChangePw" class="pw-notice">您的账号使用的是初始默认密码，为了账号安全，请立即修改密码后继续使用。</p>
+      <div v-if="hasPassword && !mustChangePw" class="form-item">
         <label>当前密码</label>
+        <input v-model="pwForm.old_password" type="password" placeholder="请输入当前密码" />
+      </div>
+      <div v-if="mustChangePw" class="form-item">
+        <label>当前密码（初始默认密码）</label>
         <input v-model="pwForm.old_password" type="password" placeholder="请输入当前密码" />
       </div>
       <div class="form-item">
@@ -81,9 +86,9 @@
       <div v-if="pwError" class="pw-error">{{ pwError }}</div>
       <div class="modal-actions">
         <button class="btn-sm primary" @click="doChangePassword" :disabled="pwLoading">
-          {{ pwLoading ? (hasPassword ? '修改中...' : '设置中...') : (hasPassword ? '确认修改' : '确认设置') }}
+          {{ pwLoading ? '修改中...' : '确认修改' }}
         </button>
-        <button class="btn-sm" @click="showChangePw = false">取消</button>
+        <button v-if="!mustChangePw" class="btn-sm" @click="showChangePw = false">取消</button>
       </div>
     </div>
   </div>
@@ -138,6 +143,8 @@ const pwForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 
 /** 用户是否已设置密码（钉钉免登用户首次没有密码） */
 const hasPassword = computed(() => !!auth.user.value?.has_password)
+/** 是否必须修改密码（批量导入的默认密码，安全性低，首次登录强制修改） */
+const mustChangePw = computed(() => !!auth.user.value?.must_change_password)
 const pwLoading = ref(false)
 const pwError = ref('')
 
@@ -207,7 +214,7 @@ function handleLogout() {
  */
 async function doChangePassword() {
   pwError.value = ''
-  // 有密码时必须输入旧密码
+  // 有密码时（含must_change_password）必须输入旧密码
   if (hasPassword.value && !pwForm.value.old_password) {
     pwError.value = '请输入当前密码'
     return
@@ -226,18 +233,19 @@ async function doChangePassword() {
     const payload = {
       new_password: pwForm.value.new_password,
     }
-    // 有密码时才发送旧密码
+    // 有密码时才发送旧密码（must_change_password时也有密码，需要验证）
     if (hasPassword.value) {
       payload.old_password = pwForm.value.old_password
     }
     const res = await api.post('/auth/change-password', payload)
     if (res.data.code === 0) {
-      alert(hasPassword.value ? '密码修改成功' : '密码设置成功')
+      alert('密码修改成功')
       showChangePw.value = false
       pwForm.value = { old_password: '', new_password: '', confirm_password: '' }
-      // 首次设置密码后更新本地状态
+      // 更新本地状态
       if (auth.user.value) {
         auth.user.value.has_password = true
+        auth.user.value.must_change_password = false
       }
     } else {
       pwError.value = res.data.msg || '修改失败'
@@ -281,10 +289,11 @@ onMounted(async () => {
     }
   }
 
-  // 登录后：检查是否需要设置密码或获取未读公告数
+  // 登录后：检查是否需要修改密码或获取未读公告数
   if (auth.isLoggedIn.value) {
+    // 强制改密（默认密码首次登录必须修改）→ 优先级最高，弹窗不可关闭
     // 免登用户首次登录且未设置密码 → 自动弹出设置密码弹窗
-    if (!auth.user.value?.has_password) {
+    if (auth.user.value?.must_change_password || !auth.user.value?.has_password) {
       showChangePw.value = true
     }
     fetchUnreadCount()
@@ -502,6 +511,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .pw-error { color: #ff4d4f; font-size: 13px; margin-bottom: 10px; }
+.pw-notice { color: #fa8c16; font-size: 13px; margin-bottom: 14px; padding: 8px 12px; background: #fff7e6; border-radius: 6px; line-height: 1.5; }
 
 /* 绑定账号弹窗提示 */
 .bind-hint {

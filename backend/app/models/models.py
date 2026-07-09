@@ -70,6 +70,8 @@ class User(Base):
     avatar = Column(String(500), default="")
     # 浏览器登录密码哈希：首次登录需设置密码，格式为 "盐:哈希值"
     password_hash = Column(String(200), default="", comment="浏览器登录密码哈希(空=未设置)")
+    # 强制改密标记：批量导入的默认密码安全性低，首次登录必须修改
+    must_change_password = Column(Boolean, default=False, comment="强制改密标记(默认密码首次登录必须修改)")
     # 实名信息：钉钉免登时从通讯录API自动获取
     real_name = Column(String(50), default="", comment="真实姓名（钉钉通讯录获取）")
     phone = Column(String(20), default="", comment="手机号（钉钉通讯录获取）")

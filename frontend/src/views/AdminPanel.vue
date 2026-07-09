@@ -32,7 +32,7 @@
           <option value="">全部班级</option>
           <option v-for="c in classes" :key="c.class_name" :value="c.class_name">{{ c.class_name }}</option>
         </select>
-        <input v-model="userFilter.search" placeholder="搜索姓名..." @input="debounceLoadUsers" />
+        <input v-model="userFilter.search" placeholder="搜索姓名/账号..." @input="debounceLoadUsers" />
         <button class="btn-sm primary" @click="showCreateUser">+ 新增用户</button>
       </div>
 
@@ -42,6 +42,7 @@
           <thead>
             <tr>
               <th>ID</th>
+              <th>账号</th>
               <th>姓名</th>
               <th>角色</th>
               <th>班级</th>
@@ -52,6 +53,7 @@
           <tbody>
             <tr v-for="u in users" :key="u.id">
               <td>{{ u.id }}</td>
+              <td>{{ u.account || '-' }}</td>
               <td>{{ u.name }}</td>
               <td>
                 <!-- 管理员和教师均可修改角色 -->
@@ -156,6 +158,10 @@
       <div class="modal-card">
         <h3>新增用户</h3>
         <div class="form-item">
+          <label>账号 *</label>
+          <input v-model="newUser.account" placeholder="请输入账号（如准考证号）" />
+        </div>
+        <div class="form-item">
           <label>姓名 *</label>
           <input v-model="newUser.name" placeholder="请输入用户姓名" />
         </div>
@@ -224,6 +230,7 @@ const assigning = ref(false)
 const showCreateModal = ref(false)  // 新增用户弹窗是否可见
 const creating = ref(false)         // 创建请求进行中
 const newUser = ref({               // 新增用户表单数据
+  account: '',
   name: '',
   role: 'student',
   class_name: '',
@@ -405,7 +412,7 @@ async function doAssignStudents() {
  * 打开新增用户弹窗，重置表单
  */
 function showCreateUser() {
-  newUser.value = { name: '', role: 'student', class_name: '', password: '123456' }
+  newUser.value = { account: '', name: '', role: 'student', class_name: '', password: '123456' }
   showCreateModal.value = true
 }
 
@@ -417,6 +424,10 @@ function showCreateUser() {
  *   3. 创建成功后刷新用户列表和班级列表
  */
 async function doCreateUser() {
+  if (!newUser.value.account.trim()) {
+    alert('请输入账号')
+    return
+  }
   if (!newUser.value.name.trim()) {
     alert('请输入用户姓名')
     return
@@ -429,6 +440,7 @@ async function doCreateUser() {
   creating.value = true
   try {
     const res = await api.post('/admin/users', {
+      account: newUser.value.account.trim(),
       name: newUser.value.name.trim(),
       role: newUser.value.role,
       class_name: newUser.value.class_name,

@@ -88,6 +88,7 @@ def _user_dict(user: User) -> dict:
         "real_name": user.real_name,
         "phone": user.phone,
         "has_password": bool(user.password_hash),
+        "must_change_password": bool(user.must_change_password),
     }
 
 
@@ -405,6 +406,7 @@ async def change_password(
         if len(req.new_password) < 6:
             return {"code": 1, "msg": "新密码长度不能少于6位"}
         current_user.password_hash = hash_password(req.new_password)
+        current_user.must_change_password = False
         await db.commit()
         return {"code": 0, "msg": "密码设置成功"}
 
@@ -418,6 +420,7 @@ async def change_password(
         return {"code": 1, "msg": "新密码不能与当前密码相同"}
 
     current_user.password_hash = hash_password(req.new_password)
+    current_user.must_change_password = False
     await db.commit()
 
     return {"code": 0, "msg": "密码修改成功"}

@@ -385,6 +385,9 @@
             <div v-if="s.task && s.task.status === 'pending'" class="task-info">等待批改...</div>
             <div class="submission-actions">
               <button v-if="s.report || s.status === 'graded'" class="btn-sm" @click="openReportModal(s)">查看报告</button>
+              <button v-if="canRegradeSubmission(s)" class="btn-sm" :disabled="regradingSubmissionId === s.id" @click="regradeSubmission(s)">
+                {{ regradingSubmissionId === s.id ? '重批中...' : '重新智能批改' }}
+              </button>
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
             </div>
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
@@ -606,10 +609,12 @@ const currentSection = ref(null)
 const currentViewSectionId = ref(null)
 const triggeringSection = ref(null)
 const triggerStatus = ref(null)
+const regradingSubmissionId = ref(null)
 const showAnswerPreview = ref(false)
 const quickAnswerFieldRef = ref(null)
 const quickAnswerBarRef = ref(null)
 let pollTimer = null
+let regradeTimer = null
 
 function getNextAnswerNo(rows = form.value?.answer_items || []) {
   const numericNos = rows
@@ -649,6 +654,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPolling()
+  stopRegradePolling()
 })
 
 function getAssignment(sectionId) {
@@ -1241,13 +1247,40 @@ function parseReportDetail(report) {
   }
 }
 
+function normalizeReportQuestionRef(item) {
+  if (item === null || item === undefined) return ''
+  if (typeof item === 'object') {
+    return String(item.question_id ?? item.qid ?? item.index ?? item.no ?? item.key ?? '').trim()
+  }
+  return String(item).trim()
+}
+
+function formatReportError(error) {
+  if (!error) return ''
+  if (typeof error === 'string') return error.trim()
+  if (typeof error === 'object') {
+    const code = String(error.code ?? '').trim()
+    const message = String(error.message ?? error.detail ?? error.msg ?? '').trim()
+    if (code && message) return `${code}: ${message}`
+    if (message) return message
+    try {
+      return JSON.stringify(error)
+    } catch {
+      return ''
+    }
+  }
+  return String(error).trim()
+}
+
 function getReportReviewQuestions(report) {
   const detail = parseReportDetail(report)
   const merged = [
     ...(Array.isArray(report?.review_questions) ? report.review_questions : []),
     ...(Array.isArray(detail?.review) ? detail.review : []),
+    ...(Array.isArray(detail?.low_confidence_questions) ? detail.low_confidence_questions : []),
+    ...(Array.isArray(detail?.result?.low_confidence_questions) ? detail.result.low_confidence_questions : []),
   ]
-  return [...new Set(merged.map(item => String(item ?? '').trim()).filter(Boolean))]
+  return [...new Set(merged.map(normalizeReportQuestionRef).filter(Boolean))]
 }
 
 function getReportIssues(report) {
@@ -1258,8 +1291,9 @@ function getReportIssues(report) {
   if (Array.isArray(detail.issues)) {
     issues.push(...detail.issues.map(item => String(item ?? '').trim()).filter(Boolean))
   }
-  if (detail.error) {
-    issues.push(`批改异常：${detail.error}`)
+  const errorText = formatReportError(detail.error ?? detail.result?.error)
+  if (errorText) {
+    issues.push(`批改异常：${errorText}`)
   }
   return issues
 }
@@ -1268,23 +1302,31 @@ function getReportQuestions(report) {
   const detail = parseReportDetail(report)
   if (!detail) return null
 
-  const source = Array.isArray(detail.questions)
-    ? detail.questions
-    : Array.isArray(detail.details)
-      ? detail.details
-      : null
+  const source = [
+    Array.isArray(detail.questions) && detail.questions.length ? detail.questions : null,
+    Array.isArray(detail.details) && detail.details.length ? detail.details : null,
+    Array.isArray(detail.result?.details) && detail.result.details.length ? detail.result.details : null,
+  ].find(Boolean)
 
   if (!source?.length) return null
 
   return source.map((item, index) => ({
-    key: `${item?.index ?? item?.qid ?? item?.no ?? index + 1}-${index}`,
-    index: item?.index ?? item?.qid ?? item?.no ?? index + 1,
-    correct: typeof item?.correct === 'boolean' ? item.correct : (typeof item?.ok === 'boolean' ? item.ok : null),
+    key: `${item?.index ?? item?.qid ?? item?.question_id ?? item?.no ?? index + 1}-${index}`,
+    index: item?.index ?? item?.qid ?? item?.question_id ?? item?.no ?? index + 1,
+    correct: typeof item?.correct === 'boolean'
+      ? item.correct
+      : typeof item?.ok === 'boolean'
+        ? item.ok
+        : typeof item?.is_correct === 'boolean'
+          ? item.is_correct
+          : null,
     score: item?.score ?? item?.s ?? item?.obtained_score ?? item?.points ?? null,
-    maxScore: item?.max_score ?? item?.fs ?? item?.full_score ?? item?.total_score ?? null,
+    maxScore: item?.max_score ?? item?.fs ?? item?.full_score ?? item?.total_score ?? item?.fullScore ?? null,
     comment: item?.comment ?? item?.feedback ?? item?.reason ?? item?.analysis ?? '',
-    answer: item?.answer ?? item?.student_answer ?? '',
-    expectedAnswer: item?.expected_answer ?? item?.reference_answer ?? '',
+    answer: item?.answer ?? item?.student_answer ?? item?.studentAnswer ?? '',
+    expectedAnswer: item?.expected_answer ?? item?.reference_answer ?? item?.correct_answer ?? item?.answer_key ?? '',
+    matchStatus: item?.match_status ?? item?.status ?? '',
+    confidence: item?.confidence ?? '',
   }))
 }
 
@@ -1431,11 +1473,25 @@ function stopPolling() {
   }
 }
 
+function stopRegradePolling() {
+  if (regradeTimer) {
+    clearInterval(regradeTimer)
+    regradeTimer = null
+  }
+}
+
+function canRegradeSubmission(submission) {
+  const generatedBy = String(submission?.report?.generated_by || '').toLowerCase()
+  if (!submission?.report) return false
+  return !generatedBy.includes('teacher')
+}
+
 async function triggerAiGrading(sectionId) {
   const assignment = getAssignment(sectionId)
   if (!assignment) return
 
   stopPolling()
+  stopRegradePolling()
   triggeringSection.value = sectionId
   triggerStatus.value = null
 
@@ -1459,6 +1515,53 @@ async function triggerAiGrading(sectionId) {
   } catch (e) {
     alert('触发失败：' + (e.response?.data?.detail || e.message))
     triggeringSection.value = null
+  }
+}
+
+async function regradeSubmission(submission) {
+  const sectionId = currentViewSectionId.value
+  if (!sectionId) return
+
+  const assignment = getAssignment(sectionId)
+  if (!assignment) return
+
+  if (!canRegradeSubmission(submission)) {
+    alert('该提交已被人工修改，不可重新智能批改')
+    return
+  }
+
+  if (!confirm('确认重新触发智能批改？当前 AI 报告会在新结果返回后覆盖。')) return
+
+  stopPolling()
+  stopRegradePolling()
+  regradingSubmissionId.value = submission.id
+
+  try {
+    await api.post(`/homework/regrade/${submission.id}`)
+    regradeTimer = setInterval(() => pollRegradeStatus(submission.id, sectionId), 3000)
+    await pollRegradeStatus(submission.id, sectionId)
+  } catch (e) {
+    alert('重新触发失败：' + (e.response?.data?.detail || e.message))
+    regradingSubmissionId.value = null
+  }
+}
+
+async function pollRegradeStatus(submissionId, sectionId) {
+  try {
+    const res = await api.get(`/homework/tasks/${submissionId}`)
+    const task = res.data.data || {}
+    if (task.status === 'graded' || task.status === 'failed') {
+      stopRegradePolling()
+      regradingSubmissionId.value = null
+      await loadSubmissions(sectionId)
+      if (reportSubmission.value?.id === submissionId) {
+        await openReportModal({ id: submissionId })
+      }
+    }
+  } catch (e) {
+    console.error('重批轮询失败', e)
+    stopRegradePolling()
+    regradingSubmissionId.value = null
   }
 }
 

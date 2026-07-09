@@ -35,7 +35,7 @@ settings = get_settings()
 
 scheduler = AsyncIOScheduler()
 
-HEARTBEAT_RETENTION_DAYS = 30
+HEARTBEAT_RETENTION_DAYS = 7
 
 
 async def cleanup_heartbeat_logs():

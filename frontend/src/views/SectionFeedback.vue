@@ -1,6 +1,8 @@
 <!--
   @模块：SectionFeedback.vue — 小节评价（v4.0 新增）
-  @页面用途：学生对小节评价打分，查看其他同学评价和统计
+  @页面用途：学生对小节评价打分；教师/管理员查看评价统计和详情
+  学生只看到自己的评价和提交表单，不展示他人评价和统计
+  教师和管理员可查看评价统计卡片、全部评价列表
 -->
 <template>
   <div class="feedback-page">
@@ -11,8 +13,8 @@
 
     <div v-if="loading" class="loading">加载中...</div>
     <template v-else>
-      <!-- 评价统计 -->
-      <div v-if="stats" class="stats-card">
+      <!-- 评价统计：仅教师/管理员可见 -->
+      <div v-if="stats && isTeacher" class="stats-card">
         <div class="stats-avg">
           <span class="avg-num">{{ stats.avg_rating }}</span>
           <span class="avg-label">平均评分</span>
@@ -27,14 +29,15 @@
         <div class="stats-total">共 {{ stats.total_count }} 条评价</div>
       </div>
 
-      <!-- 我的评价 -->
-      <div class="my-feedback-section">
+      <!-- 我的评价：学生可见 -->
+      <div v-if="isStudent" class="my-feedback-section">
         <h3>我的评价</h3>
         <div v-if="myFeedback">
           <div class="stars-display">
             <span v-for="i in 5" :key="i" class="star" :class="{ filled: i <= myFeedback.rating }">★</span>
           </div>
           <p v-if="myFeedback.comment" class="fb-comment">{{ myFeedback.comment }}</p>
+          <p class="submitted-hint">评价已提交，感谢您的反馈</p>
         </div>
         <div v-else>
           <!-- 星级评分 -->
@@ -48,8 +51,8 @@
         </div>
       </div>
 
-      <!-- 评价列表 -->
-      <div class="feedback-list">
+      <!-- 评价列表：仅教师/管理员可见 -->
+      <div v-if="isTeacher" class="feedback-list">
         <h3>全部评价 ({{ feedbackList.length }})</h3>
         <div v-if="feedbackList.length === 0" class="empty-hint">暂无评价</div>
         <div v-for="fb in feedbackList" :key="fb.id" class="feedback-item">
@@ -85,6 +88,9 @@ const submitting = ref(false)
 const feedbackList = ref([])
 const stats = ref(null)
 
+const isStudent = computed(() => auth.user.value?.role === 'student')
+const isTeacher = computed(() => auth.user.value?.role === 'teacher' || auth.user.value?.role === 'admin')
+
 function getDistWidth(star) {
   if (!stats.value) return '0%'
   const count = stats.value.rating_distribution[String(star)] || 0
@@ -108,8 +114,7 @@ async function submitFeedback() {
     })
     if (res.data.code === 0) {
       myFeedback.value = res.data.data
-      // 重新加载评价列表和统计
-      await Promise.all([loadFeedbackList(), loadStats()])
+      // 学生提交后无需刷新列表
     } else {
       alert(res.data.detail || '提交失败')
     }
@@ -136,22 +141,22 @@ async function loadStats() {
 
 onMounted(async () => {
   try {
-    // 并行加载：我的评价 + 评价列表 + 统计
-    const promises = [
-      api.get('/feedback/my', { params: { section_id: sectionId } }).catch(() => null),
-      loadFeedbackList(),
-    ]
-    // 如果是教师，也加载统计
-    if (auth.user.value?.role !== 'student') {
-      promises.push(loadStats())
+    const promises = []
+
+    if (isStudent.value) {
+      // 学生：只加载自己的评价
+      promises.push(
+        api.get('/feedback/my', { params: { section_id: sectionId } })
+          .then(res => { if (res.data?.code === 0) myFeedback.value = res.data.data })
+          .catch(() => {})
+      )
     } else {
+      // 教师/管理员：加载统计 + 评价列表
       promises.push(loadStats())
+      promises.push(loadFeedbackList())
     }
 
-    const [myRes] = await Promise.all(promises)
-    if (myRes && myRes.data?.code === 0) {
-      myFeedback.value = myRes.data.data
-    }
+    await Promise.all(promises)
   } catch (e) {
     console.error('加载评价失败:', e)
   } finally {
@@ -193,6 +198,7 @@ textarea:focus { border-color: #1890ff; outline: none; }
 .star { font-size: 20px; color: #d9d9d9; }
 .star.filled { color: #fa8c16; }
 .fb-comment { font-size: 14px; color: #666; }
+.submitted-hint { font-size: 13px; color: #52c41a; margin-top: 8px; }
 
 /* 评价列表 */
 .feedback-list { margin-top: 16px; }

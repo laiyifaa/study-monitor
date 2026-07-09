@@ -147,6 +147,13 @@ const routes = [
     meta: { title: '课程评价' },
   },
   {
+    // 课程评价概览（教师/管理员查看某课程所有小节评价统计）
+    path: '/feedback-overview/:courseId',
+    name: 'FeedbackOverview',
+    component: () => import('../views/FeedbackOverview.vue'),
+    meta: { title: '课程评价概览', role: 'teacher' },
+  },
+  {
     // v4.0: 签到日历
     path: '/checkin',
     name: 'CheckInCalendar',

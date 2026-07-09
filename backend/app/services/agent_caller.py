@@ -125,32 +125,63 @@ async def call_grading_agent(
                 review_status = "pending_review"
 
             detail_json = json.dumps(result, ensure_ascii=False)
-            review_qs = json.dumps(result.get("review", []), ensure_ascii=False)
-            summary = result.get("summary", {})
-            details = result.get("details", [])
-            status = result.get("status", "failed")
+            summary = _extract_summary(result)
+            details = _extract_details(result)
+            review_questions = _extract_review_questions(result)
+            status = str(result.get("status") or _as_dict(result.get("result")).get("status") or "failed")
 
-            correct_count = sum(1 for d in details if d.get("ok"))
-            wrong_count = sum(1 for d in details if not d.get("ok"))
+            score = _to_int(summary.get("score"))
+            if score is None:
+                score = 0
 
-            report = GradingReport(
-                submission_id=submission_id,
-                score=summary.get("score", 0),
-                full_score=summary.get("full_score", 0),
-                accuracy=summary.get("accuracy", 0.0),
-                correct_count=correct_count,
-                wrong_count=wrong_count,
-                feedback="",
-                detail=detail_json,
-                status=status,
-                review_questions=review_qs,
-                generated_by="wukong",
-                review_status=review_status,
+            full_score = _to_int(summary.get("full_score"))
+            if full_score is None:
+                full_score = 0
+
+            accuracy = _to_float(summary.get("accuracy"))
+            if accuracy is None:
+                accuracy = 0.0
+
+            feedback = str(summary.get("comment") or summary.get("feedback") or "").strip()
+
+            correct_count = _to_int(summary.get("correct_count"))
+            if correct_count is None:
+                correct_count = _to_int(summary.get("correct"))
+            if correct_count is None:
+                correct_count = sum(1 for d in details if _extract_detail_correct(d) is True)
+
+            wrong_count = _to_int(summary.get("wrong_count"))
+            if wrong_count is None:
+                wrong_count = _to_int(summary.get("wrong"))
+            if wrong_count is None:
+                wrong_count = sum(1 for d in details if _extract_detail_correct(d) is False)
+
+            report_result = await db.execute(
+                select(GradingReport).where(GradingReport.submission_id == submission_id)
             )
-            db.add(report)
+            report = report_result.scalar_one_or_none()
+            if not report:
+                report = GradingReport(
+                    submission_id=submission_id,
+                )
+                db.add(report)
+
+            report.score = score
+            report.full_score = full_score
+            report.accuracy = accuracy
+            report.correct_count = correct_count
+            report.wrong_count = wrong_count
+            report.feedback = feedback
+            report.detail = detail_json
+            report.status = status
+            report.review_questions = json.dumps(review_questions, ensure_ascii=False)
+            report.generated_by = "wukong"
+            report.review_status = review_status
 
             if review_status == "confirmed":
                 submission.status = "graded"
+            elif review_status == "pending_review":
+                submission.status = "pending"
 
             task_result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
             task = task_result.scalar_one_or_none()
@@ -164,7 +195,7 @@ async def call_grading_agent(
 
         logger.info(
             f"智能体批改成功: task_id={task_id}, submission_id={submission_id}, "
-            f"score={summary.get('score', 0)}/{summary.get('full_score', 0)}"
+            f"score={score}/{full_score}"
         )
         return True
 
@@ -208,6 +239,110 @@ def _parse_grading_result(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         raise Exception(f"无法解析智能体响应为 JSON: {text[:200]}")
+
+
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _normalize_review_item(item) -> str:
+    if isinstance(item, dict):
+        for key in ("question_id", "qid", "index", "no", "key"):
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+    return str(item).strip()
+
+
+def _extract_summary(result: dict) -> dict:
+    nested = _as_dict(result.get("result"))
+    summary = {}
+    nested_summary = nested.get("summary")
+    if isinstance(nested_summary, dict):
+        summary.update(nested_summary)
+    top_summary = result.get("summary")
+    if isinstance(top_summary, dict):
+        summary.update(top_summary)
+    return summary
+
+
+def _extract_details(result: dict) -> list:
+    top_details = result.get("details")
+    if isinstance(top_details, list) and top_details:
+        return top_details
+
+    nested = _as_dict(result.get("result"))
+    nested_details = nested.get("details")
+    return nested_details if isinstance(nested_details, list) else []
+
+
+def _extract_review_questions(result: dict) -> list[str]:
+    review_items = []
+
+    for item in _as_list(result.get("review")):
+        review_items.append(_normalize_review_item(item))
+
+    nested = _as_dict(result.get("result"))
+    for item in _as_list(nested.get("low_confidence_questions")):
+        review_items.append(_normalize_review_item(item))
+    for item in _as_list(nested.get("review")):
+        review_items.append(_normalize_review_item(item))
+
+    seen = set()
+    deduped = []
+    for item in review_items:
+        key = item.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def _extract_error(result: dict):
+    nested = _as_dict(result.get("result"))
+    return result.get("error") if result.get("error") is not None else nested.get("error")
+
+
+def _extract_detail_correct(detail: dict):
+    for key in ("correct", "ok", "is_correct"):
+        if key not in detail or detail.get(key) is None:
+            continue
+        value = detail.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y", "ok", "correct", "right"}:
+                return True
+            if normalized in {"false", "0", "no", "n", "wrong", "incorrect"}:
+                return False
+    return None
+
+
+def _to_int(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _download_image(image_url: str) -> str:

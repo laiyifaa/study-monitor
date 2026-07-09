@@ -401,11 +401,17 @@ function getQuestions(report) {
   if (!report?.detail) return null
   try {
     const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    if (detail.questions) return detail.questions
-    if (Array.isArray(detail.details)) {
+    if (Array.isArray(detail.questions) && detail.questions.length > 0) return detail.questions
+    if (Array.isArray(detail.details) && detail.details.length > 0) {
       return detail.details.map(d => ({
         index: d.qid,
         correct: d.ok,
+      }))
+    }
+    if (Array.isArray(detail.result?.details) && detail.result.details.length > 0) {
+      return detail.result.details.map(d => ({
+        index: d.question_id ?? d.qid,
+        correct: typeof d.is_correct === 'boolean' ? d.is_correct : d.ok,
       }))
     }
     return null

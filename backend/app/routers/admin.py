@@ -36,7 +36,7 @@ API 列表：
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from datetime import datetime
@@ -57,7 +57,7 @@ router = APIRouter(prefix="/api/admin", tags=["管理"])
 async def list_users(
     role: Optional[str] = Query(None, description="按角色过滤：student/teacher/admin"),
     class_name: Optional[str] = Query(None, description="按班级名称过滤"),
-    search: Optional[str] = Query(None, description="按姓名搜索（模糊匹配）"),
+    search: Optional[str] = Query(None, description="按姓名或账号搜索（模糊匹配）"),
     user: User = Depends(require_role("admin", "teacher")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -67,10 +67,10 @@ async def list_users(
     请求参数：
         query.role (str):       角色过滤（可选）
         query.class_name (str): 班级名称过滤（可选）
-        query.search (str):     姓名模糊搜索（可选）
+        query.search (str):     姓名或账号模糊搜索（可选）
 
     返回格式：
-        code=0, data: [{ id, name, role, class_name, avatar, has_password, created_at }, ...]
+        code=0, data: [{ id, account, name, role, class_name, avatar, has_password, created_at }, ...]
 
     权限要求：【admin / teacher】
     
@@ -86,9 +86,9 @@ async def list_users(
     # 按班级过滤
     if class_name:
         query = query.where(User.class_name == class_name)
-    # 姓名模糊搜索
+    # 姓名或账号模糊搜索
     if search:
-        query = query.where(User.name.like(f"%{search}%"))
+        query = query.where(or_(User.name.like(f"%{search}%"), User.account.like(f"%{search}%")))
 
     result = await db.execute(query)
     users = result.scalars().all()
@@ -98,6 +98,7 @@ async def list_users(
         "data": [
             {
                 "id": u.id,
+                "account": u.account,
                 "name": u.name,
                 "real_name": u.real_name or "",
                 "phone": u.phone or "",
@@ -393,6 +394,7 @@ async def assign_students(
 
 class CreateUserRequest(BaseModel):
     """创建新用户请求体"""
+    account: str                 # 登录账号（必填，唯一标识）
     name: str                    # 用户姓名
     role: str = "student"        # 角色，默认学生
     class_name: str = ""         # 班级名称
@@ -409,35 +411,36 @@ async def create_user(
     创建新用户
 
     请求参数：
+        body.account (str):     登录账号（必填，如准考证号）
         body.name (str):        用户姓名
         body.role (str):        角色（student/teacher/admin），默认student
         body.class_name (str):  班级名称，默认空
         body.password (str):    初始密码，默认123456
 
     权限要求：【admin / teacher】
-
-    使用场景：
-        - 管理员批量创建学生账号
-        - 为非钉钉用户（如外校交流学生）创建登录账号
-        - 创建测试账号
     """
+    if not req.account.strip():
+        return {"code": 1, "msg": "账号不能为空"}
+
     if not req.name.strip():
         return {"code": 1, "msg": "用户姓名不能为空"}
 
     if req.role not in ("student", "teacher", "admin"):
         return {"code": 1, "msg": "无效的角色"}
 
-    # 检查同名用户是否已存在
-    result = await db.execute(select(User).where(User.name == req.name.strip()))
+    if len(req.password) < 6:
+        return {"code": 1, "msg": "密码至少6位"}
+
+    # 检查账号是否已存在
+    result = await db.execute(select(User).where(User.account == req.account.strip()))
     if result.scalar_one_or_none():
-        return {"code": 1, "msg": f"用户 '{req.name}' 已存在"}
+        return {"code": 1, "msg": f"账号 '{req.account}' 已存在"}
 
     user = User(
+        account=req.account.strip(),
         name=req.name.strip(),
         role=req.role,
         class_name=req.class_name.strip(),
-        # 非钉钉用户 dingtalk_user_id 设为占位值（必填字段）
-        dingtalk_user_id=f"local_{req.name.strip()}_{int(datetime.now().timestamp())}",
         password_hash=hash_password(req.password),
     )
     db.add(user)
@@ -450,6 +453,7 @@ async def create_user(
         "msg": "用户创建成功",
         "data": {
             "id": user.id,
+            "account": user.account,
             "name": user.name,
             "real_name": user.real_name or "",
             "phone": user.phone or "",
@@ -461,6 +465,7 @@ async def create_user(
 
 class UserUpdateRequest(BaseModel):
     """更新用户信息请求体（部分更新）"""
+    account: Optional[str] = None
     name: Optional[str] = None
     real_name: Optional[str] = None
     phone: Optional[str] = None
@@ -498,6 +503,17 @@ async def update_user(
 
     update_data = req.model_dump(exclude_unset=True)
 
+    # 账号修改：检查唯一性
+    if "account" in update_data and update_data["account"] is not None:
+        new_account = update_data["account"].strip()
+        if not new_account:
+            return {"code": 1, "msg": "账号不能为空"}
+        existing = await db.execute(select(User).where(User.account == new_account, User.id != user_id))
+        if existing.scalar_one_or_none():
+            return {"code": 1, "msg": f"账号 '{new_account}' 已被占用"}
+        user.account = new_account
+        del update_data["account"]
+
     # 角色修改权限控制
     if "role" in update_data:
         if current_user.role != "admin":
@@ -519,6 +535,7 @@ async def update_user(
         "msg": "用户信息更新成功",
         "data": {
             "id": user.id,
+            "account": user.account,
             "name": user.name,
             "real_name": user.real_name or "",
             "phone": user.phone or "",
@@ -551,6 +568,7 @@ async def get_user(
         "code": 0,
         "data": {
             "id": user.id,
+            "account": user.account,
             "name": user.name,
             "real_name": user.real_name or "",
             "phone": user.phone or "",
@@ -558,6 +576,7 @@ async def get_user(
             "class_name": user.class_name,
             "avatar": user.avatar,
             "dingtalk_user_id": user.dingtalk_user_id,
+            "contact_phones": user.contact_phones or "",
             "has_password": bool(user.password_hash),
             "has_api_key": bool(user.api_key),
             "created_at": str(user.created_at) if user.created_at else None,

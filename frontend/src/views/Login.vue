@@ -1,8 +1,8 @@
 <!--
   @模块：Login.vue — 浏览器登录页
-  @页面用途：非钉钉环境（PC浏览器/开发调试）的用户名+密码登录
+  @页面用途：非钉钉环境（PC浏览器/开发调试）的账号+密码登录
   @数据流：
-    1. 用户输入姓名+密码 → 调用 POST /auth/login
+    1. 用户输入账号+密码 → 调用 POST /auth/login
     2. 后端验证成功 → 返回 JWT + 用户信息
     3. 前端保存到 auth store + localStorage → 跳转到对应首页
        - 学生 → /my-progress
@@ -31,11 +31,11 @@
       <template v-else>
       <form @submit.prevent="handleLogin" class="login-form">
         <div class="form-item">
-          <label>用户名</label>
+          <label>账号</label>
           <input
             v-model="username"
             type="text"
-            placeholder="请输入姓名"
+            placeholder="请输入账号"
             autocomplete="username"
             :disabled="loading"
           />
@@ -51,6 +51,11 @@
           />
         </div>
 
+        <!-- 忘记密码链接 -->
+        <div class="forgot-link-wrap">
+          <span class="forgot-link" @click="showForgotPw = true">忘记密码？</span>
+        </div>
+
         <!-- 错误提示 -->
         <div v-if="errorMsg" class="error-msg">{{ errorMsg }}</div>
 
@@ -60,19 +65,37 @@
         </button>
       </form>
 
-      <!-- 快捷填入：点击只填充表单，不提交，不影响钉钉免登 -->
-      <div class="quick-fill">
-        <span class="quick-fill-label">快捷登录</span>
-        <button class="quick-btn teacher" @click="fillAccount('teacher')" :disabled="loading">老师</button>
-        <button class="quick-btn student" @click="fillAccount('student')" :disabled="loading">学生</button>
-      </div>
-
       <!-- 底部提示 -->
       <div class="login-footer">
         <p>钉钉环境打开自动免登，无需手动登录</p>
-        <p>首次使用请联系管理员设置密码</p>
       </div>
       </template>
+    </div>
+
+    <!-- ====== 忘记密码弹窗 ====== -->
+    <div v-if="showForgotPw" class="modal-overlay" @click.self="showForgotPw = false">
+      <div class="modal-card">
+        <h3>忘记密码</h3>
+        <div class="form-item">
+          <label>账号</label>
+          <input v-model="forgotForm.account" type="text" placeholder="请输入您的账号" />
+        </div>
+        <div class="form-item">
+          <label>新密码</label>
+          <input v-model="forgotForm.new_password" type="password" placeholder="至少6位" />
+        </div>
+        <div class="form-item">
+          <label>确认新密码</label>
+          <input v-model="forgotForm.confirm_password" type="password" placeholder="再次输入新密码" />
+        </div>
+        <div v-if="forgotError" class="error-msg">{{ forgotError }}</div>
+        <div class="modal-actions">
+          <button class="btn-sm primary" @click="doForgotPassword" :disabled="forgotLoading">
+            {{ forgotLoading ? '重置中...' : '确认重置' }}
+          </button>
+          <button class="btn-sm" @click="showForgotPw = false">取消</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -95,6 +118,12 @@ const errorMsg = ref('')
 
 /** 是否在钉钉环境中且正在等待免登 */
 const isDingTalkLoggingIn = ref(false)
+
+/** ============ 忘记密码弹窗状态 ============ */
+const showForgotPw = ref(false)
+const forgotForm = ref({ account: '', new_password: '', confirm_password: '' })
+const forgotLoading = ref(false)
+const forgotError = ref('')
 
 /**
  * 钉钉环境检测：如果用户在钉钉客户端内打开登录页，
@@ -125,30 +154,13 @@ onMounted(() => {
 })
 
 /**
- * 快捷填入测试账号（仅填充表单，不触发登录）
- */
-const quickAccounts = {
-  teacher: { username: '张老师', password: '123456' },
-  student: { username: '王小明', password: '123456' },
-}
-
-function fillAccount(role) {
-  const account = quickAccounts[role]
-  if (account) {
-    username.value = account.username
-    password.value = account.password
-    errorMsg.value = ''
-  }
-}
-
-/**
  * 处理登录表单提交
  * 流程：调用 /auth/login → 保存凭证 → 按角色跳转不同首页
  */
 async function handleLogin() {
   // 基础校验
   if (!username.value.trim()) {
-    errorMsg.value = '请输入用户名'
+    errorMsg.value = '请输入账号'
     return
   }
   if (!password.value) {
@@ -177,18 +189,58 @@ async function handleLogin() {
         router.push('/my-progress')
       }
     } else {
-      // 后端返回业务错误（用户名或密码错误、未设置密码等）
+      // 后端返回业务错误（账号或密码错误、未设置密码等）
       errorMsg.value = res.data.msg || '登录失败'
     }
   } catch (e) {
     // 网络错误或服务器异常
     if (e.response?.status === 401) {
-      errorMsg.value = '用户名或密码错误'
+      errorMsg.value = '账号或密码错误'
     } else {
       errorMsg.value = '网络异常，请稍后重试'
     }
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 执行忘记密码重置
+ */
+async function doForgotPassword() {
+  forgotError.value = ''
+  if (!forgotForm.value.account.trim()) {
+    forgotError.value = '请输入账号'
+    return
+  }
+  if (forgotForm.value.new_password.length < 6) {
+    forgotError.value = '新密码至少6位'
+    return
+  }
+  if (forgotForm.value.new_password !== forgotForm.value.confirm_password) {
+    forgotError.value = '两次输入的密码不一致'
+    return
+  }
+
+  forgotLoading.value = true
+  try {
+    const res = await api.post('/auth/forgot-password', {
+      account: forgotForm.value.account.trim(),
+      new_password: forgotForm.value.new_password,
+    })
+    if (res.data.code === 0) {
+      alert('密码重置成功，请使用新密码登录')
+      showForgotPw.value = false
+      forgotForm.value = { account: '', new_password: '', confirm_password: '' }
+      // 自动填充账号，方便用户直接登录
+      username.value = forgotForm.value.account
+    } else {
+      forgotError.value = res.data.msg || '重置失败'
+    }
+  } catch (e) {
+    forgotError.value = '网络异常，请稍后重试'
+  } finally {
+    forgotLoading.value = false
   }
 }
 </script>
@@ -258,6 +310,20 @@ async function handleLogin() {
   cursor: not-allowed;
 }
 
+/* 忘记密码链接 */
+.forgot-link-wrap {
+  text-align: right;
+  margin-bottom: 16px;
+}
+.forgot-link {
+  font-size: 13px;
+  color: #1890ff;
+  cursor: pointer;
+}
+.forgot-link:hover {
+  text-decoration: underline;
+}
+
 /* 错误提示 */
 .error-msg {
   color: #ff4d4f;
@@ -300,49 +366,6 @@ async function handleLogin() {
   line-height: 1.8;
 }
 
-/* 快捷填入区域 */
-.quick-fill {
-  margin-top: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-.quick-fill-label {
-  font-size: 12px;
-  color: #bbb;
-  margin-right: 4px;
-}
-.quick-btn {
-  padding: 4px 12px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-  background: #fafafa;
-  font-size: 12px;
-  color: #666;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.quick-btn:hover:not(:disabled) {
-  border-color: #1890ff;
-  color: #1890ff;
-  background: #e6f7ff;
-}
-.quick-btn.teacher:hover:not(:disabled) {
-  border-color: #1890ff;
-  color: #1890ff;
-  background: #e6f7ff;
-}
-.quick-btn.student:hover:not(:disabled) {
-  border-color: #52c41a;
-  color: #52c41a;
-  background: #f6ffed;
-}
-.quick-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 /* 钉钉免登等待状态 */
 .dingtalk-waiting {
   text-align: center;
@@ -370,4 +393,26 @@ async function handleLogin() {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* 弹窗样式 */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4); display: flex; align-items: center;
+  justify-content: center; z-index: 200;
+}
+.modal-card {
+  background: #fff; border-radius: 12px; padding: 24px;
+  width: 90%; max-width: 400px; box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+}
+.modal-card h3 { font-size: 16px; margin-bottom: 16px; }
+.modal-card .form-item { margin-bottom: 14px; }
+.modal-card .form-item label { display: block; font-size: 13px; color: #666; margin-bottom: 4px; }
+.modal-card .form-item input {
+  width: 100%; padding: 8px 12px; border: 1px solid #d9d9d9;
+  border-radius: 6px; font-size: 14px; box-sizing: border-box;
+}
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.btn-sm { padding: 6px 16px; border: 1px solid #d9d9d9; border-radius: 4px; background: #fff; font-size: 13px; cursor: pointer; }
+.btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
+.btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

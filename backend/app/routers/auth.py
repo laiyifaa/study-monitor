@@ -23,6 +23,7 @@ API 列表：
 
 import hashlib
 import secrets
+import random
 import httpx
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
@@ -309,37 +310,173 @@ async def browser_login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 # ============================================================
-# 忘记密码
+# 忘记密码 — 三步流程
+#   步骤1: /forgot-password-check — 查账号 → 老师跳过验证 / 学生返回掩码手机号
+#   步骤2: /forgot-password-verify — 学生验证手机号缺失的4位
+#   步骤3: /forgot-password — 验证通过后重置密码
 # ============================================================
 
-class ForgotPasswordRequest(BaseModel):
+class ForgotPasswordCheckRequest(BaseModel):
     account: str
+
+
+class ForgotPasswordVerifyRequest(BaseModel):
+    verify_token: str
+    digits: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    verify_token: str
     new_password: str
+
+
+@router.post("/forgot-password-check")
+async def forgot_password_check(req: ForgotPasswordCheckRequest, db: AsyncSession = Depends(get_db)):
+    """
+    步骤1：输入账号，查询用户是否存在，判断角色
+    - 老师：直接返回 need_verify=false，跳过手机验证
+    - 学生：返回掩码后的家长手机号，need_verify=true
+    """
+    account = req.account.strip()
+    if not account:
+        return {"code": 1, "msg": "请输入账号"}
+
+    result = await db.execute(select(User).where(User.account == account))
+    user = result.scalar_one_or_none()
+    if not user:
+        return {"code": 1, "msg": "账号不存在"}
+
+    # 生成 verify_token
+    verify_token = secrets.token_hex(32)
+
+    if user.role in ("teacher", "admin"):
+        # 老师/管理员跳过手机验证，token 直接标记为已验证
+        redis = await get_redis()
+        await redis.setex(
+            f"forgot_pw:verify:{verify_token}",
+            600,  # 10 分钟有效期
+            f"{user.id}|verified"
+        )
+        return {
+            "code": 0,
+            "data": {
+                "need_verify": False,
+                "verify_token": verify_token,
+            },
+        }
+
+    # 学生：从 contact_phones 中随机选一个家长手机号
+    phones_str = (user.contact_phones or "").strip()
+    if not phones_str:
+        return {"code": 1, "msg": "该账号未绑定家长手机号，请联系老师重置密码"}
+
+    phones = [p.strip() for p in phones_str.split(",") if p.strip()]
+    if not phones:
+        return {"code": 1, "msg": "该账号未绑定家长手机号，请联系老师重置密码"}
+
+    phone = random.choice(phones)
+    if len(phone) < 11:
+        return {"code": 1, "msg": "绑定的手机号格式不正确，请联系老师"}
+
+    # 随机选择连续 4 位作为隐藏位（从第 3 位之后开始，避免遮挡前 3 位运营商号段）
+    mask_start = random.randint(3, len(phone) - 4)
+    correct_digits = phone[mask_start:mask_start + 4]
+
+    # 构建掩码手机号
+    masked = list(phone)
+    for i in range(mask_start, mask_start + 4):
+        masked[i] = "*"
+    masked_phone = "".join(masked)
+
+    # 存入 Redis
+    redis = await get_redis()
+    await redis.setex(
+        f"forgot_pw:verify:{verify_token}",
+        600,
+        f"{user.id}|{correct_digits}|{mask_start}"
+    )
+
+    return {
+        "code": 0,
+        "data": {
+            "need_verify": True,
+            "verify_token": verify_token,
+            "masked_phone": masked_phone,
+        },
+    }
+
+
+@router.post("/forgot-password-verify")
+async def forgot_password_verify(req: ForgotPasswordVerifyRequest):
+    """
+    步骤2（仅学生）：验证手机号缺失的 4 位数字
+    """
+    if not req.verify_token or len(req.digits) != 4:
+        return {"code": 1, "msg": "请输入完整的四位数字"}
+
+    redis = await get_redis()
+    key = f"forgot_pw:verify:{req.verify_token}"
+    data = await redis.get(key)
+    if not data:
+        return {"code": 1, "msg": "验证已过期，请重新开始"}
+
+    parts = data.split("|")
+    if len(parts) == 2 and parts[1] == "verified":
+        # 老师/管理员已跳过验证
+        return {"code": 0, "msg": "验证成功"}
+
+    if len(parts) != 3:
+        return {"code": 1, "msg": "验证数据异常，请重新开始"}
+
+    correct_digits = parts[1]
+    if req.digits != correct_digits:
+        return {"code": 1, "msg": "号码输入错误，请重新输入"}
+
+    # 验证通过，更新 token 标记
+    await redis.setex(key, 600, f"{parts[0]}|verified")
+
+    return {"code": 0, "msg": "验证成功"}
 
 
 @router.post("/forgot-password")
 async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     """
-    忘记密码 — 输入账号即可重置密码
-
-    请求参数：
-        body.account (str): 账号
-        body.new_password (str): 新密码（至少6位）
+    步骤3：验证通过后重置密码
     """
-    if not req.account.strip():
-        return {"code": 1, "msg": "请输入账号"}
+    if not req.verify_token:
+        return {"code": 1, "msg": "验证信息缺失"}
 
     if len(req.new_password) < 6:
         return {"code": 1, "msg": "密码长度不能少于6位"}
 
-    result = await db.execute(select(User).where(User.account == req.account.strip()))
-    user = result.scalar_one_or_none()
+    redis = await get_redis()
+    key = f"forgot_pw:verify:{req.verify_token}"
+    data = await redis.get(key)
+    if not data:
+        return {"code": 1, "msg": "验证已过期，请重新开始"}
 
+    parts = data.split("|")
+    if len(parts) == 2 and parts[1] == "verified":
+        user_id = int(parts[0])
+    elif len(parts) == 3:
+        parts2 = parts[0].split("::")
+        if len(parts2) == 2 and parts2[1] == "verified":
+            user_id = int(parts2[0])
+        else:
+            return {"code": 1, "msg": "请先完成手机号验证"}
+    else:
+        return {"code": 1, "msg": "请先完成手机号验证"}
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
     if not user:
-        return {"code": 1, "msg": "账号不存在"}
+        return {"code": 1, "msg": "用户不存在"}
 
     user.password_hash = hash_password(req.new_password)
     await db.commit()
+
+    # 删除 Redis 中的 token
+    await redis.delete(key)
 
     return {"code": 0, "msg": "密码重置成功，请使用新密码登录"}
 

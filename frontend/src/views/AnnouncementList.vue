@@ -31,6 +31,27 @@
       </div>
     </div>
 
+    <!-- 自定义确认弹窗（替代原生 confirm，兼容钉钉 WebView） -->
+    <div v-if="confirmVisible" class="modal-overlay" @click.self="confirmVisible = false">
+      <div class="modal-card" style="max-width: 360px; text-align: center;">
+        <div style="font-size: 15px; margin-bottom: 20px;">{{ confirmMsg }}</div>
+        <div class="modal-actions" style="justify-content: center;">
+          <button class="btn-sm" @click="confirmCancel">取消</button>
+          <button class="btn-sm danger" @click="confirmOk">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 自定义提示弹窗（替代原生 alert，兼容钉钉 WebView） -->
+    <div v-if="toastVisible" class="modal-overlay" @click.self="toastVisible = false">
+      <div class="modal-card" style="max-width: 360px; text-align: center;">
+        <div style="font-size: 15px; margin-bottom: 20px;">{{ toastMsg }}</div>
+        <div class="modal-actions" style="justify-content: center;">
+          <button class="btn-sm primary" @click="toastVisible = false">知道了</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 公告详情弹窗 -->
     <div v-if="detailVisible" class="modal-overlay" @click.self="detailVisible = false">
       <div class="modal-card">
@@ -66,6 +87,42 @@ const loading = ref(true)
 const detailVisible = ref(false)
 const detailData = ref({})
 
+// 自定义确认弹窗状态（替代原生 confirm，兼容钉钉 WebView）
+const confirmVisible = ref(false)
+const confirmMsg = ref('')
+let confirmResolver = null
+
+function showConfirm(msg) {
+  return new Promise(resolve => {
+    confirmMsg.value = msg
+    confirmVisible.value = true
+    confirmResolver = resolve
+  })
+}
+
+function confirmOk() {
+  confirmVisible.value = false
+  if (confirmResolver) confirmResolver(true)
+  confirmResolver = null
+}
+
+function confirmCancel() {
+  confirmVisible.value = false
+  if (confirmResolver) confirmResolver(false)
+  confirmResolver = null
+}
+
+// 自定义提示弹窗状态（替代原生 alert，兼容钉钉 WebView）
+const toastVisible = ref(false)
+const toastMsg = ref('')
+
+function showToast(msg) {
+  toastMsg.value = msg
+  toastVisible.value = true
+  // 3秒后自动关闭
+  setTimeout(() => { toastVisible.value = false }, 3000)
+}
+
 function formatTime(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -78,13 +135,14 @@ function viewDetail(a) {
 }
 
 async function deleteAnnouncement(id) {
-  if (!confirm('确定删除该公告？')) return
+  if (!(await showConfirm('确定删除该公告？'))) return
   try {
     await api.delete(`/announcements/${id}`)
     list.value = list.value.filter(a => a.id !== id)
     detailVisible.value = false
+    showToast('删除成功')
   } catch (e) {
-    alert('删除失败: ' + (e.response?.data?.detail || e.message))
+    showToast('删除失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 

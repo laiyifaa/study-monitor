@@ -117,6 +117,27 @@
       </div>
     </div>
 
+    <!-- ====== 自定义提示弹窗（替代 alert，兼容钉钉 WebView）====== -->
+    <div v-if="toastVisible" class="modal-overlay confirm-overlay" @click.self="toastVisible = false">
+      <div class="modal-card" style="max-width: 360px; text-align: center;">
+        <div style="font-size: 15px; margin-bottom: 20px; white-space: pre-wrap;">{{ toastMsg }}</div>
+        <div class="modal-actions" style="justify-content: center;">
+          <button class="btn-sm primary" @click="toastVisible = false">知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== 自定义确认弹窗（替代 confirm，兼容钉钉 WebView）====== -->
+    <div v-if="confirmVisible" class="modal-overlay confirm-overlay" @click.self="confirmCancel">
+      <div class="modal-card" style="max-width: 360px; text-align: center;">
+        <div style="font-size: 15px; margin-bottom: 20px; white-space: pre-wrap;">{{ confirmMsg }}</div>
+        <div class="modal-actions" style="justify-content: center;">
+          <button class="btn-sm" @click="confirmCancel">取消</button>
+          <button class="btn-sm primary" @click="confirmOk">确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ====== 重置密码弹窗 ====== -->
     <div v-if="resetPwUser" class="modal-overlay" @click.self="resetPwUser = null">
       <div class="modal-card">
@@ -207,6 +228,42 @@ const isTeacher = computed(() => auth.user.value?.role === 'teacher')
 /** 标签页切换 */
 const activeTab = ref('users')
 
+/** ============ 自定义弹窗（兼容钉钉 WebView）============ */
+const toastVisible = ref(false)
+const toastMsg = ref('')
+let toastTimer = null
+
+function showToast(msg) {
+  toastMsg.value = msg
+  toastVisible.value = true
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastVisible.value = false }, 3000)
+}
+
+const confirmVisible = ref(false)
+const confirmMsg = ref('')
+let confirmResolver = null
+
+function showConfirm(msg) {
+  return new Promise(resolve => {
+    confirmMsg.value = msg
+    confirmVisible.value = true
+    confirmResolver = resolve
+  })
+}
+
+function confirmOk() {
+  confirmVisible.value = false
+  if (confirmResolver) confirmResolver(true)
+  confirmResolver = null
+}
+
+function confirmCancel() {
+  confirmVisible.value = false
+  if (confirmResolver) confirmResolver(false)
+  confirmResolver = null
+}
+
 /** ============ 用户管理状态 ============ */
 const users = ref([])
 const classes = ref([])
@@ -286,10 +343,10 @@ async function changeRole(userId, newRole) {
     if (res.data.code === 0) {
       await loadUsers()
     } else {
-      alert(res.data.msg || '修改失败')
+      showToast(res.data.msg || '修改失败')
     }
   } catch (e) {
-    alert('修改失败')
+    showToast('修改失败')
   }
 }
 
@@ -306,7 +363,7 @@ function showResetPw(user) {
  */
 async function doResetPassword() {
   if (newPassword.value.length < 6) {
-    alert('密码至少6位')
+    showToast('密码至少6位')
     return
   }
   resetting.value = true
@@ -315,14 +372,14 @@ async function doResetPassword() {
       new_password: newPassword.value,
     })
     if (res.data.code === 0) {
-      alert('密码重置成功')
+      showToast('密码重置成功')
       resetPwUser.value = null
       await loadUsers()
     } else {
-      alert(res.data.msg || '重置失败')
+      showToast(res.data.msg || '重置失败')
     }
   } catch (e) {
-    alert('重置失败')
+    showToast('重置失败')
   } finally {
     resetting.value = false
   }
@@ -332,17 +389,22 @@ async function doResetPassword() {
  * 创建班级
  */
 async function createClass() {
-  if (!newClassName.value.trim()) return
+  if (!newClassName.value.trim()) {
+    showToast('请输入班级名称')
+    return
+  }
   try {
-    const res = await api.post('/admin/classes', { class_name: newClassName.value.trim() })
+    const name = newClassName.value.trim()
+    const res = await api.post('/admin/classes', { class_name: name })
     if (res.data.code === 0) {
       newClassName.value = ''
+      showToast(`班级"${name}"创建成功`)
       await loadClasses()
     } else {
-      alert(res.data.msg || '创建失败')
+      showToast(res.data.msg || '创建失败')
     }
   } catch (e) {
-    alert('创建失败')
+    showToast('创建失败')
   }
 }
 
@@ -350,17 +412,17 @@ async function createClass() {
  * 删除班级
  */
 async function deleteClass(className) {
-  if (!confirm(`确定删除班级"${className}"？学生将被移出班级，但账号和数据保留。`)) return
+  if (!(await showConfirm(`确定删除班级"${className}"？\n学生将被移出班级，但账号和数据保留。`))) return
   try {
     const res = await api.delete(`/admin/classes/${encodeURIComponent(className)}`)
     if (res.data.code === 0) {
       await loadClasses()
       await loadUsers()
     } else {
-      alert(res.data.msg || '删除失败')
+      showToast(res.data.msg || '删除失败')
     }
   } catch (e) {
-    alert('删除失败')
+    showToast('删除失败')
   }
 }
 
@@ -385,7 +447,7 @@ async function showAssignStudents(className) {
  */
 async function doAssignStudents() {
   if (checkedStudentIds.value.length === 0) {
-    alert('请至少选择一名学生')
+    showToast('请至少选择一名学生')
     return
   }
   assigning.value = true
@@ -394,15 +456,15 @@ async function doAssignStudents() {
       user_ids: checkedStudentIds.value,
     })
     if (res.data.code === 0) {
-      alert(res.data.msg || '分配成功')
+      showToast(res.data.msg || '分配成功')
       assignTarget.value = null
       await loadClasses()
       await loadUsers()
     } else {
-      alert(res.data.msg || '分配失败')
+      showToast(res.data.msg || '分配失败')
     }
   } catch (e) {
-    alert('分配失败')
+    showToast('分配失败')
   } finally {
     assigning.value = false
   }
@@ -425,15 +487,15 @@ function showCreateUser() {
  */
 async function doCreateUser() {
   if (!newUser.value.account.trim()) {
-    alert('请输入账号')
+    showToast('请输入账号')
     return
   }
   if (!newUser.value.name.trim()) {
-    alert('请输入用户姓名')
+    showToast('请输入用户姓名')
     return
   }
   if (newUser.value.password.length < 6) {
-    alert('密码至少6位')
+    showToast('密码至少6位')
     return
   }
 
@@ -447,14 +509,14 @@ async function doCreateUser() {
       password: newUser.value.password,
     })
     if (res.data.code === 0) {
-      alert(`用户 "${res.data.data.name}" 创建成功，ID=${res.data.data.id}`)
+      showToast(`用户 "${res.data.data.name}" 创建成功，ID=${res.data.data.id}`)
       showCreateModal.value = false
       await Promise.all([loadUsers(), loadClasses()])
     } else {
-      alert(res.data.msg || '创建失败')
+      showToast(res.data.msg || '创建失败')
     }
   } catch (e) {
-    alert('创建失败')
+    showToast('创建失败')
   } finally {
     creating.value = false
   }
@@ -526,6 +588,7 @@ td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; }
   background: rgba(0,0,0,0.4); display: flex; align-items: center;
   justify-content: center; z-index: 200;
 }
+.confirm-overlay { z-index: 300; }
 .modal-card {
   background: #fff; border-radius: 12px; padding: 24px;
   width: 90%; max-width: 440px; box-shadow: 0 12px 40px rgba(0,0,0,0.15);

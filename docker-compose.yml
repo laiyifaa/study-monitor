@@ -60,6 +60,11 @@ services:
       # 格式：https://cdn.your-domain.com，为空表示不使用 CDN（向后兼容）
       - CDN_DOMAIN=${CDN_DOMAIN:-}
 
+      # --- 智能体批改 ---
+      # 用于自动批改与答案解析；Compose 根 .env 只做变量替换，需显式注入容器
+      - GRADING_AGENT_URL=${GRADING_AGENT_URL:-}
+      - GRADING_AGENT_API_KEY=${GRADING_AGENT_API_KEY:-}
+
     volumes:
       # 将上传的视频文件挂载到后端容器，使 ops/storage API 能统计视频大小
       # 前端 Nginx 容器也需要此挂载（只读）用于视频分发

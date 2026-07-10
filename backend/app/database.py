@@ -92,3 +92,16 @@ async def init_db():
                 "ALTER TABLE assignments "
                 "ADD COLUMN answer_files TEXT NULL COMMENT '答案附件URL数组(JSON)' AFTER question_files"
             ))
+
+        # v5.0 迁移：将 users 表中已有的 class_name 同步到 class_defs 表
+        class_defs_exists = await conn.scalar(text(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() "
+            "AND table_name = 'class_defs'"
+        ))
+        if class_defs_exists:
+            await conn.execute(text(
+                "INSERT IGNORE INTO class_defs (class_name, created_by) "
+                "SELECT DISTINCT class_name, NULL FROM users "
+                "WHERE class_name != '' AND class_name IS NOT NULL"
+            ))

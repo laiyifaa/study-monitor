@@ -264,7 +264,7 @@ class ClassCreateRequest(BaseModel):
 @router.post("/classes")
 async def create_class(
     req: ClassCreateRequest,
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("admin", "teacher")),
     db: AsyncSession = Depends(get_db),
 ):
     """

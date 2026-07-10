@@ -372,7 +372,7 @@
             <div v-if="s.report" class="report-preview">
               <div class="score">
                 分数：{{ s.report.score }}<span v-if="s.report.full_score"> / {{ s.report.full_score }}</span>
-                <span v-if="s.report.status" class="status-tag" :class="s.report.status">{{ s.report.status }}</span>
+                <span v-if="s.report.status" class="status-tag" :class="s.report.status">{{ reportStatusText(s.report.status) }}</span>
               </div>
               <div v-if="s.report.accuracy" class="report-meta">正确率：{{ (s.report.accuracy * 100).toFixed(0) }}% &nbsp; 对{{ s.report.correct_count }} / 错{{ s.report.wrong_count }}</div>
               <div class="feedback">{{ s.report.feedback }}</div>

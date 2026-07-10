@@ -135,14 +135,23 @@ function viewDetail(a) {
 }
 
 async function deleteAnnouncement(id) {
-  if (!(await showConfirm('确定删除该公告？'))) return
+  // 先关闭详情弹窗，避免确认弹窗被遮挡
+  const wasDetailOpen = detailVisible.value
+  detailVisible.value = false
+
+  if (!(await showConfirm('确定删除该公告？'))) {
+    // 取消删除，恢复详情弹窗
+    if (wasDetailOpen) detailVisible.value = true
+    return
+  }
   try {
     await api.delete(`/announcements/${id}`)
     list.value = list.value.filter(a => a.id !== id)
-    detailVisible.value = false
     showToast('删除成功')
   } catch (e) {
     showToast('删除失败: ' + (e.response?.data?.detail || e.message))
+    // 删除失败也恢复详情弹窗
+    if (wasDetailOpen) detailVisible.value = true
   }
 }
 

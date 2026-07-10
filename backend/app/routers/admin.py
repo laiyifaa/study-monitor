@@ -42,7 +42,7 @@ from typing import Optional
 from datetime import datetime
 
 from app.database import get_db
-from app.models.models import User
+from app.models.models import User, ClassDef
 from app.routers.auth import hash_password
 from app.utils.jwt_helper import require_role
 
@@ -226,32 +226,39 @@ async def list_classes(
     权限要求：【admin / teacher】
 
     说明：
-        班级列表从用户表的 class_name 字段聚合生成，而非独立的班级表。
-        这样设计是因为当前系统规模小（1-2个年级，5-10个班），
-        避免引入额外的 Class 表和关联关系的复杂度。
+        v5.0 起班级列表从 class_defs 表读取，不再仅从 User.class_name 聚合。
+        这样支持空班级（创建后尚未分配学生）。
     """
-    # 按班级名聚合，统计每个班级的学生数和教师数
-    result = await db.execute(
+    # 从 class_defs 表获取所有班级
+    result = await db.execute(select(ClassDef).order_by(ClassDef.class_name))
+    class_defs = result.scalars().all()
+
+    if not class_defs:
+        return {"code": 0, "data": []}
+
+    class_names = [c.class_name for c in class_defs]
+
+    # 按班级名聚合统计学生数和教师数
+    count_result = await db.execute(
         select(
             User.class_name,
             func.sum(func.if_(User.role == "student", 1, 0)).label("student_count"),
             func.sum(func.if_(User.role == "teacher", 1, 0)).label("teacher_count"),
         )
-        .where(User.class_name != "")
+        .where(User.class_name.in_(class_names))
         .group_by(User.class_name)
-        .order_by(User.class_name)
     )
-    rows = result.all()
+    count_map = {r.class_name: {"student_count": int(r.student_count or 0), "teacher_count": int(r.teacher_count or 0)} for r in count_result.all()}
 
     return {
         "code": 0,
         "data": [
             {
-                "class_name": r.class_name,
-                "student_count": int(r.student_count or 0),
-                "teacher_count": int(r.teacher_count or 0),
+                "class_name": c.class_name,
+                "student_count": count_map.get(c.class_name, {}).get("student_count", 0),
+                "teacher_count": count_map.get(c.class_name, {}).get("teacher_count", 0),
             }
-            for r in rows
+            for c in class_defs
         ],
     }
 
@@ -268,26 +275,29 @@ async def create_class(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    创建班级（实际上是检查班级名是否已存在）
+    创建班级（写入 class_defs 表，无需分配学生即可存在）
 
-    权限要求：【仅 admin】
+    权限要求：【admin / teacher】
 
     说明：
-        由于班级信息存储在 User.class_name 中，创建班级不需要建表，
-        只需确保班级名不与现有班级重复即可。学生分配到班级后，
-        班级自动出现在班级列表中。
+        v5.0 起班级写入 class_defs 表持久化，支持空班级。
+        创建后班级立即出现在班级列表中，0学生0教师。
     """
     if not req.class_name.strip():
         return {"code": 1, "msg": "班级名称不能为空"}
 
     # 检查是否已存在同名班级
     result = await db.execute(
-        select(User).where(User.class_name == req.class_name.strip()).limit(1)
+        select(ClassDef).where(ClassDef.class_name == req.class_name.strip()).limit(1)
     )
     if result.scalar_one_or_none():
         return {"code": 1, "msg": "该班级名称已存在"}
 
-    return {"code": 0, "msg": f"班级 '{req.class_name}' 创建成功，请分配学生"}
+    class_def = ClassDef(class_name=req.class_name.strip(), created_by=current_user.id)
+    db.add(class_def)
+    await db.commit()
+
+    return {"code": 0, "msg": f"班级 '{req.class_name}' 创建成功"}
 
 
 class ClassUpdateRequest(BaseModel):
@@ -303,7 +313,7 @@ async def update_class(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    更新班级名称（批量修改该班级所有用户的 class_name）
+    更新班级名称（批量修改该班级所有用户的 class_name + 更新 class_defs 表）
 
     请求参数：
         path.class_name (str):   原班级名称（URL编码）
@@ -314,14 +324,23 @@ async def update_class(
     if not req.new_name.strip():
         return {"code": 1, "msg": "班级名称不能为空"}
 
+    # 检查新名称是否已被其他班级占用
+    existing = await db.execute(
+        select(ClassDef).where(ClassDef.class_name == req.new_name.strip(), ClassDef.class_name != class_name)
+    )
+    if existing.scalar_one_or_none():
+        return {"code": 1, "msg": "该班级名称已存在"}
+
     # 批量更新该班级所有用户的 class_name
     from sqlalchemy import update
     stmt = update(User).where(User.class_name == class_name).values(class_name=req.new_name.strip())
     result = await db.execute(stmt)
-    await db.commit()
 
-    if result.rowcount == 0:
-        return {"code": 1, "msg": "未找到该班级的用户"}
+    # 更新 class_defs 表
+    await db.execute(
+        ClassDef.__table__.update().where(ClassDef.class_name == class_name).values(class_name=req.new_name.strip())
+    )
+    await db.commit()
 
     return {"code": 0, "msg": f"已更新 {result.rowcount} 名用户的班级名称"}
 
@@ -333,7 +352,7 @@ async def delete_class(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    删除班级（将该班级所有用户的 class_name 置空，而非删除用户）
+    删除班级（将该班级所有用户的 class_name 置空，并删除 class_defs 记录）
 
     请求参数：
         path.class_name (str): 要删除的班级名称（URL编码）
@@ -345,14 +364,16 @@ async def delete_class(
         不会删除用户账号和学习数据，学生仍可登录和使用系统。
     """
     from sqlalchemy import update
+    # 先将用户从班级移出
     stmt = update(User).where(User.class_name == class_name).values(class_name="")
     result = await db.execute(stmt)
+    # 删除 class_defs 记录
+    await db.execute(
+        ClassDef.__table__.delete().where(ClassDef.class_name == class_name)
+    )
     await db.commit()
 
-    if result.rowcount == 0:
-        return {"code": 1, "msg": "未找到该班级的用户"}
-
-    return {"code": 0, "msg": f"已将 {result.rowcount} 名用户移出班级 '{class_name}'"}
+    return {"code": 0, "msg": f"已将 {result.rowcount} 名用户移出班级 '{class_name}'，班级已删除"}
 
 
 class AssignStudentsRequest(BaseModel):

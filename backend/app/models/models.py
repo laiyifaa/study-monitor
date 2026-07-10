@@ -462,6 +462,27 @@ class SectionFeedback(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class ClassDef(Base):
+    """
+    班级定义模型
+
+    用途：独立存储班级名称，支持空班级（无学生时班级仍存在）。
+         v5.0 新增，此前班级从 User.class_name 聚合生成，无法支持空班级。
+
+    字段说明：
+        id          — 自增主键
+        class_name  — 班级名称（唯一），如"2026级高一新生"
+        created_by  — 创建者用户 ID
+        created_at  — 创建时间
+    """
+    __tablename__ = "class_defs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    class_name = Column(String(50), unique=True, nullable=False, comment="班级名称")
+    created_by = Column(BigInteger, ForeignKey("users.id"), nullable=True, comment="创建者用户ID")
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class GradingTask(Base):
     """
     批改任务模型

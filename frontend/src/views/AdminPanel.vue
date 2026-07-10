@@ -398,9 +398,8 @@ async function createClass() {
     const res = await api.post('/admin/classes', { class_name: name })
     if (res.data.code === 0) {
       newClassName.value = ''
-      showToast(`班级"${name}"创建成功，请分配学生`)
-      // 自动打开分配学生弹窗，让班级立即可见
-      await showAssignStudents(name)
+      showToast(`班级"${name}"创建成功`)
+      await loadClasses()
     } else {
       showToast(res.data.msg || '创建失败')
     }

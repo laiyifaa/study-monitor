@@ -32,7 +32,7 @@ API 列表：
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -301,6 +301,10 @@ async def delete_announcement(
     if not announcement:
         raise HTTPException(status_code=404, detail="公告不存在")
 
+    # 先删除关联的已读记录，避免外键约束报错
+    await db.execute(
+        delete(AnnouncementRead).where(AnnouncementRead.announcement_id == announcement_id)
+    )
     await db.delete(announcement)
     await db.commit()
     return {"code": 0, "data": {"id": announcement_id}}

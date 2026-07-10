@@ -317,6 +317,11 @@ onMounted(async () => {
 function goHome() {
   const role = auth.user.value?.role
   const target = role === 'student' ? '/my-progress' : '/teacher'
+  if (router.currentRoute.value.path === target) {
+    // 已经在目标页面，滚动到顶部
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    return
+  }
   router.replace(target).catch(() => {
     // replace 失败（钉钉 WebView 兼容性问题），降级为直接改 hash
     window.location.hash = target

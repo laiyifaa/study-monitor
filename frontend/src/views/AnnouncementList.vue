@@ -50,6 +50,27 @@
         </div>
       </div>
     </div>
+
+    <!-- 自定义确认弹窗（替代原生 confirm，兼容钉钉 WebView）-->
+    <div v-if="confirmVisible" class="modal-overlay confirm-overlay" @click.self="confirmCancel">
+      <div class="modal-card" style="max-width: 360px; text-align: center;">
+        <div style="font-size: 15px; margin-bottom: 20px;">{{ confirmMsg }}</div>
+        <div class="modal-actions" style="justify-content: center;">
+          <button class="btn-sm" @click="confirmCancel">取消</button>
+          <button class="btn-sm danger" @click="confirmOk">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 自定义提示弹窗（替代原生 alert，兼容钉钉 WebView）-->
+    <div v-if="toastVisible" class="modal-overlay confirm-overlay" @click.self="toastVisible = false">
+      <div class="modal-card" style="max-width: 360px; text-align: center;">
+        <div style="font-size: 15px; margin-bottom: 20px;">{{ toastMsg }}</div>
+        <div class="modal-actions" style="justify-content: center;">
+          <button class="btn-sm primary" @click="toastVisible = false">知道了</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -66,6 +87,42 @@ const loading = ref(true)
 const detailVisible = ref(false)
 const detailData = ref({})
 
+// 自定义确认弹窗状态（替代原生 confirm，兼容钉钉 WebView）
+const confirmVisible = ref(false)
+const confirmMsg = ref('')
+let confirmResolver = null
+
+function showConfirm(msg) {
+  return new Promise(resolve => {
+    confirmMsg.value = msg
+    confirmVisible.value = true
+    confirmResolver = resolve
+  })
+}
+
+function confirmOk() {
+  confirmVisible.value = false
+  if (confirmResolver) confirmResolver(true)
+  confirmResolver = null
+}
+
+function confirmCancel() {
+  confirmVisible.value = false
+  if (confirmResolver) confirmResolver(false)
+  confirmResolver = null
+}
+
+// 自定义提示弹窗状态（替代原生 alert，兼容钉钉 WebView）
+const toastVisible = ref(false)
+const toastMsg = ref('')
+
+function showToast(msg) {
+  toastMsg.value = msg
+  toastVisible.value = true
+  // 3秒后自动关闭
+  setTimeout(() => { toastVisible.value = false }, 3000)
+}
+
 function formatTime(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -78,13 +135,23 @@ function viewDetail(a) {
 }
 
 async function deleteAnnouncement(id) {
-  if (!confirm('确定删除该公告？')) return
+  // 先关闭详情弹窗，避免确认弹窗被遮挡
+  const wasDetailOpen = detailVisible.value
+  detailVisible.value = false
+
+  if (!(await showConfirm('确定删除该公告？'))) {
+    // 取消删除，恢复详情弹窗
+    if (wasDetailOpen) detailVisible.value = true
+    return
+  }
   try {
     await api.delete(`/announcements/${id}`)
     list.value = list.value.filter(a => a.id !== id)
-    detailVisible.value = false
+    showToast('删除成功')
   } catch (e) {
-    alert('删除失败: ' + (e.response?.data?.detail || e.message))
+    showToast('删除失败: ' + (e.response?.data?.detail || e.message))
+    // 删除失败也恢复详情弹窗
+    if (wasDetailOpen) detailVisible.value = true
   }
 }
 
@@ -129,6 +196,7 @@ onMounted(async () => {
 .ac-content { font-size: 13px; color: #666; line-height: 1.5; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.confirm-overlay { z-index: 300; }
 .modal-card { background: #fff; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto; }
 .modal-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .modal-header h3 { font-size: 17px; }

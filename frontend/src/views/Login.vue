@@ -72,29 +72,73 @@
       </template>
     </div>
 
-    <!-- ====== 忘记密码弹窗 ====== -->
-    <div v-if="showForgotPw" class="modal-overlay" @click.self="showForgotPw = false">
-      <div class="modal-card">
+    <!-- ====== 忘记密码弹窗 - 步骤1：输入账号 ====== -->
+    <div v-if="showForgotPw" class="modal-overlay" @click.self="closeForgotPw">
+      <div class="modal-card forgot-modal">
         <h3>忘记密码</h3>
-        <div class="form-item">
-          <label>账号</label>
-          <input v-model="forgotForm.account" type="text" placeholder="请输入您的账号" />
-        </div>
-        <div class="form-item">
-          <label>新密码</label>
-          <input v-model="forgotForm.new_password" type="password" placeholder="至少6位" />
-        </div>
-        <div class="form-item">
-          <label>确认新密码</label>
-          <input v-model="forgotForm.confirm_password" type="password" placeholder="再次输入新密码" />
-        </div>
-        <div v-if="forgotError" class="error-msg">{{ forgotError }}</div>
-        <div class="modal-actions">
-          <button class="btn-sm primary" @click="doForgotPassword" :disabled="forgotLoading">
-            {{ forgotLoading ? '重置中...' : '确认重置' }}
-          </button>
-          <button class="btn-sm" @click="showForgotPw = false">取消</button>
-        </div>
+
+        <!-- 步骤1：输入账号 -->
+        <template v-if="forgotStep === 0">
+          <div class="form-item">
+            <label>账号</label>
+            <input v-model="forgotForm.account" type="text" placeholder="请输入您的账号" />
+          </div>
+          <div v-if="forgotError" class="error-msg">{{ forgotError }}</div>
+          <div class="modal-actions">
+            <button class="btn-sm primary" @click="goForgotStep2" :disabled="forgotLoading">
+              {{ forgotLoading ? '查询中...' : '下一步' }}
+            </button>
+            <button class="btn-sm" @click="closeForgotPw">取消</button>
+          </div>
+        </template>
+
+        <!-- 步骤2：手机号验证 -->
+        <template v-if="forgotStep === 1">
+          <p class="verify-tip">请输入父/母手机号中缺失的四位</p>
+          <div class="phone-display">
+            <span v-for="(ch, i) in maskedPhoneChars" :key="i" :class="{ 'masked-digit': ch === '*' }">{{ ch }}</span>
+          </div>
+          <div class="digit-inputs">
+            <input
+              v-for="(d, i) in phoneDigits"
+              :key="i"
+              :ref="el => digitRefs[i] = el"
+              v-model="phoneDigits[i]"
+              type="text"
+              maxlength="1"
+              class="digit-box"
+              @input="onDigitInput(i)"
+              @keydown.backspace="onDigitBackspace(i)"
+            />
+          </div>
+          <div v-if="forgotError" class="error-msg">{{ forgotError }}</div>
+          <div class="modal-actions">
+            <button class="btn-sm primary" @click="doVerifyPhone" :disabled="forgotLoading">
+              {{ forgotLoading ? '验证中...' : '验证' }}
+            </button>
+            <button class="btn-sm" @click="closeForgotPw">取消</button>
+          </div>
+        </template>
+
+        <!-- 步骤3：重置密码 -->
+        <template v-if="forgotStep === 2">
+          <p class="verify-tip success">验证成功，请输入新密码</p>
+          <div class="form-item">
+            <label>新密码</label>
+            <input v-model="forgotForm.new_password" type="password" placeholder="至少6位" />
+          </div>
+          <div class="form-item">
+            <label>确认新密码</label>
+            <input v-model="forgotForm.confirm_password" type="password" placeholder="再次输入新密码" />
+          </div>
+          <div v-if="forgotError" class="error-msg">{{ forgotError }}</div>
+          <div class="modal-actions">
+            <button class="btn-sm primary" @click="doForgotPassword" :disabled="forgotLoading">
+              {{ forgotLoading ? '重置中...' : '确认重置' }}
+            </button>
+            <button class="btn-sm" @click="closeForgotPw">取消</button>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -121,9 +165,16 @@ const isDingTalkLoggingIn = ref(false)
 
 /** ============ 忘记密码弹窗状态 ============ */
 const showForgotPw = ref(false)
+const forgotStep = ref(0)  // 0: 输入账号, 1: 手机验证, 2: 重置密码
 const forgotForm = ref({ account: '', new_password: '', confirm_password: '' })
 const forgotLoading = ref(false)
 const forgotError = ref('')
+
+// 手机号验证相关
+const verifyToken = ref('')  // 后端返回的验证 token
+const maskedPhoneChars = ref([])  // 掩码手机号字符数组
+const phoneDigits = ref(['', '', '', ''])  // 4 个输入框
+const digitRefs = ref([])  // DOM 引用
 
 /**
  * 钉钉环境检测：如果用户在钉钉客户端内打开登录页，
@@ -205,14 +256,105 @@ async function handleLogin() {
 }
 
 /**
- * 执行忘记密码重置
+ * 关闭忘记密码弹窗，重置所有状态
  */
-async function doForgotPassword() {
+function closeForgotPw() {
+  showForgotPw.value = false
+  forgotStep.value = 0
+  forgotForm.value = { account: '', new_password: '', confirm_password: '' }
+  forgotError.value = ''
+  verifyToken.value = ''
+  phoneDigits.value = ['', '', '', '']
+  maskedPhoneChars.value = []
+}
+
+/**
+ * 步骤1 → 步骤2/3：查询账号，老师跳过验证，学生进入验证
+ */
+async function goForgotStep2() {
   forgotError.value = ''
   if (!forgotForm.value.account.trim()) {
     forgotError.value = '请输入账号'
     return
   }
+
+  forgotLoading.value = true
+  try {
+    const res = await api.post('/auth/forgot-password-check', {
+      account: forgotForm.value.account.trim(),
+    })
+    if (res.data.code === 0) {
+      const data = res.data.data
+      verifyToken.value = data.verify_token
+
+      if (data.need_verify) {
+        // 学生：显示手机号验证
+        maskedPhoneChars.value = data.masked_phone.split('')
+        forgotStep.value = 1
+      } else {
+        // 老师/管理员：跳过验证，直接到重置密码
+        forgotStep.value = 2
+      }
+    } else {
+      forgotError.value = res.data.msg || '账号不存在'
+    }
+  } catch (e) {
+    forgotError.value = '网络异常，请稍后重试'
+  } finally {
+    forgotLoading.value = false
+  }
+}
+
+/** 步骤2 输入框自动跳转 */
+function onDigitInput(index) {
+  const val = phoneDigits.value[index]
+  // 只保留数字
+  phoneDigits.value[index] = val.replace(/\D/g, '')
+  if (phoneDigits.value[index] && index < 3) {
+    digitRefs.value[index + 1]?.focus()
+  }
+}
+
+function onDigitBackspace(index) {
+  if (!phoneDigits.value[index] && index > 0) {
+    digitRefs.value[index - 1]?.focus()
+  }
+}
+
+/** 步骤2 → 步骤3：验证手机号（调后端接口） */
+async function doVerifyPhone() {
+  forgotError.value = ''
+  const entered = phoneDigits.value.join('')
+  if (entered.length < 4) {
+    forgotError.value = '请输入完整的四位数字'
+    return
+  }
+
+  forgotLoading.value = true
+  try {
+    const res = await api.post('/auth/forgot-password-verify', {
+      verify_token: verifyToken.value,
+      digits: entered,
+    })
+    if (res.data.code === 0) {
+      forgotStep.value = 2
+    } else {
+      forgotError.value = res.data.msg || '号码输入错误'
+      phoneDigits.value = ['', '', '', '']
+      digitRefs.value[0]?.focus()
+    }
+  } catch (e) {
+    forgotError.value = '网络异常，请稍后重试'
+  } finally {
+    forgotLoading.value = false
+  }
+}
+
+/**
+ * 步骤3：执行密码重置
+ */
+async function doForgotPassword() {
+  forgotError.value = ''
   if (forgotForm.value.new_password.length < 6) {
     forgotError.value = '新密码至少6位'
     return
@@ -225,14 +367,12 @@ async function doForgotPassword() {
   forgotLoading.value = true
   try {
     const res = await api.post('/auth/forgot-password', {
-      account: forgotForm.value.account.trim(),
+      verify_token: verifyToken.value,
       new_password: forgotForm.value.new_password,
     })
     if (res.data.code === 0) {
       alert('密码重置成功，请使用新密码登录')
-      showForgotPw.value = false
-      forgotForm.value = { account: '', new_password: '', confirm_password: '' }
-      // 自动填充账号，方便用户直接登录
+      closeForgotPw()
       username.value = forgotForm.value.account
     } else {
       forgotError.value = res.data.msg || '重置失败'
@@ -415,4 +555,31 @@ async function doForgotPassword() {
 .btn-sm { padding: 6px 16px; border: 1px solid #d9d9d9; border-radius: 4px; background: #fff; font-size: 13px; cursor: pointer; }
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 忘记密码 - 手机验证 */
+.forgot-modal { min-height: 220px; }
+.verify-tip {
+  font-size: 14px; color: #333; text-align: center; margin-bottom: 16px;
+}
+.verify-tip.success {
+  color: #52c41a; font-weight: 500;
+}
+.phone-display {
+  text-align: center; margin-bottom: 20px; font-size: 22px;
+  letter-spacing: 4px; color: #333; font-weight: 500;
+}
+.phone-display .masked-digit {
+  color: #1890ff; font-weight: 600;
+}
+.digit-inputs {
+  display: flex; justify-content: center; gap: 12px; margin-bottom: 20px;
+}
+.digit-box {
+  width: 48px; height: 52px; border: 2px solid #d9d9d9; border-radius: 8px;
+  text-align: center; font-size: 22px; font-weight: 600; color: #333;
+  outline: none; transition: border-color 0.2s;
+}
+.digit-box:focus {
+  border-color: #1890ff; box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.15);
+}
 </style>

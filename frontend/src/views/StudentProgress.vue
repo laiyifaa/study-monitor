@@ -44,7 +44,7 @@
 
         <!-- 课程总体信息 -->
         <div class="info-row">
-          <span>有效时长：{{ c.effective_minutes }} 分钟<span v-if="c.require_minutes"> / 要求 {{ c.require_minutes }} 分钟</span></span>
+          <span>有效时长：{{ c.effective_minutes }} 分钟<span v-if="c.require_minutes"> / 总时长 {{ c.require_minutes }} 分钟</span></span>
           <span v-if="c.sections && c.sections.length > 0">{{ getCompletedSectionCount(c) }}/{{ c.sections.length }} 小节</span>
         </div>
         <div v-if="!c.require_minutes && c.total_section_minutes > 0" class="info-row sub">
@@ -77,7 +77,7 @@
                   <div class="spi-title">{{ sec.title }}</div>
                   <div class="spi-meta">
                     <span>{{ sec.effective_minutes }}分钟</span>
-                    <span v-if="sec.require_minutes > 0" class="spi-req">/ 要求{{ sec.require_minutes }}分钟</span>
+                    <span v-if="sec.require_minutes > 0" class="spi-req">/ 总时长{{ sec.require_minutes }}分钟</span>
                   </div>
                   <div class="spi-bar">
                     <div class="spi-fill" :style="{ width: getSectionProgress(sec) + '%' }"></div>

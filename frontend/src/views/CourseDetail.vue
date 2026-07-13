@@ -23,7 +23,7 @@
         <h2 class="course-title">{{ course.title }}</h2>
         <p v-if="course.description" class="course-desc">{{ course.description }}</p>
         <div class="course-meta">
-          <span>要求：{{ course.require_minutes }} 分钟</span>
+          <span>总时长：{{ course.total_duration_minutes || course.require_minutes }} 分钟</span>
           <span>{{ course.section_count }} 个小节</span>
           <span v-if="course.end_date">截止：{{ course.end_date.split(' ')[0] }}</span>
         </div>
@@ -36,7 +36,7 @@
           <div class="tp-bar">
             <div class="tp-fill" :style="{ width: Math.min(overallProgress.completion_rate * 100, 100) + '%' }"></div>
           </div>
-          <div class="tp-text">{{ overallProgress.effective_minutes }} / {{ course.require_minutes }} 分钟</div>
+          <div class="tp-text">{{ overallProgress.effective_minutes }} / {{ course.total_duration_minutes || course.require_minutes }} 分钟</div>
         </div>
       </div>
 

@@ -183,7 +183,7 @@
 
         <h4 style="margin:12px 0 6px;font-size:14px;color:#333;">接入步骤</h4>
         <ol>
-          <li>在本平台生成 API Key：管理后台 → 找到你的用户 → 点击「生成 API Key」</li>
+          <li>在本平台生成 API Key：进入「管理后台」首页，页面上方「智能体接入密钥」区域 → 点击「生成 API Key」</li>
           <li>点击页面上方「下载智能体技能包」，获取技能配置文件</li>
           <li>将技能包导入你的 AI 智能体（如星辰超级智能体）</li>
           <li>在智能体对话中提供服务器地址和 API Key 即可开始使用</li>
@@ -226,7 +226,7 @@
         <h3>API Key 使用</h3>
         <p>API Key 用于让智能体或其他程序调用平台接口，无需通过浏览器登录。</p>
         <ol>
-          <li>在管理后台找到目标用户，点击「生成 API Key」</li>
+          <li>进入「管理后台」首页，在页面上方「智能体接入密钥」区域点击「生成 API Key」</li>
           <li>复制生成的 Key（格式：sk_xxxx），只显示一次</li>
           <li>调用 API 时在请求头加入 <code>X-API-Key: sk_xxxx</code></li>
           <li>所有需要认证的 API 都支持 JWT 和 API Key 两种认证方式</li>

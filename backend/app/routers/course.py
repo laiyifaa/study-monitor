@@ -62,7 +62,7 @@ class CourseUpdate(BaseModel):
     status: str | None = None
 
 
-def _course_to_dict(c: Course, section_count: int = 0, sections: list | None = None):
+def _course_to_dict(c: Course, section_count: int = 0, sections: list | None = None, total_duration_minutes: int = 0):
     """
     统一的课程序列化函数
 
@@ -80,6 +80,7 @@ def _course_to_dict(c: Course, section_count: int = 0, sections: list | None = N
         "status": c.status,
         "teacher_id": c.teacher_id,
         "section_count": section_count,
+        "total_duration_minutes": total_duration_minutes,
     }
     # 仅在请求详情时嵌入小节数据（节省列表查询的开销）
     if sections is not None:
@@ -143,9 +144,10 @@ async def list_courses(
     result = await db.execute(query)
     courses = result.scalars().all()
 
-    # 批量查询每个课程的小节数
+    # 批量查询每个课程的小节数和总时长
     course_ids = [c.id for c in courses]
     section_counts = {}
+    total_durations = {}
     if course_ids:
         count_result = await db.execute(
             select(Section.course_id, func.count(Section.id))
@@ -154,7 +156,14 @@ async def list_courses(
         )
         section_counts = dict(count_result.all())
 
-    return {"code": 0, "data": [_course_to_dict(c, section_count=section_counts.get(c.id, 0)) for c in courses]}
+        dur_result = await db.execute(
+            select(Section.course_id, func.coalesce(func.sum(Section.duration_seconds), 0))
+            .where(Section.course_id.in_(course_ids))
+            .group_by(Section.course_id)
+        )
+        total_durations = dict(dur_result.all())
+
+    return {"code": 0, "data": [_course_to_dict(c, section_count=section_counts.get(c.id, 0), total_duration_minutes=total_durations.get(c.id, 0) // 60) for c in courses]}
 
 
 @router.get("/{course_id}")
@@ -174,9 +183,11 @@ async def get_course(course_id: int, db: AsyncSession = Depends(get_db)):
     sec_result = await db.execute(
         select(Section).where(Section.course_id == course_id).order_by(Section.sort_order, Section.id)
     )
-    sections = [_section_to_dict(s) for s in sec_result.scalars().all()]
+    sec_objs = sec_result.scalars().all()
+    sections = [_section_to_dict(s) for s in sec_objs]
+    total_dur_sec = sum(s.duration_seconds or 0 for s in sec_objs)
 
-    return {"code": 0, "data": _course_to_dict(course, section_count=len(sections), sections=sections)}
+    return {"code": 0, "data": _course_to_dict(course, section_count=len(sections), sections=sections, total_duration_minutes=total_dur_sec // 60)}
 
 
 @router.put("/{course_id}")

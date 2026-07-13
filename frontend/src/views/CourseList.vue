@@ -28,7 +28,7 @@
           <p class="desc">{{ c.description || '暂无描述' }}</p>
           <div class="meta">
             <span>{{ c.section_count || 0 }} 个小节</span>
-            <span>要求：{{ c.require_minutes }} 分钟</span>
+            <span>课程总时长：{{ c.total_duration_minutes || 0 }} 分钟</span>
             <span v-if="c.end_date">截止：{{ c.end_date.split(' ')[0] }}</span>
           </div>
           <!-- 进度条 -->
@@ -36,7 +36,7 @@
             <div class="mini-bar">
               <div class="mini-fill" :style="{ width: Math.min(c.progress.completion_rate * 100, 100) + '%' }"></div>
             </div>
-            <span class="mini-text">{{ c.progress.effective_minutes }}/{{ c.require_minutes }}分钟</span>
+            <span class="mini-text">{{ c.progress.effective_minutes }}/{{ c.total_duration_minutes || c.require_minutes }}分钟</span>
           </div>
           <!-- 小节学习进度 -->
           <div v-if="c.progress && c.progress.section_count > 0" class="section-progress">

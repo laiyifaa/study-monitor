@@ -66,7 +66,7 @@
             <!-- 小节进度条 -->
             <div v-if="getSectionProgress(sec.id)" class="sc-progress">
               <div class="sc-bar">
-                <div class="sc-fill" :style="{ width: getSectionProgress(sec.id).effective_minutes > 0 ? '100%' : '0%' }"></div>
+                <div class="sc-fill" :style="{ width: Math.min((getSectionProgress(sec.id).effective_minutes / (getSectionProgress(sec.id).require_minutes || 1)) * 100, 100) + '%' }"></div>
               </div>
               <span class="sc-pct">{{ getSectionProgress(sec.id).effective_minutes }}分钟</span>
             </div>

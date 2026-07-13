@@ -65,6 +65,8 @@ import api from './api'                 // 【交互】用于向后端发送 /au
  */
 const token = ref(localStorage.getItem('token') || '')
 const user = ref(JSON.parse(localStorage.getItem('user') || 'null'))
+/** 登录方式：'dingtalk' | 'account' | null（未登录或刷新后丢失） */
+const loginMethod = ref(localStorage.getItem('login_method') || null)
 
 /**
  * 认证 Store 工厂函数
@@ -167,7 +169,7 @@ export function useAuthStore() {
       if (resp.data.code === 0) {
         // 后端返回 code=0 表示成功，data 中包含 token 和 user
         bindInfo.value = null
-        setAuth(resp.data.data.token, resp.data.data.user)
+        setAuth(resp.data.data.token, resp.data.data.user, 'dingtalk')
         console.log('[免登调试] 免登成功，用户:', resp.data.data.user.name)
       } else if (resp.data.code === 2) {
         // 需要绑定账号：保存绑定信息，由 App.vue 弹出绑定弹窗
@@ -200,7 +202,7 @@ export function useAuthStore() {
       })
       if (resp.data.code === 0) {
         bindInfo.value = null
-        setAuth(resp.data.data.token, resp.data.data.user)
+        setAuth(resp.data.data.token, resp.data.data.user, 'dingtalk')
         return true
       } else {
         return resp.data.msg || '绑定失败'
@@ -220,9 +222,13 @@ export function useAuthStore() {
    * @param {string} newToken — JWT 令牌字符串
    * @param {Object} newUser — 用户信息对象（至少包含 role 字段）
    */
-  function setAuth(newToken, newUser) {
+  function setAuth(newToken, newUser, method) {
     token.value = newToken
     user.value = newUser
+    if (method) {
+      loginMethod.value = method
+      localStorage.setItem('login_method', method)
+    }
     localStorage.setItem('token', newToken)
     localStorage.setItem('user', JSON.stringify(newUser))  // user 是对象，需序列化存储
   }
@@ -241,9 +247,11 @@ export function useAuthStore() {
   function logout() {
     token.value = ''
     user.value = null
+    loginMethod.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    localStorage.removeItem('login_method')
   }
 
-  return { token, user, isLoggedIn, isStudent, isTeacher, bindInfo, tryDingTalkLogin, bindAccount, setAuth, logout }
+  return { token, user, isLoggedIn, isStudent, isTeacher, bindInfo, loginMethod, tryDingTalkLogin, bindAccount, setAuth, logout }
 }

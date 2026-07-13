@@ -67,6 +67,7 @@
     <div class="modal-card">
       <h3>{{ mustChangePw ? '首次登录，请修改密码' : (hasPassword ? '修改密码' : '设置密码') }}</h3>
       <p v-if="mustChangePw" class="pw-notice">您的账号使用的是初始默认密码，为了账号安全，请立即修改密码后继续使用。</p>
+      <p v-if="mustChangePw" class="pw-hint">默认账号：中考考号，默认密码：中考准考证号后六位</p>
       <div v-if="hasPassword && !mustChangePw" class="form-item">
         <label>当前密码</label>
         <input v-model="pwForm.old_password" type="password" placeholder="请输入当前密码" />
@@ -84,6 +85,7 @@
         <input v-model="pwForm.confirm_password" type="password" placeholder="再次输入新密码" />
       </div>
       <div v-if="pwError" class="pw-error">{{ pwError }}</div>
+      <div v-if="pwSuccess" class="pw-success">{{ pwSuccess }}</div>
       <div class="modal-actions">
         <button class="btn-sm primary" @click="doChangePassword" :disabled="pwLoading">
           {{ pwLoading ? '修改中...' : '确认修改' }}
@@ -145,8 +147,21 @@ const pwForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const hasPassword = computed(() => !!auth.user.value?.has_password)
 /** 是否必须修改密码（批量导入的默认密码，安全性低，首次登录强制修改） */
 const mustChangePw = computed(() => !!auth.user.value?.must_change_password)
+/**
+ * 是否应该弹出改密弹窗
+ * 仅账号密码登录时触发（钉钉免登不弹）：
+ * - must_change_password=true → 强制弹窗，不可关闭
+ * - has_password=false → 建议设置密码弹窗
+ */
+const shouldShowChangePw = computed(() => {
+  if (!auth.isLoggedIn.value) return false
+  // 钉钉登录不弹改密弹窗
+  if (auth.loginMethod.value === 'dingtalk') return false
+  return !!auth.user.value?.must_change_password || !auth.user.value?.has_password
+})
 const pwLoading = ref(false)
 const pwError = ref('')
+const pwSuccess = ref('')
 
 /** ============ 绑定账号弹窗状态 ============ */
 const bindAccountInput = ref('')
@@ -239,7 +254,7 @@ async function doChangePassword() {
     }
     const res = await api.post('/auth/change-password', payload)
     if (res.data.code === 0) {
-      alert('密码修改成功')
+      pwSuccess.value = '密码修改成功'
       showChangePw.value = false
       pwForm.value = { old_password: '', new_password: '', confirm_password: '' }
       // 更新本地状态
@@ -247,6 +262,8 @@ async function doChangePassword() {
         auth.user.value.has_password = true
         auth.user.value.must_change_password = false
       }
+      // 3秒后清除成功提示
+      setTimeout(() => { pwSuccess.value = '' }, 3000)
     } else {
       pwError.value = res.data.msg || '修改失败'
     }
@@ -289,18 +306,26 @@ onMounted(async () => {
     }
   }
 
-  // 登录后：检查是否需要修改密码或获取未读公告数
+  // 登录后：获取未读公告数
   if (auth.isLoggedIn.value) {
-    // 强制改密（默认密码首次登录必须修改）→ 优先级最高，弹窗不可关闭
-    // 免登用户首次登录且未设置密码 → 自动弹出设置密码弹窗
-    if (auth.user.value?.must_change_password || !auth.user.value?.has_password) {
-      showChangePw.value = true
-    }
     fetchUnreadCount()
     // 每60秒轮询一次未读数
     setInterval(fetchUnreadCount, 60000)
   }
 })
+
+/**
+ * 监听登录状态变化 → 自动弹出改密弹窗
+ * - 账号密码首次登录且 must_change_password=true → 强制弹窗（不可关闭）
+ * - 账号密码首次登录且无密码 → 建议设置密码弹窗
+ * - 钉钉免登 → 不弹改密弹窗
+ * - 页面刷新后若仍有 must_change_password → 再次弹窗（直到修改完成）
+ */
+watch(shouldShowChangePw, (val) => {
+  if (val) {
+    showChangePw.value = true
+  }
+}, { immediate: true })
 
 /**
  * 点击标题回到主页
@@ -516,7 +541,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .pw-error { color: #ff4d4f; font-size: 13px; margin-bottom: 10px; }
+.pw-success { color: #52c41a; font-size: 13px; margin-bottom: 10px; }
 .pw-notice { color: #fa8c16; font-size: 13px; margin-bottom: 14px; padding: 8px 12px; background: #fff7e6; border-radius: 6px; line-height: 1.5; }
+.pw-hint { color: #1890ff; font-size: 12px; margin-bottom: 14px; padding: 8px 12px; background: #e6f7ff; border-radius: 6px; line-height: 1.5; }
 
 /* 绑定账号弹窗提示 */
 .bind-hint {

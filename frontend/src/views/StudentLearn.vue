@@ -51,15 +51,6 @@
       <router-link :to="`/feedback/${sectionId}`" class="link">课程评价</router-link>
     </div>
 
-    <!-- ==================== 进度条 ==================== -->
-    <!-- 有效时长/要求时长的可视化进度，上限100% -->
-    <div class="progress-bar">
-      <div class="progress-fill" :style="{ width: Math.min(effectiveMinutes / requireMinutes * 100, 100) + '%' }"></div>
-    </div>
-    <div class="progress-text">
-      {{ effectiveMinutes }} / {{ requireMinutes }} 分钟
-    </div>
-
     <!-- ==================== 未开播提示（v4.0） ==================== -->
     <!-- 学生：锁屏不可观看；教师/管理员：仅提示条，可正常查看 -->
     <div v-if="sectionLocked && !isTeacherOrAdmin" class="locked-overlay">
@@ -415,11 +406,6 @@ watch(lastVideoProgress, (val) => {
 .value { font-weight: 600; color: #1890ff; }
 .link { color: #1890ff; font-size: 13px; text-decoration: none; }
 
-/* 顶部进度条：4px 细条，蓝绿渐变填充 */
-.progress-bar { height: 4px; background: #f0f0f0; }
-.progress-fill { height: 100%; background: linear-gradient(90deg, #1890ff, #52c41a); transition: width 0.5s; }
-.progress-text { text-align: center; font-size: 12px; color: #999; padding: 4px; }
-
 /* 视频容器：16:9 等比缩放，黑色背景 */
 .video-container {
   position: relative;
@@ -566,9 +552,6 @@ watch(lastVideoProgress, (val) => {
   .value { font-size: 12px; }
   /* "我的进度"在超小屏上缩小或换行 */
   .link { font-size: 11px; white-space: nowrap; }
-
-  /* 进度条文字 */
-  .progress-text { font-size: 11px; }
 
   /* 控制提示 */
   .controls-hint { padding: 12px 10px; font-size: 12px; line-height: 1.8; }

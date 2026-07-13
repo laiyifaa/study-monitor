@@ -28,7 +28,7 @@
           <p class="desc">{{ c.description || '暂无描述' }}</p>
           <div class="meta">
             <span>{{ c.section_count || 0 }} 个小节</span>
-            <span>课程总时长：{{ c.total_duration_minutes || 0 }} 分钟</span>
+            <span>总时长：{{ c.total_duration_minutes || 0 }} 分钟</span>
             <span v-if="c.end_date">截止：{{ c.end_date.split(' ')[0] }}</span>
           </div>
           <!-- 进度条 -->

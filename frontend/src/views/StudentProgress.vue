@@ -77,7 +77,7 @@
                   <div class="spi-title">{{ sec.title }}</div>
                   <div class="spi-meta">
                     <span>{{ sec.effective_minutes }}分钟</span>
-                    <span v-if="sec.require_minutes > 0" class="spi-req">/ 总时长{{ sec.require_minutes }}分钟</span>
+                    <span v-if="sec.require_minutes > 0" class="spi-req">/ {{ sec.require_minutes }}分钟</span>
                   </div>
                   <div class="spi-bar">
                     <div class="spi-fill" :style="{ width: getSectionProgress(sec) + '%' }"></div>

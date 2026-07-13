@@ -41,7 +41,7 @@
         <div v-for="c in personalData.course_progress" :key="c.course_id" class="course-progress-item">
           <div class="cpi-title">{{ c.title }}</div>
           <div class="cpi-bar"><div class="cpi-fill" :style="{ width: c.completion_rate * 100 + '%' }"></div></div>
-          <div class="cpi-info">{{ c.effective_minutes }} / {{ c.require_minutes }} 分钟 · {{ c.is_completed ? '已完成' : '未完成' }}</div>
+          <div class="cpi-info">有效 {{ c.effective_minutes }} / 总时长 {{ c.require_minutes }} 分钟 · {{ c.is_completed ? '已完成' : '未完成' }}</div>
         </div>
       </div>
       <!-- 最近7天分布 -->

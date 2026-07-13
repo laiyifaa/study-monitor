@@ -147,18 +147,6 @@ const pwForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const hasPassword = computed(() => !!auth.user.value?.has_password)
 /** 是否必须修改密码（批量导入的默认密码，安全性低，首次登录强制修改） */
 const mustChangePw = computed(() => !!auth.user.value?.must_change_password)
-/**
- * 是否应该弹出改密弹窗
- * 仅账号密码登录时触发（钉钉免登不弹）：
- * - must_change_password=true → 强制弹窗，不可关闭
- * - has_password=false → 建议设置密码弹窗
- */
-const shouldShowChangePw = computed(() => {
-  if (!auth.isLoggedIn.value) return false
-  // 钉钉登录不弹改密弹窗
-  if (auth.loginMethod.value === 'dingtalk') return false
-  return !!auth.user.value?.must_change_password || !auth.user.value?.has_password
-})
 const pwLoading = ref(false)
 const pwError = ref('')
 const pwSuccess = ref('')
@@ -285,6 +273,13 @@ watch(() => route.path, (newPath, oldPath) => {
 })
 
 onMounted(async () => {
+  // 页面刷新时，若用户已登录且需修改密码，直接弹窗
+  if (auth.isLoggedIn.value && auth.loginMethod.value !== 'dingtalk') {
+    if (auth.user.value?.must_change_password || !auth.user.value?.has_password) {
+      showChangePw.value = true
+    }
+  }
+
   // 应用首次加载/刷新时，检查是否已有有效 token
   if (!auth.isLoggedIn.value) {
     // 尝试钉钉免登
@@ -315,17 +310,21 @@ onMounted(async () => {
 })
 
 /**
- * 监听登录状态变化 → 自动弹出改密弹窗
- * - 账号密码首次登录且 must_change_password=true → 强制弹窗（不可关闭）
- * - 账号密码首次登录且无密码 → 建议设置密码弹窗
- * - 钉钉免登 → 不弹改密弹窗
- * - 页面刷新后若仍有 must_change_password → 再次弹窗（直到修改完成）
+ * 监听 auth.pendingChangePw → 新登录后自动弹出改密弹窗
+ * 
+ * 为什么不用 computed + watch 组合：
+ *   之前用 shouldShowChangePw computed 跨组件监听，
+ *   但 Login.vue 的 setAuth + router.push 交替执行时，
+ *   Vue 响应式时序导致 watch 回调可能被延迟或跳过。
+ *   现在改用 auth store 的 pendingChangePw 标志，
+ *   setAuth() 时直接设置，避免时序问题。
  */
-watch(shouldShowChangePw, (val) => {
+watch(() => auth.pendingChangePw.value, (val) => {
   if (val) {
     showChangePw.value = true
+    auth.pendingChangePw.value = false  // 消费掉标志，避免重复触发
   }
-}, { immediate: true })
+})
 
 /**
  * 点击标题回到主页

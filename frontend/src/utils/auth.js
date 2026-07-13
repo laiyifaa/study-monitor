@@ -69,6 +69,13 @@ const user = ref(JSON.parse(localStorage.getItem('user') || 'null'))
 const loginMethod = ref(localStorage.getItem('login_method') || null)
 
 /**
+ * 是否需要弹出修改密码弹窗
+ * 由 setAuth() 在账号登录时直接设置，避免跨组件 computed 时序问题
+ * App.vue watch 此标志来控制弹窗显示
+ */
+const pendingChangePw = ref(false)
+
+/**
  * 认证 Store 工厂函数
  *
  * 返回认证相关的所有状态和方法，供组件和其他模块使用。
@@ -230,7 +237,15 @@ export function useAuthStore() {
       localStorage.setItem('login_method', method)
     }
     localStorage.setItem('token', newToken)
-    localStorage.setItem('user', JSON.stringify(newUser))  // user 是对象，需序列化存储
+    localStorage.setItem('user', JSON.stringify(newUser))
+
+    // 账号密码登录时，判断是否需要弹修改密码弹窗
+    // 这里直接设置标志，替代 computed 跨组件时序问题
+    if (method === 'account' && newUser) {
+      if (newUser.must_change_password || !newUser.has_password) {
+        pendingChangePw.value = true
+      }
+    }
   }
 
   /**
@@ -248,10 +263,11 @@ export function useAuthStore() {
     token.value = ''
     user.value = null
     loginMethod.value = null
+    pendingChangePw.value = false
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     localStorage.removeItem('login_method')
   }
 
-  return { token, user, isLoggedIn, isStudent, isTeacher, bindInfo, loginMethod, tryDingTalkLogin, bindAccount, setAuth, logout }
+  return { token, user, isLoggedIn, isStudent, isTeacher, bindInfo, loginMethod, pendingChangePw, tryDingTalkLogin, bindAccount, setAuth, logout }
 }

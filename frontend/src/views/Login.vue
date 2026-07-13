@@ -231,7 +231,7 @@ async function handleLogin() {
     if (res.data.code === 0) {
       // 登录成功：保存 token 和用户信息
       const { token: jwt, user: userInfo } = res.data.data
-      auth.setAuth(jwt, userInfo)
+      auth.setAuth(jwt, userInfo, 'account')
 
       // 按角色跳转到对应首页
       if (userInfo.role === 'teacher' || userInfo.role === 'admin') {

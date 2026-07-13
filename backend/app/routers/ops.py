@@ -57,6 +57,11 @@ ALERT_DISK_PERCENT = 90      # 磁盘使用率告警阈值
 # 上一次网络 IO 采样的缓存（用于计算速率）
 _last_net_io = {"timestamp": 0, "bytes_sent": 0, "bytes_recv": 0}
 
+# 历史指标 Redis key
+_METRICS_HISTORY_KEY = "ops:metrics_history"
+_METRICS_HISTORY_TTL = 86400 * 2  # 保留2天数据
+_METRICS_SAMPLE_INTERVAL = 5      # 采样间隔（秒），避免每次轮询都写入
+
 
 # ============================================================
 # 辅助函数
@@ -111,6 +116,57 @@ def _agent_connectivity_snapshot() -> dict:
             age_seconds = None
     snapshot["age_seconds"] = age_seconds
     return snapshot
+
+
+_last_sample_time = 0
+
+async def _record_metrics_to_redis(server_data: dict):
+    """将当前服务器指标采样写入 Redis Sorted Set，供历史统计使用。"""
+    global _last_sample_time
+    now = time.time()
+    if now - _last_sample_time < _METRICS_SAMPLE_INTERVAL:
+        return
+    _last_sample_time = now
+
+    try:
+        redis = await get_redis()
+        sample = json.dumps({
+            "cpu": server_data.get("cpu_percent", 0),
+            "mem": server_data.get("memory_percent", 0),
+            "net_up": server_data.get("net_upload_mbps", 0),
+            "net_down": server_data.get("net_download_mbps", 0),
+            "disk_r": server_data.get("disk_io_read_mbs", 0),
+            "disk_w": server_data.get("disk_io_write_mbs", 0),
+        })
+        # Sorted Set: score=timestamp, member=sample_json
+        await redis.zadd(_METRICS_HISTORY_KEY, {sample: now})
+        # 清理超过2天的旧数据
+        cutoff = now - _METRICS_HISTORY_TTL
+        await redis.zremrangebyscore(_METRICS_HISTORY_KEY, "-inf", cutoff)
+        await redis.expire(_METRICS_HISTORY_KEY, _METRICS_HISTORY_TTL)
+    except Exception:
+        pass  # Redis 不可用时静默跳过
+
+
+def _record_metrics_sample(server_data: dict):
+    """同步占位：将采样存入内存队列，由 overview 异步写入 Redis。"""
+    global _last_sample_time
+    now = time.time()
+    if now - _last_sample_time < _METRICS_SAMPLE_INTERVAL:
+        return
+    sample = json.dumps({
+        "cpu": server_data.get("cpu_percent", 0),
+        "mem": server_data.get("memory_percent", 0),
+        "net_up": server_data.get("net_upload_mbps", 0),
+        "net_down": server_data.get("net_download_mbps", 0),
+        "disk_r": server_data.get("disk_io_read_mbs", 0),
+        "disk_w": server_data.get("disk_io_write_mbs", 0),
+    })
+    _pending_samples.append((now, sample))
+    if len(_pending_samples) > 100:
+        _pending_samples[:] = _pending_samples[-50:]
+
+_pending_samples = []
 
 
 async def _refresh_agent_connectivity() -> dict:
@@ -229,26 +285,28 @@ async def server_stats(user: User = Depends(require_role("admin"))):
     if mem.percent > ALERT_MEMORY_PERCENT:
         alerts.append({"metric": "memory", "value": mem.percent, "threshold": ALERT_MEMORY_PERCENT, "message": f"内存使用率 {mem.percent}% 超过阈值 {ALERT_MEMORY_PERCENT}%"})
 
-    return {
-        "code": 0,
-        "data": {
-            "cpu_percent": round(cpu_percent, 1),
-            "cpu_count": cpu_count,
-            "memory_total": mem.total,
-            "memory_total_human": _human_size(mem.total),
-            "memory_used": mem.used,
-            "memory_used_human": _human_size(mem.used),
-            "memory_percent": round(mem.percent, 1),
-            "swap_percent": round(swap.percent, 1),
-            "disk_io_read_mbs": round(disk_read_mbs, 2),
-            "disk_io_write_mbs": round(disk_write_mbs, 2),
-            "net_upload_mbps": round(upload_mbps, 2),
-            "net_download_mbps": round(download_mbps, 2),
-            "cpu_alert": _alert_level(cpu_percent, ALERT_CPU_PERCENT),
-            "memory_alert": _alert_level(mem.percent, ALERT_MEMORY_PERCENT),
-            "alerts": alerts,
-        },
+    server_data = {
+        "cpu_percent": round(cpu_percent, 1),
+        "cpu_count": cpu_count,
+        "memory_total": mem.total,
+        "memory_total_human": _human_size(mem.total),
+        "memory_used": mem.used,
+        "memory_used_human": _human_size(mem.used),
+        "memory_percent": round(mem.percent, 1),
+        "swap_percent": round(swap.percent, 1),
+        "disk_io_read_mbs": round(disk_read_mbs, 2),
+        "disk_io_write_mbs": round(disk_write_mbs, 2),
+        "net_upload_mbps": round(upload_mbps, 2),
+        "net_download_mbps": round(download_mbps, 2),
+        "cpu_alert": _alert_level(cpu_percent, ALERT_CPU_PERCENT),
+        "memory_alert": _alert_level(mem.percent, ALERT_MEMORY_PERCENT),
+        "alerts": alerts,
     }
+
+    # --- 异步写入历史指标到 Redis ---
+    _record_metrics_sample(server_data)
+
+    return {"code": 0, "data": server_data}
 
 
 # ============================================================
@@ -650,6 +708,85 @@ async def agent_connectivity_check(user: User = Depends(require_role("teacher", 
 
 
 # ============================================================
+# 历史指标统计 — 1min 均值 + 24h 峰值
+# ============================================================
+
+@router.get("/server/history")
+async def server_history(user: User = Depends(require_role("admin"))):
+    """
+    服务器历史指标统计
+
+    返回过去1分钟的平均值和过去24小时的峰值（基于Redis中的采样数据）。
+
+    统计维度：
+        - CPU 使用率
+        - 内存使用率
+        - 网络上行/下行速率
+        - 磁盘读/写速率
+
+    科学采样说明：
+        - 采样间隔：5秒（由前端5秒轮询自然驱动）
+        - 1分钟均值：取最近60秒内所有采样点的算术平均
+        - 24小时峰值：取最近24小时内所有采样点的最大值
+        - 数据保留：2天自动过期清理
+    """
+    now = time.time()
+    one_min_ago = now - 60
+    one_day_ago = now - 86400
+
+    try:
+        redis = await get_redis()
+        # 取最近24h的所有采样
+        raw = await redis.zrangebyscore(_METRICS_HISTORY_KEY, one_day_ago, now, withscores=True)
+    except Exception:
+        raw = []
+
+    if not raw:
+        return {"code": 0, "data": {"last_1min_avg": None, "last_24h_peak": None, "sample_count_24h": 0}}
+
+    # 解析采样数据
+    all_samples = []
+    recent_samples = []
+    for member, score in raw:
+        try:
+            d = json.loads(member)
+            ts = score
+            all_samples.append(d)
+            if ts >= one_min_ago:
+                recent_samples.append(d)
+        except Exception:
+            continue
+
+    def _avg(samples, key):
+        vals = [s.get(key, 0) for s in samples if s.get(key) is not None]
+        return round(sum(vals) / len(vals), 2) if vals else 0
+
+    def _peak(samples, key):
+        vals = [s.get(key, 0) for s in samples if s.get(key) is not None]
+        return round(max(vals), 2) if vals else 0
+
+    keys = ["cpu", "mem", "net_up", "net_down", "disk_r", "disk_w"]
+    key_labels = {"cpu": "cpu_percent", "mem": "memory_percent", "net_up": "net_upload_mbps", "net_down": "net_download_mbps", "disk_r": "disk_io_read_mbs", "disk_w": "disk_io_write_mbs"}
+
+    last_1min_avg = {}
+    last_24h_peak = {}
+    for k in keys:
+        label = key_labels[k]
+        last_1min_avg[label] = _avg(recent_samples, k) if recent_samples else None
+        last_24h_peak[label] = _peak(all_samples, k) if all_samples else None
+
+    return {
+        "code": 0,
+        "data": {
+            "last_1min_avg": last_1min_avg,
+            "last_24h_peak": last_24h_peak,
+            "sample_count_1min": len(recent_samples),
+            "sample_count_24h": len(all_samples),
+        },
+    }
+
+
+# ============================================================
 # 全量聚合 — 前端面板一次拉取
 # ============================================================
 
@@ -673,6 +810,22 @@ async def overview(
     business_data = await business_stats(user, db)
     storage_data = await storage_stats(user, db)
     agent_data = _agent_connectivity_snapshot()
+
+    # 将内存中积累的采样写入 Redis
+    if _pending_samples:
+        try:
+            redis = await get_redis()
+            pipe = redis.pipeline()
+            for ts, sample in _pending_samples:
+                pipe.zadd(_METRICS_HISTORY_KEY, {sample: ts})
+            cutoff = time.time() - _METRICS_HISTORY_TTL
+            pipe.zremrangebyscore(_METRICS_HISTORY_KEY, "-inf", cutoff)
+            pipe.expire(_METRICS_HISTORY_KEY, _METRICS_HISTORY_TTL)
+            await pipe.execute()
+            _pending_samples.clear()
+            _last_sample_time = time.time()
+        except Exception:
+            pass
 
     # 合并所有告警
     all_alerts = []

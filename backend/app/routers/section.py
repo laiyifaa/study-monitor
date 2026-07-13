@@ -348,6 +348,22 @@ async def upload_video(
 
     section.video_type = "local"
     section.video_url = filename
+
+    # 自动提取视频时长（ffprobe）
+    try:
+        import subprocess
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", filepath],
+            capture_output=True, text=True, timeout=10
+        )
+        if probe.returncode == 0 and probe.stdout.strip():
+            duration = float(probe.stdout.strip())
+            if duration > 0:
+                section.duration_seconds = int(duration)
+    except Exception:
+        pass  # ffprobe 不可用时静默跳过
+
     await db.commit()
 
-    return {"code": 0, "data": {"video_type": "local", "video_url": filename}}
+    return {"code": 0, "data": {"video_type": "local", "video_url": filename, "duration_seconds": section.duration_seconds}}

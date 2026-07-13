@@ -47,6 +47,27 @@
         <MiniCard emoji="&#8592;" label="磁盘读" :value="data.server.disk_io_read_mbs" unit="MB/s" :max="300" />
         <MiniCard emoji="&#8594;" label="磁盘写" :value="data.server.disk_io_write_mbs" unit="MB/s" :max="200" />
       </div>
+      <!-- 历史统计：1min均值 + 24h峰值 -->
+      <div v-if="history" class="history-row">
+        <div class="history-section">
+          <div class="history-title">1分钟均值</div>
+          <div class="history-items">
+            <span>CPU {{ history.last_1min_avg?.cpu_percent ?? '-' }}%</span>
+            <span>内存 {{ history.last_1min_avg?.memory_percent ?? '-' }}%</span>
+            <span>上行 {{ history.last_1min_avg?.net_upload_mbps ?? '-' }} Mbps</span>
+            <span>下行 {{ history.last_1min_avg?.net_download_mbps ?? '-' }} Mbps</span>
+          </div>
+        </div>
+        <div class="history-section">
+          <div class="history-title">24小时峰值</div>
+          <div class="history-items">
+            <span>CPU {{ history.last_24h_peak?.cpu_percent ?? '-' }}%</span>
+            <span>内存 {{ history.last_24h_peak?.memory_percent ?? '-' }}%</span>
+            <span>上行 {{ history.last_24h_peak?.net_upload_mbps ?? '-' }} Mbps</span>
+            <span>下行 {{ history.last_24h_peak?.net_download_mbps ?? '-' }} Mbps</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ====== 服务容器 ====== -->
@@ -305,6 +326,7 @@ const currentTime = ref('')
 const lastUpdateTime = ref('-')
 const refreshing = ref(false)
 const agentLoading = ref(false)
+const history = ref(null)
 let timer = null
 let clockTimer = null
 
@@ -315,10 +337,16 @@ const alerts = computed(() => data.value.all_alerts || [])
 
 async function fetchData() {
   try {
-    const res = await api.get('/ops/overview')
-    if (res.data.code === 0) {
-      data.value = res.data.data
+    const [overviewRes, historyRes] = await Promise.all([
+      api.get('/ops/overview'),
+      api.get('/ops/server/history').catch(() => null),
+    ])
+    if (overviewRes.data.code === 0) {
+      data.value = overviewRes.data.data
       lastUpdateTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    }
+    if (historyRes && historyRes.data.code === 0) {
+      history.value = historyRes.data.data
     }
   } catch (e) {
     console.error('获取运维数据失败:', e)
@@ -510,6 +538,21 @@ onUnmounted(() => {
 .mini-card-row {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
 }
+
+/* 历史统计行 */
+.history-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;
+}
+.history-section {
+  background: #f0f5ff; border-radius: 8px; padding: 8px 10px;
+}
+.history-title {
+  font-size: 11px; font-weight: 600; color: #1890ff; margin-bottom: 4px;
+}
+.history-items {
+  display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: #555;
+}
+
 .mini-card {
   background: #fafafa; border-radius: 8px; padding: 10px 8px;
 }

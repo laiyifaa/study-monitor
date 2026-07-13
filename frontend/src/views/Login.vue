@@ -65,6 +65,11 @@
         </button>
       </form>
 
+      <!-- 默认账号提示 -->
+      <div class="login-hint">
+        <p>默认账号：中考考号　默认密码：准考证号后六位</p>
+      </div>
+
       <!-- 底部提示 -->
       <div class="login-footer">
         <p>钉钉环境打开自动免登，无需手动登录</p>
@@ -493,6 +498,20 @@ async function doForgotPassword() {
 .btn-login:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 默认账号提示 */
+.login-hint {
+  margin-top: 16px;
+  text-align: center;
+}
+.login-hint p {
+  font-size: 12px;
+  color: #1890ff;
+  background: #e6f7ff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  line-height: 1.5;
 }
 
 /* 底部提示 */

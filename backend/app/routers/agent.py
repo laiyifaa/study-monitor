@@ -112,7 +112,6 @@ async def agent_create_student(
         name=req.name.strip(),
         role="student",
         class_name=req.class_name.strip(),
-        dingtalk_user_id=f"local_{req.name.strip()}_{int(datetime.now().timestamp())}",
         password_hash=hash_password(req.password),
     )
     db.add(student)

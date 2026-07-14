@@ -96,16 +96,27 @@
   </div>
 
   <!-- ====== 绑定账号弹窗（钉钉免登无法自动匹配时弹出） ====== -->
-  <div v-if="auth.bindInfo.value" class="modal-overlay">
+  <div v-if="auth.bindInfo.value" class="modal-overlay" @click.self="closeBindDialog">
     <div class="modal-card">
-      <h3>绑定账号</h3>
+      <div class="modal-header">
+        <h3>绑定账号</h3>
+        <button class="btn-close" @click="closeBindDialog" title="关闭">×</button>
+      </div>
       <p class="bind-hint">钉钉用户「{{ auth.bindInfo.value.dingtalk_name }}」需要绑定学习平台账号</p>
+      <div class="bind-credential-hint">
+        默认账号：中考考号，默认密码：准考证号后六位
+      </div>
       <div class="form-item">
         <label>请输入您的账号</label>
         <input v-model="bindAccountInput" type="text" placeholder="请输入账号（如准考证号）" />
       </div>
+      <div class="form-item">
+        <label>请输入密码</label>
+        <input v-model="bindPasswordInput" type="password" placeholder="请输入密码" />
+      </div>
       <div v-if="bindError" class="pw-error">{{ bindError }}</div>
       <div class="modal-actions">
+        <button class="btn-sm" @click="closeBindDialog">跳过，使用账号密码登录</button>
         <button class="btn-sm primary" @click="doBindAccount" :disabled="bindLoading">
           {{ bindLoading ? '绑定中...' : '确认绑定' }}
         </button>
@@ -154,8 +165,20 @@ const pwSuccess = ref('')
 
 /** ============ 绑定账号弹窗状态 ============ */
 const bindAccountInput = ref('')
+const bindPasswordInput = ref('')
 const bindError = ref('')
 const bindLoading = ref(false)
+
+/**
+ * 关闭绑定弹窗，跳转到登录页用账号密码登录
+ */
+function closeBindDialog() {
+  auth.bindInfo.value = null
+  bindAccountInput.value = ''
+  bindPasswordInput.value = ''
+  bindError.value = ''
+  router.push('/login')
+}
 
 /**
  * 执行绑定账号
@@ -168,10 +191,11 @@ async function doBindAccount() {
   }
   bindLoading.value = true
   try {
-    const result = await auth.bindAccount(bindAccountInput.value.trim())
+    const result = await auth.bindAccount(bindAccountInput.value.trim(), bindPasswordInput.value)
     if (result === true) {
       // 绑定成功
       bindAccountInput.value = ''
+      bindPasswordInput.value = ''
       bindError.value = ''
     } else {
       // 绑定失败，显示错误信息
@@ -558,6 +582,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
   color: #666;
   margin-bottom: 14px;
   line-height: 1.5;
+}
+
+/* 绑定弹窗默认账号提示 */
+.bind-credential-hint {
+  font-size: 12px;
+  color: #1890ff;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  background: #e6f7ff;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+/* 弹窗头部（标题+关闭按钮） */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0;
+}
+.modal-header h3 {
+  margin-bottom: 0;
+}
+
+/* 关闭按钮 */
+.btn-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  font-size: 20px;
+  color: #999;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: all 0.2s;
+}
+.btn-close:hover {
+  background: #f0f0f0;
+  color: #333;
 }
 
 /* ====== 全局响应式：顶栏适配 ====== */

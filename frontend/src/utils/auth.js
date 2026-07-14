@@ -193,15 +193,16 @@ export function useAuthStore() {
   }
 
   /**
-   * 绑定钉钉账号（用户在弹窗中输入账号后调用）
+   * 绑定钉钉账号（用户在弹窗中输入账号+密码后调用）
    *
    * 流程：调用 POST /auth/bind-account → 成功后 setAuth
    */
-  async function bindAccount(account) {
+  async function bindAccount(account, password) {
     if (!bindInfo.value) return false
     try {
       const resp = await api.post('/auth/bind-account', {
         account: account.trim(),
+        password: password || '',
         dingtalk_user_id: bindInfo.value.dingtalk_user_id,
         dingtalk_name: bindInfo.value.dingtalk_name || '',
         dingtalk_mobile: bindInfo.value.dingtalk_mobile || '',

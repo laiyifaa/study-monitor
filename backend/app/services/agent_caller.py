@@ -19,6 +19,7 @@ import logging
 import mimetypes
 import os
 import tempfile
+import time
 from datetime import datetime
 
 import httpx
@@ -30,6 +31,23 @@ from app.models.models import GradingTask, Submission, GradingReport, Assignment
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+_grading_semaphore = asyncio.Semaphore(settings.GRADING_CONCURRENCY_LIMIT)
+
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0),
+            limits=httpx.Limits(
+                max_connections=30,
+                max_keepalive_connections=20,
+            ),
+        )
+    return _http_client
 
 
 async def _mark_task_sent(task_id: int):
@@ -67,6 +85,31 @@ async def call_grading_agent(
     retry_count: int = 0,
 ) -> bool:
     """
+    调用智能体批改作业（受 Semaphore 并发控制）
+
+    信号量 _grading_semaphore 限制同时进行的智能体调用数，
+    避免打爆 AI 平台和数据库连接池。
+    """
+    async with _grading_semaphore:
+        return await _do_call_grading_agent(
+            task_id=task_id,
+            submission_id=submission_id,
+            stitched_image_url=stitched_image_url,
+            prompt=prompt,
+            answer_json=answer_json,
+            retry_count=retry_count,
+        )
+
+
+async def _do_call_grading_agent(
+    task_id: int,
+    submission_id: int,
+    stitched_image_url: str,
+    prompt: str,
+    answer_json: str = "",
+    retry_count: int = 0,
+) -> bool:
+    """
     调用智能体批改作业（同步等待完整流式响应，直接落库）
 
     参数：
@@ -92,6 +135,7 @@ async def call_grading_agent(
         await _mark_task_failed(task_id, error_message, retry_count)
         return False
 
+    _t0 = time.perf_counter()
     try:
         await _mark_task_sent(task_id)
 
@@ -193,23 +237,25 @@ async def call_grading_agent(
             await _refresh_grading_status(submission.assignment_id, db)
             await db.commit()
 
+        elapsed = time.perf_counter() - _t0
         logger.info(
             f"智能体批改成功: task_id={task_id}, submission_id={submission_id}, "
-            f"score={score}/{full_score}"
+            f"score={score}/{full_score}, elapsed={elapsed:.1f}s"
         )
         return True
 
     except Exception as e:
+        elapsed = time.perf_counter() - _t0
         logger.error(
             f"智能体批改失败: task_id={task_id}, submission_id={submission_id}, "
-            f"retry_count={retry_count}, error={str(e)}"
+            f"retry_count={retry_count}, elapsed={elapsed:.1f}s, error={str(e)}"
         )
 
         if retry_count < settings.GRADING_MAX_RETRIES:
             delay = settings.GRADING_RETRY_DELAY * (retry_count + 1)
             logger.info(f"将在 {delay} 秒后重试: task_id={task_id}")
             await asyncio.sleep(delay)
-            return await call_grading_agent(
+            return await _do_call_grading_agent(
                 task_id=task_id,
                 submission_id=submission_id,
                 stitched_image_url=stitched_image_url,
@@ -363,13 +409,13 @@ async def _download_image(image_url: str) -> str:
     base_url = settings.API_BASE_URL
     full_url = f"{base_url}{image_url}" if image_url.startswith("/") else image_url
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(full_url)
-        response.raise_for_status()
+    client = _get_http_client()
+    response = await client.get(full_url, timeout=30)
+    response.raise_for_status()
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
-            f.write(response.content)
-            return f.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+        f.write(response.content)
+        return f.name
 
 
 async def _upload_file(agent_url: str, api_key: str, file_path: str, content_type: str | None = None) -> str:
@@ -388,17 +434,17 @@ async def _upload_file(agent_url: str, api_key: str, file_path: str, content_typ
 
     media_type = content_type or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        with open(file_path, "rb") as f:
-            files = {"file": (os.path.basename(file_path), f, media_type)}
-            headers = {"Authorization": f"Bearer {api_key}"}
-            response = await client.post(upload_url, files=files, headers=headers)
-            response.raise_for_status()
+    client = _get_http_client()
+    with open(file_path, "rb") as f:
+        files = {"file": (os.path.basename(file_path), f, media_type)}
+        headers = {"Authorization": f"Bearer {api_key}"}
+        response = await client.post(upload_url, files=files, headers=headers, timeout=60)
+        response.raise_for_status()
 
-        data = response.json()
-        file_id = data.get("id")
-        logger.info(f"文件上传成功: file_id={file_id}")
-        return file_id
+    data = response.json()
+    file_id = data.get("id")
+    logger.info(f"文件上传成功: file_id={file_id}")
+    return file_id
 
 
 async def _send_chat_message(
@@ -452,28 +498,28 @@ async def _send_chat_message(
     }
 
     chunks: list[str] = []
-    async with httpx.AsyncClient(timeout=300) as client:
-        async with client.stream("POST", chat_url, json=body, headers=headers) as response:
-            response.raise_for_status()
+    client = _get_http_client()
+    async with client.stream("POST", chat_url, json=body, headers=headers, timeout=300) as response:
+        response.raise_for_status()
 
-            async for line in response.aiter_lines():
-                if not line.strip():
+        async for line in response.aiter_lines():
+            if not line.strip():
+                continue
+
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
                     continue
 
-                if line.startswith("data:"):
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
+                for key in ("answer", "text", "message", "content"):
+                    value = data.get(key)
+                    if isinstance(value, str):
+                        chunks.append(value)
                         break
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-
-                    for key in ("answer", "text", "message", "content"):
-                        value = data.get(key)
-                        if isinstance(value, str):
-                            chunks.append(value)
-                            break
 
     full_text = "".join(chunks).strip()
     logger.info(f"智能体流式响应收集完成: {len(full_text)} 字符")
@@ -537,23 +583,23 @@ async def _send_answer_parse_message(agent_url: str, api_key: str, file_id: str)
     }
 
     chunks: list[str] = []
-    async with httpx.AsyncClient(timeout=120) as client:
-        async with client.stream("POST", chat_url, json=body, headers=headers) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line.strip() or not line.startswith("data:"):
-                    continue
-                data_str = line[5:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    data = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-                for key in ("answer", "text", "message", "content"):
-                    value = data.get(key)
-                    if isinstance(value, str):
-                        chunks.append(value)
+    client = _get_http_client()
+    async with client.stream("POST", chat_url, json=body, headers=headers, timeout=120) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.strip() or not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+            for key in ("answer", "text", "message", "content"):
+                value = data.get(key)
+                if isinstance(value, str):
+                    chunks.append(value)
 
     return "".join(chunks).strip()
 

@@ -118,6 +118,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from './utils/auth'  // 【交互】引用 auth.js 的认证状态管理
+import * as dd from 'dingtalk-jsapi'  // 钉钉环境检测：判断是否在钉钉客户端内
 import api from './utils/api'
 
 const router = useRouter()
@@ -274,8 +275,15 @@ watch(() => route.path, (newPath, oldPath) => {
 
 onMounted(async () => {
   // 页面刷新时，若用户已登录且需修改密码，直接弹窗
-  if (auth.isLoggedIn.value && auth.loginMethod.value !== 'dingtalk') {
-    if (auth.user.value?.must_change_password || !auth.user.value?.has_password) {
+  // 修复：钉钉免登用户不应弹改密窗，通过双重判断排除：
+  //   1. loginMethod === 'dingtalk' → 钉钉登录，不弹
+  //   2. 当前在钉钉环境中 → 也不弹（兜底，防止 login_method 丢失）
+  // 修复：has_password 字段可能不存在于旧版 localStorage 的 user 对象中，
+  //   用 nullish coalescing 兜底，避免 undefined 误触发
+  const isInDingTalk = dd.env.platform !== 'notInDingTalk'
+  if (auth.isLoggedIn.value && auth.loginMethod.value !== 'dingtalk' && !isInDingTalk) {
+    const hasPw = auth.user.value?.has_password ?? true  // 字段缺失时视为有密码，不误触发
+    if (auth.user.value?.must_change_password || !hasPw) {
       showChangePw.value = true
     }
   }

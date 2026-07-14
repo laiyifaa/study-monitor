@@ -193,10 +193,17 @@ async function doBindAccount() {
   try {
     const result = await auth.bindAccount(bindAccountInput.value.trim(), bindPasswordInput.value)
     if (result === true) {
-      // 绑定成功
+      // 绑定成功，清空表单并跳转到对应首页
       bindAccountInput.value = ''
       bindPasswordInput.value = ''
       bindError.value = ''
+      // 绑定成功后 setAuth 已在 bindAccount 内部执行，按角色跳转
+      const role = auth.user.value?.role
+      if (role === 'teacher' || role === 'admin') {
+        router.replace('/teacher')
+      } else {
+        router.replace('/my-progress')
+      }
     } else {
       // 绑定失败，显示错误信息
       bindError.value = typeof result === 'string' ? result : '绑定失败'

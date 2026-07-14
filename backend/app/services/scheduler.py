@@ -18,6 +18,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -134,7 +135,10 @@ async def trigger_auto_grading():
             if not assignments:
                 return
 
+            _total_t0 = time.perf_counter()
+
             for assignment in assignments:
+                _a_t0 = time.perf_counter()
                 if assignment.grading_mode == "manual":
                     assignment.grading_triggered = True
                     await db.commit()
@@ -162,17 +166,35 @@ async def trigger_auto_grading():
                     _process_submission(submission, assignment)
                     for submission in submissions
                 ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                batch_size = settings.GRADING_CONCURRENCY_LIMIT
+                all_results = []
+                for i in range(0, len(tasks), batch_size):
+                    batch = tasks[i:i + batch_size]
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    all_results.extend(batch_results)
+                    if i + batch_size < len(tasks):
+                        logger.info(
+                            f"作业 {assignment.id} 批改进度: "
+                            f"{min(i + batch_size, len(tasks))}/{len(tasks)}"
+                        )
 
-                success_count = sum(1 for r in results if r is True)
-                fail_count = sum(1 for r in results if r is False or isinstance(r, Exception))
+                success_count = sum(1 for r in all_results if r is True)
+                fail_count = sum(1 for r in all_results if r is False or isinstance(r, Exception))
 
                 assignment.grading_triggered = True
                 await db.commit()
+                _a_elapsed = time.perf_counter() - _a_t0
                 logger.info(
-                    f"作业 {assignment.id} 批改任务已触发: "
-                    f"共 {len(submissions)} 个提交, 成功 {success_count}, 失败 {fail_count}"
+                    f"作业 {assignment.id} 批改完成: "
+                    f"共 {len(submissions)} 个提交, 成功 {success_count}, 失败 {fail_count}, "
+                    f"耗时 {_a_elapsed:.0f}s"
                 )
+
+            _total_elapsed = time.perf_counter() - _total_t0
+            logger.info(
+                f"本轮自动批改全部完成: 共 {len(assignments)} 份作业, "
+                f"总耗时 {_total_elapsed:.0f}s"
+            )
 
     except Exception as e:
         logger.error(f"自动批改任务执行失败: {e}")

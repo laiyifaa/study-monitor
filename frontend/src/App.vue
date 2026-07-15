@@ -277,10 +277,11 @@ async function doChangePassword() {
       pwSuccess.value = '密码修改成功'
       showChangePw.value = false
       pwForm.value = { old_password: '', new_password: '', confirm_password: '' }
-      // 更新本地状态
+      // 更新本地状态（同时持久化到 localStorage，防止刷新后弹窗重复触发）
       if (auth.user.value) {
         auth.user.value.has_password = true
         auth.user.value.must_change_password = false
+        localStorage.setItem('user', JSON.stringify(auth.user.value))
       }
       // 3秒后清除成功提示
       setTimeout(() => { pwSuccess.value = '' }, 3000)

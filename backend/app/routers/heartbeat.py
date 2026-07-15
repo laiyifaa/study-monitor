@@ -120,7 +120,10 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
         start_time=now_cn_naive(),
         last_heartbeat=now_cn_naive(),
         effective_seconds=0,
-        video_progress=0,  # 从0开始，避免历史进度导致"死区"（新会话中视频从头播放时增量永远为0）
+        # 缓冲版方案A：session 起始 video_progress 设为历史最大进度减 5 秒容差。
+        # 修复"断点续播启动补偿漏洞"——原值 0 导致续播时首次心跳 video_delta 异常大，被封顶 65 秒后虚增有效时长。
+        # 减 5 秒容差：若前端断点续播跳转存在轻微偏差，学生回看最后 5 秒仍能正常计入时长，降低 corner case 风险。
+        video_progress=max(0, historical_progress - 5),
         is_active=True,
     )
     db.add(session)

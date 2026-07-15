@@ -906,6 +906,7 @@ async def create_answer_file_access_url(
 @router.get("/answer-files/download")
 async def download_answer_file(
     token: str,
+    download: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     payload = decode_answer_file_access_token(token)
@@ -931,7 +932,10 @@ async def download_answer_file(
     if not file_path:
         raise HTTPException(status_code=404, detail="答案附件不存在")
 
-    return FileResponse(file_path)
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{os.path.basename(file_path)}"'
+    return FileResponse(file_path, headers=headers)
 
 
 @router.post("/answer/parse")

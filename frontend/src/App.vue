@@ -65,7 +65,10 @@
   <!-- ====== 修改密码弹窗（must_change_password时不可关闭） ====== -->
   <div v-if="showChangePw" class="modal-overlay" @click.self="!mustChangePw && (showChangePw = false)">
     <div class="modal-card">
-      <h3>{{ mustChangePw ? '首次登录，请修改密码' : (hasPassword ? '修改密码' : '设置密码') }}</h3>
+      <div class="modal-header">
+        <h3>{{ mustChangePw ? '首次登录，请修改密码' : (hasPassword ? '修改密码' : '设置密码') }}</h3>
+        <button class="btn-close" @click="showChangePw = false" title="关闭">×</button>
+      </div>
       <p v-if="mustChangePw" class="pw-notice">您的账号使用的是初始默认密码，为了账号安全，请立即修改密码后继续使用。</p>
       <p v-if="mustChangePw" class="pw-hint">默认账号：中考考号，默认密码：中考准考证号后六位</p>
       <div v-if="hasPassword && !mustChangePw" class="form-item">

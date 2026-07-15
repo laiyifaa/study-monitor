@@ -141,7 +141,7 @@ import {
   isImageFile,
   isPdf,
   toAbsoluteUrl,
-  triggerBrowserDownload,
+  openFileDownload,
 } from '../utils/homeworkFiles.js'
 
 const route = useRoute()
@@ -325,6 +325,10 @@ function formatDate(dateStr) {
 }
 
 function previewImage(url) {
+  if (isDingTalk) {
+    previewFile(getAbsoluteMediaUrl(url), '')
+    return
+  }
   window.open(url, '_blank')
 }
 
@@ -339,25 +343,17 @@ function openQuestionFile(sectionId, file, index = 0) {
   const total = getQuestionFiles(sectionId).length
   const downloadName = getAttachmentDownloadName(sectionTitle, 'homework', index, total, file)
 
+  if (isDingTalk && (isPdf(file) || isDocumentFile(file))) {
+    previewFile(getAbsoluteMediaUrl(file), downloadName)
+    return
+  }
+
   if (isPdf(file)) {
-    if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), downloadName)
-      return
-    }
     window.open(mediaUrl, '_blank')
     return
   }
 
-  if (isDocumentFile(file)) {
-    if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), downloadName)
-      return
-    }
-    triggerBrowserDownload(mediaUrl, downloadName)
-    return
-  }
-
-  window.open(mediaUrl, '_blank')
+  openFileDownload(mediaUrl, downloadName)
 }
 
 async function requestAnswerFileAccessUrl(sectionId, fileIndex) {
@@ -376,25 +372,17 @@ async function openStudentAnswerFile(sectionId, file) {
     const total = getAnswerFiles(sectionId).length
     const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
 
-    if (isPdf(file.name)) {
-      if (isDingTalk) {
-        previewFile(accessUrl, downloadName)
-        return
-      }
+    if (isDingTalk) {
+      previewFile(accessUrl, downloadName)
+      return
+    }
+
+    if (isPdf(file.name) || isImageFile(file.name)) {
       window.open(accessUrl, '_blank')
       return
     }
 
-    if (isDocumentFile(file.name)) {
-      if (isDingTalk) {
-        previewFile(accessUrl, downloadName)
-        return
-      }
-      triggerBrowserDownload(accessUrl, downloadName)
-      return
-    }
-
-    window.open(accessUrl, '_blank')
+    openFileDownload(accessUrl, downloadName)
   } catch (e) {
     alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
   }

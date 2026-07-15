@@ -94,7 +94,7 @@ def _is_safe_upload_path(path: str) -> bool:
 
 
 @app.get("/api/uploads/{file_path:path}")
-async def serve_upload(file_path: str):
+async def serve_upload(file_path: str, download: bool = False):
     if not _is_safe_upload_path(file_path):
         raise HTTPException(status_code=400, detail="非法文件路径")
 
@@ -114,7 +114,10 @@ async def serve_upload(file_path: str):
 
             base_path = Path(base).resolve()
             if str(candidate).startswith(f"{str(base_path)}{os.sep}") and candidate.is_file():
-                return FileResponse(candidate)
+                headers = {}
+                if download:
+                    headers["Content-Disposition"] = f'attachment; filename="{candidate.name}"'
+                return FileResponse(candidate, headers=headers)
 
     raise HTTPException(status_code=404, detail="文件不存在")
 

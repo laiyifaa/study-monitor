@@ -569,7 +569,7 @@ import {
   isImageFile,
   isPdf,
   toAbsoluteUrl,
-  triggerBrowserDownload,
+  openFileDownload,
 } from '../utils/homeworkFiles.js'
 
 const route = useRoute()
@@ -1353,6 +1353,10 @@ function questionStatusClass(question) {
 }
 
 function previewImage(url) {
+  if (isDingTalk) {
+    previewFile(getAbsoluteMediaUrl(url), '')
+    return
+  }
   window.open(url, '_blank')
 }
 
@@ -1367,25 +1371,17 @@ async function openTeacherAnswerFile(sectionTitle, file, index = 0, total = 1) {
     if (!accessUrl) return
     const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', index, total, file)
 
-    if (isPdf(file)) {
-      if (isDingTalk) {
-        previewFile(accessUrl, downloadName)
-        return
-      }
+    if (isDingTalk) {
+      previewFile(accessUrl, downloadName)
+      return
+    }
+
+    if (isPdf(file) || isImageFile(file)) {
       window.open(accessUrl, '_blank')
       return
     }
 
-    if (isDocumentFile(file)) {
-      if (isDingTalk) {
-        previewFile(accessUrl, downloadName)
-        return
-      }
-      triggerBrowserDownload(accessUrl, downloadName)
-      return
-    }
-
-    window.open(accessUrl, '_blank')
+    openFileDownload(accessUrl, downloadName)
   } catch (e) {
     alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
   }
@@ -1396,25 +1392,17 @@ function openQuestionFile(sectionTitle, file, index = 0, total = 1) {
   if (!mediaUrl) return
   const downloadName = getAttachmentDownloadName(sectionTitle, 'homework', index, total, file)
 
+  if (isDingTalk && (isPdf(file) || isDocumentFile(file))) {
+    previewFile(getAbsoluteMediaUrl(file), downloadName)
+    return
+  }
+
   if (isPdf(file)) {
-    if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), downloadName)
-      return
-    }
     window.open(mediaUrl, '_blank')
     return
   }
 
-  if (isDocumentFile(file)) {
-    if (isDingTalk) {
-      previewFile(getAbsoluteMediaUrl(file), downloadName)
-      return
-    }
-    triggerBrowserDownload(mediaUrl, downloadName)
-    return
-  }
-
-  window.open(mediaUrl, '_blank')
+  openFileDownload(mediaUrl, downloadName)
 }
 
 async function openReportModal(submission) {

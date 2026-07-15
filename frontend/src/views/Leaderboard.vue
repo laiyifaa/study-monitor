@@ -30,7 +30,7 @@
           <div class="ri-name">{{ s.real_name || s.name }}</div>
           <div v-if="s.class_name" class="ri-class">{{ s.class_name }}</div>
         </div>
-        <div class="ri-minutes">{{ s.effective_minutes }} 分钟</div>
+        <div class="ri-minutes">{{ s.watched_minutes ?? s.effective_minutes }} 分钟</div>
       </div>
     </div>
 

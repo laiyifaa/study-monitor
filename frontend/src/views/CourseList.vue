@@ -31,12 +31,12 @@
             <span>总时长：{{ c.total_duration_minutes || 0 }} 分钟</span>
             <span v-if="c.end_date">截止：{{ c.end_date.split(' ')[0] }}</span>
           </div>
-          <!-- 进度条 -->
-          <div v-if="c.progress && c.progress.effective_minutes > 0" class="mini-progress">
+          <!-- 进度条（基于video_progress，与StudentProgress一致） -->
+          <div v-if="c.progress && c.progress.completion_rate > 0" class="mini-progress">
             <div class="mini-bar">
               <div class="mini-fill" :style="{ width: Math.min(c.progress.completion_rate * 100, 100) + '%' }"></div>
             </div>
-            <span class="mini-text">{{ c.progress.effective_minutes }}/{{ c.total_duration_minutes || c.require_minutes }}分钟</span>
+            <span class="mini-text">已观看{{ getWatchedMin(c) }}/{{ c.total_duration_minutes || c.require_minutes }}分钟</span>
           </div>
           <!-- 小节学习进度 -->
           <div v-if="c.progress && c.progress.section_count > 0" class="section-progress">
@@ -92,15 +92,23 @@ onMounted(async () => {
   }
 })
 
+/** 基于video_progress汇总已观看分钟数 */
+function getWatchedMin(course) {
+  const p = course.progress
+  if (!p || !p.sections) return 0
+  const totalSec = p.sections.reduce((sum, s) => sum + (s.video_progress || 0), 0)
+  return (totalSec / 60).toFixed(1)
+}
+
 function statusClass(p) {
   if (p.is_completed) return 'done'
-  if (p.effective_minutes > 0) return 'ongoing'
+  if (p.completion_rate > 0) return 'ongoing'
   return 'not_started'
 }
 
 function statusText(p) {
   if (p.is_completed) return '已完成'
-  if (p.effective_minutes > 0) return '学习中'
+  if (p.completion_rate > 0) return '学习中'
   return '未开始'
 }
 

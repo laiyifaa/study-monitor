@@ -36,7 +36,7 @@
           <div class="tp-bar">
             <div class="tp-fill" :style="{ width: Math.min(overallProgress.completion_rate * 100, 100) + '%' }"></div>
           </div>
-          <div class="tp-text">{{ overallProgress.effective_minutes }} / {{ course.total_duration_minutes || course.require_minutes }} 分钟</div>
+          <div class="tp-text">已观看 {{ getWatchedMinutes() }} / {{ course.total_duration_minutes || course.require_minutes }} 分钟</div>
         </div>
       </div>
 
@@ -63,12 +63,12 @@
               <span v-if="sec.open_time && !isSectionOpen(sec) && !isTeacherOrAdmin" class="sc-locked">未开播 {{ formatOpenTime(sec.open_time) }}</span>
               <span v-if="sec.open_time && !isSectionOpen(sec) && isTeacherOrAdmin" class="sc-preview">未开播 {{ formatOpenTime(sec.open_time) }}</span>
             </div>
-            <!-- 小节进度条 -->
+            <!-- 小节进度条（基于video_progress，与StudentProgress一致） -->
             <div v-if="getSectionProgress(sec.id)" class="sc-progress">
               <div class="sc-bar">
-                <div class="sc-fill" :style="{ width: Math.min((getSectionProgress(sec.id).effective_minutes / (getSectionProgress(sec.id).require_minutes || 1)) * 100, 100) + '%' }"></div>
+                <div class="sc-fill" :style="{ width: Math.min(getSectionProgress(sec.id).video_progress / 60 / (getSectionProgress(sec.id).require_minutes || 1) * 100, 100) + '%' }"></div>
               </div>
-              <span class="sc-pct">{{ getSectionProgress(sec.id).effective_minutes }}分钟</span>
+              <span class="sc-pct">{{ (getSectionProgress(sec.id).video_progress / 60).toFixed(1) }}分钟</span>
             </div>
           </div>
           <div class="sc-action">
@@ -121,6 +121,14 @@ const overallProgress = computed(() => {
   return progressData.value.find(p => p.course_id === course.value.id) || null
 })
 const progressData = ref([])
+
+/** 汇总本课程各小节已观看分钟数（基于video_progress） */
+function getWatchedMinutes() {
+  const cp = progressData.value.find(p => p.course_id === course.value?.id)
+  if (!cp || !cp.sections) return 0
+  const totalSec = cp.sections.reduce((sum, s) => sum + (s.video_progress || 0), 0)
+  return (totalSec / 60).toFixed(1)
+}
 
 function getSectionProgress(sectionId) {
   return sectionProgressMap.value[sectionId] || null

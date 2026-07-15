@@ -31,7 +31,7 @@
       <div class="report-card">
         <h3>{{ personalData.user_name }} 的学习报告</h3>
         <div class="stat-grid">
-          <div class="stat-item"><span class="stat-num">{{ personalData.total_effective_minutes }}</span><span class="stat-label">总有效时长(分)</span></div>
+          <div class="stat-item"><span class="stat-num">{{ getWatchedTotal() }}</span><span class="stat-label">总观看时长(分)</span></div>
           <div class="stat-item"><span class="stat-num">{{ personalData.total_sessions }}</span><span class="stat-label">学习次数</span></div>
         </div>
       </div>
@@ -41,7 +41,7 @@
         <div v-for="c in personalData.course_progress" :key="c.course_id" class="course-progress-item">
           <div class="cpi-title">{{ c.title }}</div>
           <div class="cpi-bar"><div class="cpi-fill" :style="{ width: c.completion_rate * 100 + '%' }"></div></div>
-          <div class="cpi-info">有效 {{ c.effective_minutes }} / 总时长 {{ c.require_minutes }} 分钟 · {{ c.is_completed ? '已完成' : '未完成' }}</div>
+          <div class="cpi-info">已观看 {{ getCourseWatchedMin(c) }} / 总时长 {{ c.require_minutes }} 分钟 · {{ c.is_completed ? '已完成' : '未完成' }}</div>
         </div>
       </div>
       <!-- 最近7天分布 -->
@@ -119,6 +119,18 @@ const platformData = ref(null)
 const className = ref('')
 const classes = ref([])
 const maxDailyMinutes = ref(60)
+
+/** 个人报告：汇总各课程已观看分钟数 */
+function getWatchedTotal() {
+  if (!personalData.value?.course_progress) return 0
+  return personalData.value.course_progress.reduce((sum, c) => sum + parseFloat(getCourseWatchedMin(c)), 0).toFixed(1)
+}
+
+/** 单课程已观看分钟数 = completion_rate × require_minutes */
+function getCourseWatchedMin(c) {
+  if (!c.completion_rate || !c.require_minutes) return '0'
+  return (c.completion_rate * c.require_minutes).toFixed(1)
+}
 
 function getDailyHeight(minutes) {
   return Math.max((minutes / maxDailyMinutes.value) * 100, minutes > 0 ? 10 : 0) + '%'

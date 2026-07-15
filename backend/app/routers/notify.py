@@ -37,6 +37,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.models import Course, StudySession, User
 from app.utils.jwt_helper import require_role
+from app.utils.datetime_helper import now_cn_naive
 
 router = APIRouter(prefix="/api/notify", tags=["通知"])
 settings = get_settings()
@@ -213,7 +214,7 @@ async def send_daily_report(
         return {"code": 1, "msg": "课程不存在"}
 
     # 构造今日时间范围 [today 00:00:00, tomorrow 00:00:00)
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = now_cn_naive().replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today + timedelta(days=1)
     require_minutes = course.require_minutes or 60
 

@@ -46,6 +46,7 @@ from datetime import datetime
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import StudySession, HeartbeatLog
+from app.utils.datetime_helper import now_cn_naive
 
 
 class StudyEngine:
@@ -142,7 +143,7 @@ class StudyEngine:
           - 每次心跳都写入 HeartbeatLog，供教师审计学生的详细学习轨迹
         """
 
-        now = datetime.now()
+        now = now_cn_naive()
 
         # 获取上次心跳时间；首次心跳时以会话开始时间作为基准
         last = session.last_heartbeat or session.start_time
@@ -297,7 +298,7 @@ class StudyEngine:
             )
         )
         sessions = result.scalars().all()
-        now = datetime.now()
+        now = now_cn_naive()
 
         # 遍历所有活跃会话，逐个标记为结束
         # 正常情况下只有 0 或 1 条，批量处理是为了覆盖极端情况（如并发竞态）

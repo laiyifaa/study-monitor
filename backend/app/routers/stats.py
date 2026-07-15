@@ -341,41 +341,48 @@ async def incomplete_students(
         raise HTTPException(status_code=404, detail="课程不存在")
 
     require_minutes = course.require_minutes  # 可能是 None
+    require_seconds = (require_minutes or 0) * 60
 
-    # 使用 HAVING 子句在聚合后过滤，只保留有效时长不足的学生
-    # HAVING SUM(...) < require_minutes * 60  将要求分钟转为秒进行比较
-    # 仅在设置了时长要求时过滤
-    if require_minutes:
-        query = (
-            select(
-                StudySession.user_id,
-                User.name,
-                User.class_name,
-                func.sum(StudySession.effective_seconds).label("total_effective"),
-            )
-            .join(User, StudySession.user_id == User.id)
-            .where(StudySession.course_id == course_id)
-            .where(User.role == "student")
-            .group_by(StudySession.user_id, User.name, User.class_name)
-            .having(func.sum(StudySession.effective_seconds) < require_minutes * 60)
+    # 改用 video_progress 判定完成（与前端进度条、教师看板一致）
+    # 子查询：每个学生每小节取 MAX(video_progress)，再按 user_id 求和得到总观看秒数
+    # HAVING 过滤出未达标的学生（总观看秒数 < require_seconds * 0.90）
+    from sqlalchemy import literal_column
+
+    # 子查询：按 (user_id, section_id) 取每小节最大 video_progress
+    subq = (
+        select(
+            StudySession.user_id,
+            StudySession.section_id,
+            func.max(StudySession.video_progress).label("max_progress"),
         )
+        .where(StudySession.course_id == course_id)
+        .group_by(StudySession.user_id, StudySession.section_id)
+        .subquery()
+    )
+
+    # 主查询：按 user_id 求和，JOIN 用户信息
+    watched_sum = func.sum(subq.c.max_progress).label("total_watched")
+    base_query = (
+        select(
+            subq.c.user_id,
+            User.name,
+            User.class_name,
+            watched_sum,
+        )
+        .join(User, subq.c.user_id == User.id)
+        .where(User.role == "student")
+        .group_by(subq.c.user_id, User.name, User.class_name)
+    )
+
+    if require_seconds:
+        query = base_query.having(watched_sum < require_seconds * 0.90)
     else:
-        query = (
-            select(
-                StudySession.user_id,
-                User.name,
-                User.class_name,
-                func.sum(StudySession.effective_seconds).label("total_effective"),
-            )
-            .join(User, StudySession.user_id == User.id)
-            .where(StudySession.course_id == course_id)
-            .where(User.role == "student")
-            .group_by(StudySession.user_id, User.name, User.class_name)
-        )
+        query = base_query
+
     result = await db.execute(query)
     incomplete = [
         {"user_id": r.user_id, "name": r.name, "class_name": r.class_name,
-         "effective_minutes": round(r.total_effective / 60, 1)}
+         "watched_minutes": round(float(r.total_watched) / 60, 1) if r.total_watched else 0}
         for r in result.all()
     ]
 
@@ -423,37 +430,49 @@ async def leaderboard(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    # 按用户聚合有效时长
-    query = (
+    # 改用 video_progress 排名（与前端进度条、教师看板一致）
+    # 子查询：每个学生每小节取 MAX(video_progress)
+    subq = (
         select(
             StudySession.user_id,
+            StudySession.section_id,
+            func.max(StudySession.video_progress).label("max_progress"),
+        )
+        .where(StudySession.course_id == course_id)
+        .group_by(StudySession.user_id, StudySession.section_id)
+        .subquery()
+    )
+
+    # 主查询：按 user_id 求和得到总观看秒数，JOIN 用户信息
+    watched_sum = func.sum(subq.c.max_progress).label("total_watched")
+    query = (
+        select(
+            subq.c.user_id,
             User.name,
             User.real_name,
             User.class_name,
-            func.sum(StudySession.effective_seconds).label("total_effective"),
+            watched_sum,
         )
-        .join(User, StudySession.user_id == User.id)
-        .where(StudySession.course_id == course_id)
+        .join(User, subq.c.user_id == User.id)
         .where(User.role == "student")
-        .group_by(StudySession.user_id, User.name, User.real_name, User.class_name)
-        .order_by(func.sum(StudySession.effective_seconds).desc())
+        .group_by(subq.c.user_id, User.name, User.real_name, User.class_name)
+        .order_by(watched_sum.desc())
         .limit(limit)
     )
     if class_name:
         query = (
             select(
-                StudySession.user_id,
+                subq.c.user_id,
                 User.name,
                 User.real_name,
                 User.class_name,
-                func.sum(StudySession.effective_seconds).label("total_effective"),
+                watched_sum,
             )
-            .join(User, StudySession.user_id == User.id)
-            .where(StudySession.course_id == course_id)
+            .join(User, subq.c.user_id == User.id)
             .where(User.role == "student")
             .where(User.class_name == class_name)
-            .group_by(StudySession.user_id, User.name, User.real_name, User.class_name)
-            .order_by(func.sum(StudySession.effective_seconds).desc())
+            .group_by(subq.c.user_id, User.name, User.real_name, User.class_name)
+            .order_by(watched_sum.desc())
             .limit(limit)
         )
 
@@ -462,24 +481,20 @@ async def leaderboard(
 
     # 构建排名（并列排名逻辑）
     ranking = []
-    prev_effective = None
+    prev_watched = None
     rank = 0
-    skip = 0
     for i, r in enumerate(rows):
-        effective_min = round(r.total_effective / 60, 1) if r.total_effective else 0
-        if effective_min != prev_effective:
+        watched_min = round(float(r.total_watched) / 60, 1) if r.total_watched else 0
+        if watched_min != prev_watched:
             rank = i + 1
-            skip = 0
-        else:
-            skip += 1
-        prev_effective = effective_min
+        prev_watched = watched_min
         ranking.append({
             "rank": rank,
             "user_id": r.user_id,
             "name": r.name,
             "real_name": r.real_name or "",
             "class_name": r.class_name or "",
-            "effective_minutes": effective_min,
+            "watched_minutes": watched_min,
         })
 
     return {

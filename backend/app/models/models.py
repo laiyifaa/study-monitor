@@ -462,6 +462,38 @@ class SectionFeedback(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class DingTalkBinding(Base):
+    """
+    钉钉绑定关系模型
+
+    用途：存储学生账号与钉钉用户的多对多绑定关系。
+         一个学生可以绑定多个钉钉账号（父亲、母亲的钉钉），
+         但每个钉钉账号只能绑定一个学生账号。
+
+    字段说明：
+        id               — 自增主键
+        user_id          — 关联的学生/用户 ID，外键关联 users 表
+        dingtalk_user_id — 钉钉用户唯一标识（唯一约束，保证一个钉钉只能绑一个学生）
+        dingtalk_name    — 钉钉用户姓名
+        dingtalk_mobile  — 钉钉用户手机号
+        dingtalk_avatar  — 钉钉用户头像 URL
+        created_at       — 绑定时间
+    """
+    __tablename__ = "dingtalk_bindings"
+    __table_args__ = (
+        # 加速按用户查所有绑定
+        {"mysql_charset": "utf8mb4"},
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True, comment="关联用户ID")
+    dingtalk_user_id = Column(String(128), unique=True, nullable=False, index=True, comment="钉钉用户ID(唯一,一个钉钉只绑一个学生)")
+    dingtalk_name = Column(String(100), default="", comment="钉钉用户姓名")
+    dingtalk_mobile = Column(String(20), default="", comment="钉钉用户手机号")
+    dingtalk_avatar = Column(String(500), default="", comment="钉钉用户头像URL")
+    created_at = Column(DateTime, server_default=func.now(), comment="绑定时间")
+
+
 class ClassDef(Base):
     """
     班级定义模型

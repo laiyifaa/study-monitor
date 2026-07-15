@@ -86,18 +86,22 @@ async def class_overview(
     rows = result.all()
 
     require_minutes = course.require_minutes  # 可能是 None
+    require_seconds = (require_minutes or 0) * 60
     students = []
     for r in rows:
         effective_min = round(r.total_effective / 60, 1) if r.total_effective else 0
+        progress_sec = float(r.max_progress) if r.max_progress else 0.0
         students.append({
             "user_id": r.user_id,
             "name": r.name,
             "class_name": r.class_name,
             "effective_minutes": effective_min,
             "require_minutes": require_minutes,
-            "completion_rate": round(min(effective_min / require_minutes, 1), 3) if require_minutes else None,
-            "video_progress": round(float(r.max_progress), 1) if r.max_progress else 0,
-            "is_completed": effective_min >= require_minutes if require_minutes else None,
+            # 完成率基于 video_progress（已观看秒数/要求秒数），与前端进度条一致
+            "completion_rate": round(min(progress_sec / require_seconds, 1), 3) if require_seconds else None,
+            "video_progress": round(progress_sec, 1),
+            # 完成判定：video_progress >= 要求时长的90%（与/my-progress端点一致）
+            "is_completed": progress_sec >= require_seconds * 0.90 if require_seconds else None,
         })
 
     total = len(students)
@@ -646,6 +650,7 @@ async def study_report(
                 select(
                     func.sum(StudySession.effective_seconds).label("c_effective"),
                     func.count(StudySession.id).label("c_sessions"),
+                    func.max(StudySession.video_progress).label("c_max_progress"),
                 ).where(
                     and_(
                         StudySession.user_id == target_user_id,
@@ -656,13 +661,17 @@ async def study_report(
             c_data = c_result.one()
             c_effective = round(c_data.c_effective / 60, 1) if c_data.c_effective else 0
             require_minutes = c.require_minutes  # 可能是 None
+            require_seconds = (require_minutes or 0) * 60
+            c_progress = float(c_data.c_max_progress) if c_data.c_max_progress else 0.0
             course_progress.append({
                 "course_id": c.id,
                 "title": c.title,
                 "effective_minutes": c_effective,
                 "require_minutes": require_minutes,
-                "completion_rate": round(min(c_effective / require_minutes, 1), 3) if require_minutes else None,
-                "is_completed": c_effective >= require_minutes if require_minutes else None,
+                # 完成率基于 video_progress，与前端进度条一致
+                "completion_rate": round(min(c_progress / require_seconds, 1), 3) if require_seconds else None,
+                # 完成判定：video_progress >= 要求时长的90%
+                "is_completed": c_progress >= require_seconds * 0.90 if require_seconds else None,
             })
 
         # 最近7天每日学习时长分布

@@ -343,8 +343,12 @@ function openQuestionFile(sectionId, file, index = 0) {
   const total = getQuestionFiles(sectionId).length
   const downloadName = getAttachmentDownloadName(sectionTitle, 'homework', index, total, file)
 
-  if (isDingTalk && (isPdf(file) || isDocumentFile(file))) {
-    previewFile(getAbsoluteMediaUrl(file), downloadName)
+  if (isDingTalk) {
+    if (isPdf(file)) {
+      window.open(getAbsoluteMediaUrl(file), '_blank')
+    } else {
+      openFileDownload(getAbsoluteMediaUrl(file), downloadName)
+    }
     return
   }
 
@@ -373,7 +377,11 @@ async function openStudentAnswerFile(sectionId, file) {
     const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
 
     if (isDingTalk) {
-      previewFile(accessUrl, downloadName)
+      if (isPdf(file.name) || isImageFile(file.name)) {
+        window.open(accessUrl, '_blank')
+      } else {
+        openFileDownload(accessUrl, downloadName)
+      }
       return
     }
 

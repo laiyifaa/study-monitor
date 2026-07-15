@@ -188,9 +188,11 @@ async def my_progress(
             sec_video_progress = round(float(sec_s.sec_progress), 1) if sec_s.sec_progress else 0
             # 小节要求时长：默认等于视频时长（秒→分钟）
             sec_require_min = round((sec.duration_seconds or 0) / 60, 1)
-            # 小节完成标准：有效学习时长 >= 小节要求时长（有视频时长时），或 >0（无视频时长时）
-            if sec_require_min > 0:
-                sec_completed = sec_effective >= sec_require_min
+            # 小节完成标准（方案C）：视频播放进度 >= 视频时长×90% 即视为完成
+            # 优先使用 video_progress 判定（钉钉环境下 effective_seconds 不可靠），
+            # 仅无视频时长时回退到 effective_seconds > 0
+            if sec.duration_seconds and sec.duration_seconds > 0:
+                sec_completed = sec_video_progress >= sec.duration_seconds * 0.9
             else:
                 sec_completed = sec_effective > 0
             if sec_completed:
@@ -205,15 +207,10 @@ async def my_progress(
                 "is_completed": sec_completed,
             })
 
-        # 课程完成率计算：
-        # - 有 require_minutes: 按课程时长要求算
-        # - 无 require_minutes: 按已完成小节比例算
-        if require_minutes:
-            completion_rate = round(min(effective_min / require_minutes, 1), 3)
-            is_completed = effective_min >= require_minutes
-        else:
-            completion_rate = round(completed_sections / len(sections), 3) if sections else 0
-            is_completed = completed_sections == len(sections) if sections else False
+        # 课程完成率统一按已完成小节比例计算（方案C）
+        # 小节完成判定已改为 video_progress >= duration × 90%，不再依赖 effective_seconds
+        completion_rate = round(completed_sections / len(sections), 3) if sections else 0
+        is_completed = completed_sections == len(sections) if sections else False
 
         result_list.append({
             "course_id": course.id,

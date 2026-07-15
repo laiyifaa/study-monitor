@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.database_redis import get_redis
-from app.models.models import User
+from app.models.models import User, DingTalkBinding
 from app.utils.jwt_helper import create_token, get_current_user, require_role
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
@@ -138,30 +138,42 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
     dt_mobile = user_info.get("mobile", "")
     dt_avatar = user_info.get("avatar", "")
 
-    # 第三步：检查 dingtalk_user_id 是否已绑定
-    result = await db.execute(select(User).where(User.dingtalk_user_id == userid))
-    user = result.scalar_one_or_none()
+    # 第三步：检查 dingtalk_bindings 表是否已绑定（支持一个学生绑定多个钉钉）
+    binding_result = await db.execute(
+        select(DingTalkBinding).where(DingTalkBinding.dingtalk_user_id == userid)
+    )
+    binding = binding_result.scalar_one_or_none()
 
-    if user:
-        # 已绑定 → 同步钉钉信息 → 直接登录
-        if dt_name and user.name != dt_name:
-            user.name = dt_name
-        if dt_name and user.real_name != dt_name:
-            user.real_name = dt_name
-        if dt_mobile and user.phone != dt_mobile:
-            user.phone = dt_mobile
-        if dt_avatar and user.avatar != dt_avatar:
-            user.avatar = dt_avatar
-        await db.commit()
+    if binding:
+        # 已绑定 → 查出关联用户 → 同步钉钉信息 → 直接登录
+        user_result = await db.execute(select(User).where(User.id == binding.user_id))
+        user = user_result.scalar_one_or_none()
+        if user:
+            if dt_name and user.name != dt_name:
+                user.name = dt_name
+            if dt_name and user.real_name != dt_name:
+                user.real_name = dt_name
+            if dt_mobile and user.phone != dt_mobile:
+                user.phone = dt_mobile
+            if dt_avatar and user.avatar != dt_avatar:
+                user.avatar = dt_avatar
+            # 同步更新绑定记录中的钉钉信息
+            if dt_name and binding.dingtalk_name != dt_name:
+                binding.dingtalk_name = dt_name
+            if dt_mobile and binding.dingtalk_mobile != dt_mobile:
+                binding.dingtalk_mobile = dt_mobile
+            if dt_avatar and binding.dingtalk_avatar != dt_avatar:
+                binding.dingtalk_avatar = dt_avatar
+            await db.commit()
 
-        jwt_token = create_token(user.id, user.role)
-        return {
-            "code": 0,
-            "data": {
-                "token": jwt_token,
-                "user": _user_dict(user),
-            },
-        }
+            jwt_token = create_token(user.id, user.role)
+            return {
+                "code": 0,
+                "data": {
+                    "token": jwt_token,
+                    "user": _user_dict(user),
+                },
+            }
 
     # 第四步：未绑定 → 尝试用手机号自动匹配 contact_phones
     if dt_mobile:
@@ -175,9 +187,16 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
                 matched_users.append(stu)
 
         if len(matched_users) == 1:
-            # 匹配到 1 个 → 自动绑定
+            # 匹配到 1 个 → 自动绑定（写入 dingtalk_bindings 表）
             matched_user = matched_users[0]
-            matched_user.dingtalk_user_id = userid
+            new_binding = DingTalkBinding(
+                user_id=matched_user.id,
+                dingtalk_user_id=userid,
+                dingtalk_name=dt_name,
+                dingtalk_mobile=dt_mobile,
+                dingtalk_avatar=dt_avatar,
+            )
+            db.add(new_binding)
             if dt_name and not matched_user.real_name:
                 matched_user.real_name = dt_name
             if dt_mobile and not matched_user.phone:
@@ -214,6 +233,7 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
 
 class BindAccountRequest(BaseModel):
     account: str
+    password: str = ""  # 绑定需要密码验证，防止未授权绑定
     dingtalk_user_id: str
     dingtalk_name: str = ""
     dingtalk_mobile: str = ""
@@ -225,7 +245,8 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
     """
     钉钉用户手动绑定账号
 
-    流程：用户在免登弹窗中输入账号 → 查到用户 → 绑定 dingtalk_user_id
+    流程：用户在免登弹窗中输入账号+密码 → 查到用户 → 验证密码 → 绑定到 dingtalk_bindings 表
+    支持一个学生绑定多个钉钉账号（父亲、母亲），但每个钉钉只能绑一个学生
     """
     if not req.account.strip():
         return {"code": 1, "msg": "请输入账号"}
@@ -237,17 +258,42 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
     if not user:
         return {"code": 1, "msg": "账号不存在，请检查后重新输入"}
 
-    # 检查该用户是否已绑定其他钉钉账号
-    if user.dingtalk_user_id:
-        return {"code": 1, "msg": "该账号已绑定其他钉钉，如需更换请联系管理员"}
+    # 验证密码（防止未授权绑定）
+    if user.password_hash:
+        if not req.password:
+            return {"code": 1, "msg": "请输入密码"}
+        if not verify_password(req.password, user.password_hash):
+            return {"code": 1, "msg": "密码错误，请检查后重新输入"}
+    # 无密码的账号（纯钉钉用户）不需要验证密码，允许直接绑定
 
-    # 检查该钉钉ID是否已绑定其他账号
-    existing = await db.execute(select(User).where(User.dingtalk_user_id == req.dingtalk_user_id))
-    if existing.scalar_one_or_none():
+    # 检查该钉钉ID是否已绑定其他账号（一个钉钉只能绑一个学生）
+    existing_binding = await db.execute(
+        select(DingTalkBinding).where(DingTalkBinding.dingtalk_user_id == req.dingtalk_user_id)
+    )
+    if existing_binding.scalar_one_or_none():
         return {"code": 1, "msg": "该钉钉已绑定其他账号"}
 
-    # 执行绑定
-    user.dingtalk_user_id = req.dingtalk_user_id
+    # 检查该用户是否已绑定过这个钉钉（防止重复绑定）
+    dup_check = await db.execute(
+        select(DingTalkBinding).where(
+            DingTalkBinding.user_id == user.id,
+            DingTalkBinding.dingtalk_user_id == req.dingtalk_user_id,
+        )
+    )
+    if dup_check.scalar_one_or_none():
+        return {"code": 1, "msg": "该账号已绑定此钉钉"}
+
+    # 写入 dingtalk_bindings 表（允许多个钉钉绑定同一个学生）
+    new_binding = DingTalkBinding(
+        user_id=user.id,
+        dingtalk_user_id=req.dingtalk_user_id,
+        dingtalk_name=req.dingtalk_name or "",
+        dingtalk_mobile=req.dingtalk_mobile or "",
+        dingtalk_avatar=req.dingtalk_avatar or "",
+    )
+    db.add(new_binding)
+
+    # 同步更新用户表中的实名信息（仅当字段为空时填充）
     if req.dingtalk_name and not user.real_name:
         user.real_name = req.dingtalk_name
     if req.dingtalk_mobile and not user.phone:

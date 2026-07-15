@@ -336,10 +336,8 @@ const onUpdateSection = async (sec) => {
       video_type: sec.video_type,
       video_url: sec.video_type === 'url' ? (sec.video_url || '') : sec.video_url,
     }
-    // v4.0: 传递开播时间
-    if (sec.open_time) {
-      payload.open_time = sec.open_time
-    }
+    // v4.0: 传递开播时间（空字符串表示清除，需显式传 null 给后端）
+    payload.open_time = sec.open_time || null
     await api.put(`/sections/${sec.id}`, payload)
   } catch (e) {
     console.warn('更新小节失败:', e)

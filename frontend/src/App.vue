@@ -65,7 +65,10 @@
   <!-- ====== 修改密码弹窗（must_change_password时不可关闭） ====== -->
   <div v-if="showChangePw" class="modal-overlay" @click.self="!mustChangePw && (showChangePw = false)">
     <div class="modal-card">
-      <h3>{{ mustChangePw ? '首次登录，请修改密码' : (hasPassword ? '修改密码' : '设置密码') }}</h3>
+      <div class="modal-header">
+        <h3>{{ mustChangePw ? '首次登录，请修改密码' : (hasPassword ? '修改密码' : '设置密码') }}</h3>
+        <button class="btn-close" @click="showChangePw = false" title="关闭">×</button>
+      </div>
       <p v-if="mustChangePw" class="pw-notice">您的账号使用的是初始默认密码，为了账号安全，请立即修改密码后继续使用。</p>
       <p v-if="mustChangePw" class="pw-hint">默认账号：中考考号，默认密码：中考准考证号后六位</p>
       <div v-if="hasPassword && !mustChangePw" class="form-item">
@@ -96,16 +99,27 @@
   </div>
 
   <!-- ====== 绑定账号弹窗（钉钉免登无法自动匹配时弹出） ====== -->
-  <div v-if="auth.bindInfo.value" class="modal-overlay">
+  <div v-if="auth.bindInfo.value" class="modal-overlay" @click.self="closeBindDialog">
     <div class="modal-card">
-      <h3>绑定账号</h3>
+      <div class="modal-header">
+        <h3>绑定账号</h3>
+        <button class="btn-close" @click="closeBindDialog" title="关闭">×</button>
+      </div>
       <p class="bind-hint">钉钉用户「{{ auth.bindInfo.value.dingtalk_name }}」需要绑定学习平台账号</p>
+      <div class="bind-credential-hint">
+        默认账号：中考考号，默认密码：准考证号后六位
+      </div>
       <div class="form-item">
         <label>请输入您的账号</label>
         <input v-model="bindAccountInput" type="text" placeholder="请输入账号（如准考证号）" />
       </div>
+      <div class="form-item">
+        <label>请输入密码</label>
+        <input v-model="bindPasswordInput" type="password" placeholder="请输入密码" />
+      </div>
       <div v-if="bindError" class="pw-error">{{ bindError }}</div>
       <div class="modal-actions">
+        <button class="btn-sm" @click="closeBindDialog">跳过，使用账号密码登录</button>
         <button class="btn-sm primary" @click="doBindAccount" :disabled="bindLoading">
           {{ bindLoading ? '绑定中...' : '确认绑定' }}
         </button>
@@ -118,6 +132,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from './utils/auth'  // 【交互】引用 auth.js 的认证状态管理
+import * as dd from 'dingtalk-jsapi'  // 钉钉环境检测：判断是否在钉钉客户端内
 import api from './utils/api'
 
 const router = useRouter()
@@ -153,8 +168,20 @@ const pwSuccess = ref('')
 
 /** ============ 绑定账号弹窗状态 ============ */
 const bindAccountInput = ref('')
+const bindPasswordInput = ref('')
 const bindError = ref('')
 const bindLoading = ref(false)
+
+/**
+ * 关闭绑定弹窗，跳转到登录页用账号密码登录
+ */
+function closeBindDialog() {
+  auth.bindInfo.value = null
+  bindAccountInput.value = ''
+  bindPasswordInput.value = ''
+  bindError.value = ''
+  router.push('/login')
+}
 
 /**
  * 执行绑定账号
@@ -167,11 +194,19 @@ async function doBindAccount() {
   }
   bindLoading.value = true
   try {
-    const result = await auth.bindAccount(bindAccountInput.value.trim())
+    const result = await auth.bindAccount(bindAccountInput.value.trim(), bindPasswordInput.value)
     if (result === true) {
-      // 绑定成功
+      // 绑定成功，清空表单并跳转到对应首页
       bindAccountInput.value = ''
+      bindPasswordInput.value = ''
       bindError.value = ''
+      // 绑定成功后 setAuth 已在 bindAccount 内部执行，按角色跳转
+      const role = auth.user.value?.role
+      if (role === 'teacher' || role === 'admin') {
+        router.replace('/teacher')
+      } else {
+        router.replace('/my-progress')
+      }
     } else {
       // 绑定失败，显示错误信息
       bindError.value = typeof result === 'string' ? result : '绑定失败'
@@ -245,10 +280,11 @@ async function doChangePassword() {
       pwSuccess.value = '密码修改成功'
       showChangePw.value = false
       pwForm.value = { old_password: '', new_password: '', confirm_password: '' }
-      // 更新本地状态
+      // 更新本地状态（同时持久化到 localStorage，防止刷新后弹窗重复触发）
       if (auth.user.value) {
         auth.user.value.has_password = true
         auth.user.value.must_change_password = false
+        localStorage.setItem('user', JSON.stringify(auth.user.value))
       }
       // 3秒后清除成功提示
       setTimeout(() => { pwSuccess.value = '' }, 3000)
@@ -274,8 +310,15 @@ watch(() => route.path, (newPath, oldPath) => {
 
 onMounted(async () => {
   // 页面刷新时，若用户已登录且需修改密码，直接弹窗
-  if (auth.isLoggedIn.value && auth.loginMethod.value !== 'dingtalk') {
-    if (auth.user.value?.must_change_password || !auth.user.value?.has_password) {
+  // 修复：钉钉免登用户不应弹改密窗，通过双重判断排除：
+  //   1. loginMethod === 'dingtalk' → 钉钉登录，不弹
+  //   2. 当前在钉钉环境中 → 也不弹（兜底，防止 login_method 丢失）
+  // 修复：has_password 字段可能不存在于旧版 localStorage 的 user 对象中，
+  //   用 nullish coalescing 兜底，避免 undefined 误触发
+  const isInDingTalk = dd.env.platform !== 'notInDingTalk'
+  if (auth.isLoggedIn.value && auth.loginMethod.value !== 'dingtalk' && !isInDingTalk) {
+    const hasPw = auth.user.value?.has_password ?? true  // 字段缺失时视为有密码，不误触发
+    if (auth.user.value?.must_change_password || !hasPw) {
       showChangePw.value = true
     }
   }
@@ -550,6 +593,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
   color: #666;
   margin-bottom: 14px;
   line-height: 1.5;
+}
+
+/* 绑定弹窗默认账号提示 */
+.bind-credential-hint {
+  font-size: 12px;
+  color: #1890ff;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  background: #e6f7ff;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+/* 弹窗头部（标题+关闭按钮） */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0;
+}
+.modal-header h3 {
+  margin-bottom: 0;
+}
+
+/* 关闭按钮 */
+.btn-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  font-size: 20px;
+  color: #999;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: all 0.2s;
+}
+.btn-close:hover {
+  background: #f0f0f0;
+  color: #333;
 }
 
 /* ====== 全局响应式：顶栏适配 ====== */

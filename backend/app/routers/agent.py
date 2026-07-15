@@ -112,7 +112,6 @@ async def agent_create_student(
         name=req.name.strip(),
         role="student",
         class_name=req.class_name.strip(),
-        dingtalk_user_id=f"local_{req.name.strip()}_{int(datetime.now().timestamp())}",
         password_hash=hash_password(req.password),
     )
     db.add(student)
@@ -295,29 +294,37 @@ async def agent_get_course_progress(
     )
     students = students_result.scalars().all()
 
+    require_seconds = (course.require_minutes or 0) * 60
     data = []
     for s in students:
-        # 该学生在这门课的总有效学习时长
-        total_seconds = await db.scalar(
-            select(func.coalesce(func.sum(StudySession.effective_seconds), 0)).where(
+        # 该学生在这门课的总有效学习时长 + 最大视频进度
+        row_result = await db.execute(
+            select(
+                func.coalesce(func.sum(StudySession.effective_seconds), 0).label("total_effective"),
+                func.max(StudySession.video_progress).label("max_progress"),
+            ).where(
                 and_(
                     StudySession.user_id == s.id,
                     StudySession.course_id == course_id,
                 )
             )
         )
-        effective_minutes = round((total_seconds or 0) / 60, 1)
-        require_minutes = course.require_minutes or 0
-        completion_rate = min(effective_minutes / require_minutes, 1.0) if require_minutes > 0 else 0
+        row = row_result.one()
+        effective_minutes = round(float(row.total_effective) / 60, 1)
+        max_progress = float(row.max_progress) if row.max_progress else 0.0
+        # 完成率基于 video_progress，与前端进度条和其他端点一致
+        completion_rate = min(max_progress / require_seconds, 1.0) if require_seconds > 0 else 0
 
         data.append({
             "user_id": s.id,
             "name": s.name,
             "class_name": s.class_name,
             "effective_minutes": effective_minutes,
-            "require_minutes": require_minutes,
+            "require_minutes": course.require_minutes or 0,
+            "video_progress": round(max_progress, 1),
             "completion_rate": round(completion_rate, 4),
-            "is_completed": completion_rate >= 1.0,
+            # 完成判定：video_progress >= 要求时长的90%
+            "is_completed": max_progress >= require_seconds * 0.90 if require_seconds > 0 else False,
         })
 
     return {

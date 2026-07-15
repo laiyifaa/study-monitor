@@ -36,6 +36,8 @@ from app.models.models import StudySession, User, Section
 from app.services.study_engine import StudyEngine
 from app.utils.jwt_helper import get_current_user
 
+from app.utils.datetime_helper import now_cn_naive
+
 router = APIRouter(prefix="/api/heartbeat", tags=["心跳"])
 
 
@@ -86,7 +88,7 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
     if req.section_id and user.role == 'student':
         section_result = await db.execute(select(Section).where(Section.id == req.section_id))
         section = section_result.scalar_one_or_none()
-        if section and section.open_time and datetime.now() < section.open_time:
+        if section and section.open_time and now_cn_naive() < section.open_time:
             return {
                 "code": 1,
                 "msg": f"该课程尚未开播，开播时间：{section.open_time.strftime('%Y-%m-%d %H:%M')}",
@@ -118,7 +120,7 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
         start_time=datetime.now(),
         last_heartbeat=datetime.now(),
         effective_seconds=0,
-        video_progress=historical_progress,  # 从历史进度开始，避免首次心跳产生巨大增量
+        video_progress=0,  # 从0开始，避免历史进度导致"死区"（新会话中视频从头播放时增量永远为0）
         is_active=True,
     )
     db.add(session)

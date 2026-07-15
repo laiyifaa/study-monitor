@@ -49,7 +49,7 @@
         <h3>近7天学习分布</h3>
         <div class="daily-chart">
           <div v-for="d in personalData.daily_distribution_7d" :key="d.date" class="daily-bar">
-            <span class="db-val">{{ d.effective_minutes || '' }}'</span>
+            <span class="db-val" v-if="d.effective_minutes > 0">{{ d.effective_minutes }}'</span>
             <div class="db-fill" :style="{ height: getDailyHeight(d.effective_minutes) }"></div>
             <span class="db-label">{{ d.date.slice(5) }}</span>
           </div>

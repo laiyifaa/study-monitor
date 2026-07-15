@@ -80,3 +80,11 @@ export function triggerBrowserDownload(url, filename = '') {
   link.click()
   link.remove()
 }
+
+export function openFileDownload(url, filename = '') {
+  const targetUrl = url + (url.includes('?') ? '&' : '?') + 'download=1&_t=' + Date.now()
+  const win = window.open(targetUrl, '_blank')
+  if (!win) {
+    window.location.href = targetUrl
+  }
+}

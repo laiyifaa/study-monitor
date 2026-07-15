@@ -120,7 +120,7 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
         start_time=datetime.now(),
         last_heartbeat=datetime.now(),
         effective_seconds=0,
-        video_progress=historical_progress,  # 从历史进度开始，避免首次心跳产生巨大增量
+        video_progress=0,  # 从0开始，避免历史进度导致"死区"（新会话中视频从头播放时增量永远为0）
         is_active=True,
     )
     db.add(session)

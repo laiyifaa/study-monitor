@@ -269,6 +269,18 @@ export function useStudyTracker(courseId, sectionId = null) {
       isPlaying.value = false
       // 立即发一次心跳保存当前视频进度，防止用户直接关闭页面导致进度丢失
       sendAction('visibility_hidden')
+    } else {
+      // ── 钉钉 WebView 心跳补发 ──
+      // 钉钉内嵌 WebView 会节流/暂停 setInterval，导致定时心跳丢失。
+      // 页面恢复可见时必须：1) 立即补发心跳  2) 重启定时器
+      // 否则学生在钉钉里看完视频，后端可能一条心跳都没收到。
+      if (sessionId.value) {
+        // 立即补发一次心跳，上报当前播放状态和视频进度
+        sendAction('visibility_visible')
+        // 重启心跳定时器，确保后续 30 秒定时上报恢复正常
+        clearInterval(heartbeatTimer)
+        startHeartbeat()
+      }
     }
   }
 

@@ -44,7 +44,7 @@
 
         <!-- 课程总体信息 -->
         <div class="info-row">
-          <span>有效时长：{{ c.effective_minutes }} 分钟<span v-if="c.require_minutes"> / 总时长 {{ c.require_minutes }} 分钟</span></span>
+          <span>已观看：{{ getWatchedMinutes(c) }} / {{ c.require_minutes }} 分钟</span>
           <span v-if="c.sections && c.sections.length > 0">{{ getCompletedSectionCount(c) }}/{{ c.sections.length }} 小节</span>
         </div>
         <div v-if="!c.require_minutes && c.total_section_minutes > 0" class="info-row sub">
@@ -71,12 +71,12 @@
                 @click="goLearn(c.course_id, sec.section_id)"
               >
                 <div class="spi-left">
-                  <span class="spi-dot" :class="sec.is_completed ? 'done' : (sec.effective_minutes > 0 ? 'active' : '')"></span>
+                  <span class="spi-dot" :class="sec.is_completed ? 'done' : (sec.video_progress > 0 ? 'active' : '')"></span>
                 </div>
                 <div class="spi-body">
                   <div class="spi-title">{{ sec.title }}</div>
                   <div class="spi-meta">
-                    <span>{{ sec.effective_minutes }}分钟</span>
+                    <span>{{ formatWatchedMin(sec) }}</span>
                     <span v-if="sec.require_minutes > 0" class="spi-req">/ {{ sec.require_minutes }}分钟</span>
                   </div>
                   <div class="spi-bar">
@@ -85,7 +85,7 @@
                 </div>
                 <div class="spi-right">
                   <span v-if="sec.is_completed" class="spi-done">已完成</span>
-                  <span v-else-if="sec.effective_minutes > 0" class="spi-partial">学习中</span>
+                  <span v-else-if="sec.video_progress > 0" class="spi-partial">学习中</span>
                   <span v-else class="spi-notstart">未开始</span>
                 </div>
               </div>
@@ -126,14 +126,33 @@ function toggleSection(courseId) {
 }
 
 /**
- * 计算小节进度百分比
+ * 计算小节进度百分比（基于视频观看进度）
+ * video_progress 单位为秒，require_minutes 单位为分钟
  */
 function getSectionProgress(sec) {
   if (sec.is_completed) return 100
   if (sec.require_minutes > 0) {
-    return Math.min(Math.round(sec.effective_minutes / sec.require_minutes * 100), 99)
+    const watchedMin = (sec.video_progress || 0) / 60
+    return Math.min(Math.round(watchedMin / sec.require_minutes * 100), 99)
   }
   return 0
+}
+
+/**
+ * 格式化小节已观看时长（秒→分钟，保留1位小数）
+ */
+function formatWatchedMin(sec) {
+  const min = (sec.video_progress || 0) / 60
+  return Math.round(min * 10) / 10 + '分钟'
+}
+
+/**
+ * 计算课程已观看分钟数（汇总所有小节的 video_progress）
+ */
+function getWatchedMinutes(course) {
+  if (!course.sections || course.sections.length === 0) return 0
+  const totalSec = course.sections.reduce((sum, s) => sum + (s.video_progress || 0), 0)
+  return Math.round(totalSec / 60 * 10) / 10  // 保留1位小数
 }
 
 /**

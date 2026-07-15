@@ -42,7 +42,7 @@ from typing import Optional
 from datetime import datetime
 
 from app.database import get_db
-from app.models.models import User, ClassDef
+from app.models.models import User, ClassDef, DingTalkBinding
 from app.routers.auth import hash_password
 from app.utils.jwt_helper import require_role
 
@@ -585,6 +585,12 @@ async def get_user(
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
+    # 查询钉钉绑定信息（支持多绑定）
+    binding_result = await db.execute(
+        select(DingTalkBinding).where(DingTalkBinding.user_id == user_id)
+    )
+    bindings = binding_result.scalars().all()
+
     return {
         "code": 0,
         "data": {
@@ -596,7 +602,16 @@ async def get_user(
             "role": user.role,
             "class_name": user.class_name,
             "avatar": user.avatar,
-            "dingtalk_user_id": user.dingtalk_user_id,
+            "dingtalk_user_id": user.dingtalk_user_id,  # 旧字段兼容，可能为null
+            "dingtalk_bindings": [
+                {
+                    "dingtalk_user_id": b.dingtalk_user_id,
+                    "dingtalk_name": b.dingtalk_name,
+                    "dingtalk_mobile": b.dingtalk_mobile,
+                    "bound_at": str(b.created_at) if b.created_at else None,
+                }
+                for b in bindings
+            ],
             "contact_phones": user.contact_phones or "",
             "has_password": bool(user.password_hash),
             "has_api_key": bool(user.api_key),

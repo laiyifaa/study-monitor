@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.models import StudySession, Course, Section, User
+from app.utils.datetime_helper import now_cn_naive
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/stats", tags=["统计"])
@@ -266,7 +267,7 @@ async def daily_summary(
         因为 start_time 代表会话开始日期，更符合"当天学习"的语义。
     """
     # 解析目标日期，默认为今天
-    target_date = datetime.strptime(date, "%Y-%m-%d") if date else datetime.now()
+    target_date = datetime.strptime(date, "%Y-%m-%d") if date else now_cn_naive()
     # 构造当天的起止时间范围 [day_start, day_end)
     day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
@@ -626,7 +627,7 @@ async def study_report(
         按需聚合有效学习时长、完成率、每日分布等维度，
         生成结构化报告数据，前端可直接渲染。
     """
-    now = datetime.now()
+    now = now_cn_naive()
 
     if report_type == "personal":
         # 个人报告
@@ -689,7 +690,7 @@ async def study_report(
                 "is_completed": c_progress >= require_seconds * 0.90 if require_seconds else None,
             })
 
-        # 最近7天每日学习时长分布
+        # 最近7天每日学习时长分布（补全7天，无数据的天返回0）
         seven_days_ago = now - timedelta(days=7)
         daily_result = await db.execute(
             select(
@@ -704,13 +705,20 @@ async def study_report(
             .group_by(func.date(StudySession.start_time))
             .order_by(func.date(StudySession.start_time))
         )
-        daily_distribution = [
-            {
-                "date": str(r.study_date),
-                "effective_minutes": round(r.daily_effective / 60, 1) if r.daily_effective else 0,
-            }
-            for r in daily_result.all()
-        ]
+        # 构建日期→时长的映射
+        daily_map = {}
+        for r in daily_result.all():
+            daily_map[str(r.study_date)] = round(r.daily_effective / 60, 1) if r.daily_effective else 0
+        # 补全近7天（含今天），使用北京时间日期
+        cn_now = now_cn_naive()
+        daily_distribution = []
+        for i in range(6, -1, -1):
+            d = cn_now - timedelta(days=i)
+            date_str = d.strftime("%Y-%m-%d")
+            daily_distribution.append({
+                "date": date_str,
+                "effective_minutes": daily_map.get(date_str, 0),
+            })
 
         # 获取用户信息
         user_result = await db.execute(select(User).where(User.id == target_user_id))

@@ -49,9 +49,9 @@
         <h3>近7天学习分布</h3>
         <div class="daily-chart">
           <div v-for="d in personalData.daily_distribution_7d" :key="d.date" class="daily-bar">
+            <span class="db-val">{{ d.effective_minutes || '' }}'</span>
             <div class="db-fill" :style="{ height: getDailyHeight(d.effective_minutes) }"></div>
             <span class="db-label">{{ d.date.slice(5) }}</span>
-            <span class="db-val">{{ d.effective_minutes }}'</span>
           </div>
         </div>
       </div>
@@ -133,7 +133,10 @@ function getCourseWatchedMin(c) {
 }
 
 function getDailyHeight(minutes) {
-  return Math.max((minutes / maxDailyMinutes.value) * 100, minutes > 0 ? 10 : 0) + '%'
+  // 柱子高度：基于最大值的百分比，映射到 0~80px
+  if (!minutes) return '0px'
+  const maxH = 80
+  return Math.max((minutes / maxDailyMinutes.value) * maxH, 4) + 'px'
 }
 
 function switchType(type) {
@@ -210,11 +213,11 @@ h3 { font-size: 15px; margin-bottom: 10px; }
 .cpi-info { font-size: 12px; color: #999; }
 
 /* 7天柱状图 */
-.daily-chart { display: flex; gap: 6px; align-items: flex-end; height: 100px; }
-.daily-bar { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; position: relative; }
-.db-fill { width: 100%; background: #1890ff; border-radius: 3px 3px 0 0; position: absolute; bottom: 20px; transition: height 0.3s; }
-.db-label { position: absolute; bottom: 4px; font-size: 10px; color: #999; }
-.db-val { position: absolute; top: 0; font-size: 10px; color: #666; }
+.daily-chart { display: flex; gap: 4px; height: 140px; padding-top: 16px; }
+.daily-bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.db-fill { width: 80%; max-width: 32px; background: #1890ff; border-radius: 3px 3px 0 0; transition: height 0.3s; min-height: 0; }
+.db-label { font-size: 10px; color: #999; margin-top: 4px; white-space: nowrap; }
+.db-val { font-size: 10px; color: #666; margin-bottom: 2px; white-space: nowrap; }
 
 /* 排名列表 */
 .rank-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }

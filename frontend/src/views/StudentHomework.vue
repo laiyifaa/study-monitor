@@ -151,7 +151,7 @@ import {
 
 const route = useRoute()
 const courseId = route.params.courseId
-const { isDingTalk, previewFile } = useDingTalk()
+const { isDingTalk } = useDingTalk()
 
 const loading = ref(false)
 const sections = ref([])
@@ -352,7 +352,7 @@ function formatDate(dateStr) {
 
 function previewImage(url) {
   if (isDingTalk) {
-    previewFile(getAbsoluteMediaUrl(url), '')
+    window.open(getAbsoluteMediaUrl(url), '_blank')
     return
   }
   window.open(url, '_blank')
@@ -371,7 +371,7 @@ function openQuestionFile(sectionId, file, index = 0) {
 
   if (isDingTalk) {
     if (isPdf(file)) {
-      previewFile(getAbsoluteMediaUrl(file), downloadName)
+      window.open(getAbsoluteMediaUrl(file), '_blank')
     } else {
       openFileDownload(getAbsoluteMediaUrl(file), downloadName)
     }
@@ -395,7 +395,7 @@ function openStudentAnswerFile(sectionId, file) {
 
   if (isDingTalk) {
     if (isPdf(file.name)) {
-      previewFile(accessUrl, downloadName)
+      window.open(accessUrl, '_blank')
     } else if (isImageFile(file.name)) {
       window.open(accessUrl, '_blank')
     } else {

@@ -1559,23 +1559,24 @@ async def regrade_submission(
     if assignment.status != "published":
         raise HTTPException(status_code=400, detail="作业未发布")
 
-    report_result = await db.execute(
-        select(GradingReport).where(GradingReport.submission_id == submission_id)
-    )
-    report = report_result.scalar_one_or_none()
-    if not report:
-        raise HTTPException(status_code=400, detail="该提交尚未批改，不能重新智能批改")
-
-    generated_by = str(report.generated_by or "").lower()
-    if report.review_status == "modified" or "teacher" in generated_by:
-        raise HTTPException(status_code=400, detail="该提交已被人工修改，不可重新智能批改")
-
     task_result = await db.execute(
         select(GradingTask).where(GradingTask.submission_id == submission_id).order_by(GradingTask.id.desc())
     )
     task = task_result.scalars().first()
     if task and task.status in {"pending", "sent"}:
         raise HTTPException(status_code=400, detail="当前已有批改任务在进行")
+
+    report_result = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id == submission_id)
+    )
+    report = report_result.scalar_one_or_none()
+    if not report:
+        if not task or task.status != "failed":
+            raise HTTPException(status_code=400, detail="该提交尚未批改，不能重新智能批改")
+    else:
+        generated_by = str(report.generated_by or "").lower()
+        if report.review_status == "modified" or "teacher" in generated_by:
+            raise HTTPException(status_code=400, detail="该提交已被人工修改，不可重新智能批改")
 
     images = _load_url_list(submission.images)
     if not images:

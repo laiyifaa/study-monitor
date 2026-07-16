@@ -479,6 +479,17 @@ def _answer_files_to_student_entries(files: list[str]) -> list[dict]:
     return entries
 
 
+def _submission_can_view_answer_files(
+    submission: Submission | None,
+    *,
+    has_report: bool = False,
+    task_status: str | None = None,
+) -> bool:
+    if not submission or not submission.is_latest or submission.status == "returned":
+        return False
+    return has_report or task_status == "failed"
+
+
 async def _student_can_view_answer_files(assignment_id: int, student_id: int, db: AsyncSession) -> bool:
     latest_submission = (await db.execute(
         select(Submission).where(
@@ -492,10 +503,24 @@ async def _student_can_view_answer_files(assignment_id: int, student_id: int, db
     if not latest_submission:
         return False
 
+    if latest_submission.status == "returned":
+        return False
+
     report_id = await db.scalar(
         select(GradingReport.id).where(GradingReport.submission_id == latest_submission.id)
     )
-    return report_id is not None
+    if report_id is not None:
+        return _submission_can_view_answer_files(latest_submission, has_report=True)
+
+    latest_task = (await db.execute(
+        select(GradingTask)
+        .where(GradingTask.submission_id == latest_submission.id)
+        .order_by(GradingTask.id.desc())
+    )).scalars().first()
+    return _submission_can_view_answer_files(
+        latest_submission,
+        task_status=latest_task.status if latest_task else None,
+    )
 
 
 async def _resolve_assignment_answer_file(
@@ -1367,11 +1392,27 @@ async def list_my_submissions(
     ) if submission_ids else []
     reports = {r.submission_id: r for r in report_rows.scalars().all()} if submission_ids else {}
 
+    task_rows = await db.execute(
+        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids)).order_by(GradingTask.id.desc())
+    ) if submission_ids else []
+    tasks = {}
+    if submission_ids:
+        for task in task_rows.scalars().all():
+            if task.submission_id not in tasks:
+                tasks[task.submission_id] = task
+
     data = []
     for s in submissions:
         assignment = assignments.get(s.assignment_id)
         report = reports.get(s.id)
-        can_view_answer_files = bool(assignment and s.is_latest and report and s.status != "returned")
+        task = tasks.get(s.id)
+        can_view_answer_files = bool(
+            assignment and _submission_can_view_answer_files(
+                s,
+                has_report=report is not None,
+                task_status=task.status if task else None,
+            )
+        )
 
         data.append({
             "id": s.id,
@@ -1388,6 +1429,13 @@ async def list_my_submissions(
             "can_view_answer_files": can_view_answer_files,
             "answer_files": _answer_files_to_student_entries(_load_url_list(getattr(assignment, "answer_files", None))) if can_view_answer_files else [],
             "report": _report_to_student_summary(report) if report else None,
+            "task": {
+                "status": task.status,
+                "retry_count": task.retry_count,
+                "error_message": task.error_message,
+                "sent_at": task.sent_at.isoformat() if task and task.sent_at else None,
+                "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
+            } if task else None,
             "return_reason": s.return_reason,
             "returned_at": s.returned_at.isoformat() if s.returned_at else None,
         })

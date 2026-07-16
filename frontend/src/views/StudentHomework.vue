@@ -80,19 +80,13 @@
               <div class="report-summary-row">
                 <div class="report-summary-text">
                   <span class="report-pill">已批改</span>
-                  <span v-if="hasQuestionStats(mySubmissionMap[section.id].report)" class="report-counts">
-                    对{{ mySubmissionMap[section.id].report.correct_count ?? 0 }}题 / 错{{ mySubmissionMap[section.id].report.wrong_count ?? 0 }}题
-                  </span>
                 </div>
+              </div>
+              <div class="report-note">
+                各位同学，平台AI给出的作业得分只是系统识别结果，不作为最终评价。大家不用纠结，核心任务是：对照平台答案详解，把空白题目补做完，在《学习手册》上红笔手写订正。
               </div>
               <div v-if="isReportExpanded(section.id)" class="report-body">
                 <div class="feedback">总评：{{ mySubmissionMap[section.id].report.feedback || '暂无评语' }}</div>
-                <div v-if="getQuestions(mySubmissionMap[section.id].report)" class="questions-detail">
-                  <div v-for="q in getQuestions(mySubmissionMap[section.id].report)" :key="q.index" class="question-item">
-                    <span class="q-index">第{{ q.index }}题</span>
-                    <span class="q-status" :class="q.correct ? 'correct' : 'wrong'">{{ q.correct ? '正确' : '错误' }}</span>
-                  </div>
-                </div>
               </div>
             </div>
             <div v-else-if="mySubmissionMap[section.id].status === 'returned'" class="returned-notice">
@@ -392,108 +386,31 @@ function openQuestionFile(sectionId, file, index = 0) {
   openFileDownload(mediaUrl, downloadName)
 }
 
-async function requestAnswerFileAccessUrl(sectionId, fileIndex) {
-  const res = await api.post('/homework/answer-files/access', {
-    section_id: sectionId,
-    file_index: fileIndex,
-  })
-  return toAbsoluteUrl(res.data.data?.url || '')
-}
-
-async function openStudentAnswerFile(sectionId, file) {
+function openStudentAnswerFile(sectionId, file) {
   const sectionTitle = getSectionTitle(sectionId)
   const total = getAnswerFiles(sectionId).length
   const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
+  const accessUrl = file.url ? toAbsoluteUrl(file.url) : ''
+  if (!accessUrl) return
 
   if (isDingTalk) {
-    try {
-      const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
-      if (!accessUrl) return
-      if (isPdf(file.name)) {
-        previewFile(accessUrl, downloadName)
-      } else if (isImageFile(file.name)) {
-        window.open(accessUrl, '_blank')
-      } else {
-        openFileDownload(accessUrl, downloadName)
-      }
-    } catch (e) {
-      const detail = e.response?.data?.detail || e.message
-      if (e.response?.status === 403) {
-        alert('答案暂不可查看，需要先提交作业并等待批改完成')
-      } else {
-        alert('打开答案附件失败：' + detail)
-      }
-    }
-    return
-  }
-
-  let pdfWindow = null
-  try { pdfWindow = window.open('', '_blank') } catch {}
-  if (!pdfWindow) {
-    try {
-      const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
-      if (accessUrl) window.location.href = accessUrl
-    } catch (e) {
-      const detail = e.response?.data?.detail || e.message
-      if (e.response?.status === 403) {
-        alert('答案暂不可查看，需要先提交作业并等待批改完成')
-      } else {
-        alert('打开答案附件失败：' + detail)
-      }
-    }
-    return
-  }
-
-  pdfWindow.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>加载中...</title><style>body{text-align:center;padding:40px;font-size:14px;color:#888}</style></head><body>加载中...</body></html>')
-
-  try {
-    const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
-    if (!accessUrl) { pdfWindow.close(); return }
-    pdfWindow.location.href = accessUrl
-  } catch (e) {
-    pdfWindow.close()
-    const detail = e.response?.data?.detail || e.message
-    if (e.response?.status === 403) {
-      alert('答案暂不可查看，需要先提交作业并等待批改完成')
+    if (isPdf(file.name)) {
+      previewFile(accessUrl, downloadName)
+    } else if (isImageFile(file.name)) {
+      window.open(accessUrl, '_blank')
     } else {
-      alert('打开答案附件失败：' + detail)
+      openFileDownload(accessUrl, downloadName)
     }
-  }
-}
-
-function getQuestions(report) {
-  if (Array.isArray(report?.questions) && report.questions.length > 0) {
-    return report.questions.map(item => ({
-      index: item.index,
-      correct: item.correct === true,
-    }))
+    return
   }
 
-  if (!report?.detail) return null
-  try {
-    const detail = typeof report.detail === 'string' ? JSON.parse(report.detail) : report.detail
-    if (Array.isArray(detail.questions) && detail.questions.length > 0) return detail.questions
-    if (Array.isArray(detail.details) && detail.details.length > 0) {
-      return detail.details.map(d => ({
-        index: d.qid,
-        correct: d.ok,
-      }))
-    }
-    if (Array.isArray(detail.result?.details) && detail.result.details.length > 0) {
-      return detail.result.details.map(d => ({
-        index: d.question_id ?? d.qid,
-        correct: typeof d.is_correct === 'boolean' ? d.is_correct : d.ok,
-      }))
-    }
-    return null
-  } catch {
-    return null
+  if (isPdf(file.name) || isImageFile(file.name)) {
+    window.open(accessUrl, '_blank')
+    return
   }
+  openFileDownload(accessUrl, downloadName)
 }
 
-function hasQuestionStats(report) {
-  return typeof report?.correct_count === 'number' || typeof report?.wrong_count === 'number'
-}
 </script>
 
 <style scoped>
@@ -783,46 +700,6 @@ function hasQuestionStats(report) {
   margin-top: 6px;
 }
 
-.questions-detail {
-  margin: 12px 0 0;
-  border-top: 1px solid #dfe9e5;
-}
-
-.question-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid #edf2f0;
-}
-
-.question-item:last-child {
-  border-bottom: none;
-}
-
-.q-index {
-  font-weight: 700;
-  color: #40515f;
-}
-
-.q-status {
-  font-size: 12px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 999px;
-}
-
-.q-status.correct {
-  background: #e8f7ef;
-  color: #15803d;
-}
-
-.q-status.wrong {
-  background: #fee8e7;
-  color: #b42318;
-}
-
 .report-summary-row {
   display: flex;
   align-items: center;
@@ -850,14 +727,19 @@ function hasQuestionStats(report) {
   font-weight: 700;
 }
 
-.report-counts {
-  color: #607080;
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .report-body {
   padding-top: 12px;
+}
+
+.report-note {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #cfe1f3;
+  border-radius: 8px;
+  background: #f6fbff;
+  color: #38526b;
+  font-size: 13px;
+  line-height: 1.7;
 }
 
 .feedback {
@@ -979,10 +861,6 @@ function hasQuestionStats(report) {
     grid-template-columns: 1fr;
   }
 
-  .question-item {
-    flex-direction: column;
-    align-items: flex-start;
-  }
 }
 
 .returned-notice {

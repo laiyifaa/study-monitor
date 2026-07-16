@@ -40,6 +40,18 @@
         </div>
       </div>
 
+      <!-- 作业入口 -->
+      <div class="homework-entry" @click="goHomework">
+        <div class="he-main">
+          <span class="he-badge">作业</span>
+          <div class="he-text">
+            <div class="he-title">课程作业</div>
+            <div class="he-subtitle">查看题目、答案和批改反馈</div>
+          </div>
+        </div>
+        <span class="he-arrow">去查看</span>
+      </div>
+
       <!-- 小节列表 -->
       <div class="section-list">
         <div class="sl-header">小节列表</div>
@@ -78,12 +90,6 @@
             <span v-else class="sc-go">去学习</span>
           </div>
         </div>
-      </div>
-
-      <!-- 作业入口 -->
-      <div class="homework-entry" @click="goHomework">
-        <span>课程作业</span>
-        <span class="he-arrow">&rarr;</span>
       </div>
     </template>
 
@@ -265,12 +271,57 @@ onMounted(async () => {
 
 /* 作业入口 */
 .homework-entry {
-  background: #fff; border-radius: 8px; padding: 14px; margin-bottom: 16px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04); display: flex;
-  justify-content: space-between; cursor: pointer;
+  background: #f6fbff;
+  border: 1px solid #cfe5f7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
 }
-.homework-entry:active { background: #f9f9f9; }
-.he-arrow { color: #ccc; }
+.homework-entry:active { background: #eef7ff; }
+.he-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.he-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #1890ff;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+.he-text {
+  min-width: 0;
+}
+.he-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #17324d;
+}
+.he-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #607080;
+}
+.he-arrow {
+  flex-shrink: 0;
+  color: #1890ff;
+  font-size: 13px;
+  font-weight: 600;
+}
 
 /* 底部导航 */
 .bottom-nav {
@@ -295,5 +346,10 @@ onMounted(async () => {
   .sc-meta { flex-wrap: wrap; gap: 6px; }
   .sl-header { font-size: 14px; }
   .homework-entry { padding: 12px; }
+  .he-main { gap: 10px; }
+  .he-badge { min-width: 38px; height: 26px; padding: 0 8px; }
+  .he-title { font-size: 14px; }
+  .he-subtitle { font-size: 11px; }
+  .he-arrow { font-size: 12px; }
 }
 </style>

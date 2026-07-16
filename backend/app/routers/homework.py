@@ -403,55 +403,6 @@ def _load_review_questions(raw: str | None) -> list:
     return value if isinstance(value, list) else []
 
 
-def _student_questions_from_detail(detail: dict) -> list[dict]:
-    questions: list[dict] = []
-
-    raw_questions = detail.get("questions")
-    if isinstance(raw_questions, list):
-        for item in raw_questions:
-            if not isinstance(item, dict):
-                continue
-            index = item.get("index") or item.get("qid") or item.get("question_id") or item.get("no") or item.get("key")
-            correct = item.get("correct")
-            if correct is None:
-                correct = item.get("ok")
-            if correct is None:
-                correct = item.get("is_correct")
-            if index in {None, ""} or correct is None:
-                continue
-            questions.append({
-                "index": str(index),
-                "correct": bool(correct),
-            })
-        if questions:
-            return questions
-
-    raw_details = detail.get("details")
-    if not isinstance(raw_details, list) or not raw_details:
-        nested = detail.get("result")
-        if isinstance(nested, dict):
-            raw_details = nested.get("details")
-    if not isinstance(raw_details, list):
-        return questions
-
-    for item in raw_details:
-        if not isinstance(item, dict):
-            continue
-        index = item.get("index") or item.get("qid") or item.get("question_id") or item.get("no") or item.get("key")
-        correct = item.get("correct")
-        if correct is None:
-            correct = item.get("ok")
-        if correct is None:
-            correct = item.get("is_correct")
-        if index in {None, ""} or correct is None:
-            continue
-        questions.append({
-            "index": str(index),
-            "correct": bool(correct),
-        })
-    return questions
-
-
 def _report_to_staff_summary(report: GradingReport) -> dict:
     return {
         "score": report.score,
@@ -467,13 +418,9 @@ def _report_to_staff_summary(report: GradingReport) -> dict:
 
 
 def _report_to_student_summary(report: GradingReport) -> dict:
-    detail = _load_report_detail(report)
     return {
         "status": report.status,
-        "correct_count": report.correct_count,
-        "wrong_count": report.wrong_count,
         "feedback": report.feedback,
-        "questions": _student_questions_from_detail(detail),
     }
 
 
@@ -511,6 +458,15 @@ def _resolve_answer_file_path(file_url: str) -> Path | None:
     return None
 
 
+def _to_public_file_url(file_url: str) -> str:
+    if file_url.startswith('/uploads/'):
+        return f"/api/uploads/{file_url[len('/uploads/'):]}"
+    elif file_url.startswith('uploads/'):
+        return f"/api/uploads/{file_url[len('uploads/'):]}"
+    else:
+        return f"/api/uploads/{file_url.lstrip('/')}"
+
+
 def _answer_files_to_student_entries(files: list[str]) -> list[dict]:
     entries = []
     for index, file_url in enumerate(files):
@@ -518,6 +474,7 @@ def _answer_files_to_student_entries(files: list[str]) -> list[dict]:
         entries.append({
             "index": index,
             "name": os.path.basename(normalized) or f"answer-{index + 1}",
+            "url": _to_public_file_url(file_url or ""),
         })
     return entries
 
@@ -899,14 +856,7 @@ async def create_answer_file_access_url(
     if not _resolve_answer_file_path(file_url):
         raise HTTPException(status_code=404, detail="答案附件不存在")
 
-    # 转为直接文件 URL，与题目 PDF 格式一致
-    if file_url.startswith('/uploads/'):
-        public_url = f"/api/uploads/{file_url[len('/uploads/'):]}"
-    elif file_url.startswith('uploads/'):
-        public_url = f"/api/uploads/{file_url[len('uploads/'):]}"
-    else:
-        public_url = f"/api/uploads/{file_url.lstrip('/')}"
-    return {"code": 0, "data": {"url": public_url}}
+    return {"code": 0, "data": {"url": _to_public_file_url(file_url)}}
 
 
 @router.post("/answer/parse")
@@ -978,6 +928,10 @@ async def parse_assignment_answer_file(
 @router.get("/assignments/{section_id}/submissions")
 async def list_submissions(
     section_id: int,
+    search: Optional[str] = Query(None, description="按学生姓名搜索"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    late_only: bool = Query(False, description="仅返回迟交提交"),
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -987,13 +941,37 @@ async def list_submissions(
     assignment_result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
     assignment = assignment_result.scalar_one_or_none()
     if not assignment:
-        return {"code": 0, "data": []}
+        return {"code": 0, "data": {"items": [], "total": 0, "page": page, "page_size": page_size}}
 
-    result = await db.execute(
+    search_text = (search or "").strip()
+    submission_query = (
         select(Submission)
+        .join(User, Submission.user_id == User.id)
         .where(Submission.assignment_id == assignment.id)
         .where(Submission.is_latest == True)
-        .order_by(Submission.submitted_at.desc())
+    )
+    count_query = (
+        select(func.count())
+        .select_from(Submission)
+        .join(User, Submission.user_id == User.id)
+        .where(Submission.assignment_id == assignment.id)
+        .where(Submission.is_latest == True)
+    )
+
+    if late_only:
+        submission_query = submission_query.where(Submission.is_late == True)
+        count_query = count_query.where(Submission.is_late == True)
+    if search_text:
+        name_filter = User.name.like(f"%{search_text}%")
+        submission_query = submission_query.where(name_filter)
+        count_query = count_query.where(name_filter)
+
+    total = int((await db.scalar(count_query)) or 0)
+    result = await db.execute(
+        submission_query
+        .order_by(Submission.submitted_at.desc(), Submission.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     submissions = result.scalars().all()
 
@@ -1046,7 +1024,7 @@ async def list_submissions(
             } if task else None,
         })
 
-    return {"code": 0, "data": data}
+    return {"code": 0, "data": {"items": data, "total": total, "page": page, "page_size": page_size}}
 
 
 @router.get("/assignments/{section_id}/student-submissions")
@@ -1131,6 +1109,9 @@ async def list_student_submissions(
 @router.get("/assignments/{section_id}/submissions-summary")
 async def list_submissions_summary(
     section_id: int,
+    search: Optional[str] = Query(None, description="按学生姓名搜索未交名单"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1152,8 +1133,10 @@ async def list_submissions_summary(
             "code": 0,
             "data": {
                 "assignment": None,
-                "submissions": [],
                 "unsubmitted_students": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
                 "summary": {
                     "total_students": 0,
                     "submitted_count": 0,
@@ -1164,74 +1147,56 @@ async def list_submissions_summary(
             },
         }
 
-    submission_result = await db.execute(
-        select(Submission)
+    search_text = (search or "").strip()
+    submitted_student_rows = await db.execute(
+        select(Submission.user_id)
+        .join(User, Submission.user_id == User.id)
         .where(Submission.assignment_id == assignment.id)
         .where(Submission.is_latest == True)
-        .order_by(Submission.submitted_at.desc())
+        .where(User.role == "student")
     )
-    submissions = submission_result.scalars().all()
+    submitted_student_ids = set(submitted_student_rows.scalars().all())
 
-    submission_ids = [s.id for s in submissions]
-    student_ids = [s.user_id for s in submissions]
+    total_students = int((await db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.role == "student")
+    )) or 0)
 
-    user_rows = await db.execute(select(User).where(User.id.in_(student_ids))) if student_ids else []
-    users = {u.id: u for u in user_rows.scalars().all()} if student_ids else {}
+    status_rows = await db.execute(
+        select(Submission.status, func.count())
+        .join(User, Submission.user_id == User.id)
+        .where(Submission.assignment_id == assignment.id)
+        .where(Submission.is_latest == True)
+        .where(User.role == "student")
+        .group_by(Submission.status)
+    )
+    status_counts = {status: count for status, count in status_rows.all()}
 
-    report_rows = await db.execute(
-        select(GradingReport).where(GradingReport.submission_id.in_(submission_ids))
-    ) if submission_ids else []
-    reports = {r.submission_id: r for r in report_rows.scalars().all()} if submission_ids else {}
+    student_query = select(User).where(User.role == "student")
+    student_count_query = select(func.count()).select_from(User).where(User.role == "student")
+    if submitted_student_ids:
+        student_query = student_query.where(User.id.notin_(submitted_student_ids))
+        student_count_query = student_count_query.where(User.id.notin_(submitted_student_ids))
+    if search_text:
+        student_query = student_query.where(User.name.like(f"%{search_text}%"))
+        student_count_query = student_count_query.where(User.name.like(f"%{search_text}%"))
 
-    task_rows = await db.execute(
-        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids))
-    ) if submission_ids else []
-    tasks = {t.submission_id: t for t in task_rows.scalars().all()} if submission_ids else {}
-
-    data = []
-    for s in submissions:
-        user = users.get(s.user_id)
-        report = reports.get(s.id)
-        task = tasks.get(s.id)
-        data.append({
-            "id": s.id,
-            "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
-            "images": _load_url_list(s.images),
-            "status": s.status,
-            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
-            "report": {
-                "score": report.score,
-                "full_score": report.full_score,
-                "status": report.status,
-                "accuracy": report.accuracy,
-                "correct_count": report.correct_count,
-                "wrong_count": report.wrong_count,
-                "feedback": report.feedback,
-                "generated_by": report.generated_by,
-                "created_at": report.created_at.isoformat() if report.created_at else None,
-            } if report else None,
-            "task": {
-                "status": task.status,
-                "retry_count": task.retry_count,
-                "error_message": task.error_message,
-                "sent_at": task.sent_at.isoformat() if task and task.sent_at else None,
-                "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
-            } if task else None,
-        })
-
-    all_students_result = await db.execute(select(User).where(User.role == "student"))
-    all_students = all_students_result.scalars().all()
-    all_student_ids = {u.id for u in all_students}
-
-    submitted_student_ids = set(student_ids)
+    total = int((await db.scalar(student_count_query)) or 0)
+    student_rows = await db.execute(
+        student_query
+        .order_by(User.class_name, User.name, User.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     unsubmitted_students = [
         {"id": u.id, "name": u.name, "class_name": u.class_name}
-        for u in all_students
-        if u.id not in submitted_student_ids
+        for u in student_rows.scalars().all()
     ]
 
-    pending_count = sum(1 for s in submissions if s.status == "pending")
-    graded_count = sum(1 for s in submissions if s.status == "graded")
+    pending_count = int(status_counts.get("pending", 0) or 0)
+    graded_count = int(status_counts.get("graded", 0) or 0)
+    submitted_count = len(submitted_student_ids)
 
     return {
         "code": 0,
@@ -1242,15 +1207,14 @@ async def list_submissions_summary(
                 "grading_status": assignment.grading_status,
                 "grading_mode": assignment.grading_mode,
             },
-            "submissions": data,
-            "unsubmitted_students": sorted(
-                unsubmitted_students,
-                key=lambda s: ((s["class_name"] or ""), (s["name"] or "")),
-            ),
+            "unsubmitted_students": unsubmitted_students,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
             "summary": {
-                "total_students": len(all_students),
-                "submitted_count": len(submitted_student_ids & all_student_ids),
-                "unsubmitted_count": max(len(all_student_ids) - len(submitted_student_ids), 0),
+                "total_students": total_students,
+                "submitted_count": submitted_count,
+                "unsubmitted_count": max(total_students - submitted_count, 0),
                 "pending_count": pending_count,
                 "graded_count": graded_count,
             },

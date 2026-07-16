@@ -51,6 +51,20 @@
       <router-link :to="`/feedback/${sectionId}`" class="link">课程评价</router-link>
     </div>
 
+    <!-- ==================== 作业入口 ==================== -->
+    <div class="homework-entry">
+      <router-link :to="`/student-homework/${courseId}`" class="hw-btn">
+        <div class="hw-main">
+          <span class="hw-badge">作业</span>
+          <div class="hw-text">
+            <span class="hw-title">课程作业</span>
+            <span class="hw-subtitle">查看题目、答案和批改反馈</span>
+          </div>
+        </div>
+        <span class="hw-arrow">去查看</span>
+      </router-link>
+    </div>
+
     <!-- ==================== 未开播提示（v4.0） ==================== -->
     <!-- 学生：锁屏不可观看；教师/管理员：仅提示条，可正常查看 -->
     <div v-if="sectionLocked && !isTeacherOrAdmin" class="locked-overlay">
@@ -106,13 +120,6 @@
       <p>1. 视频播放时自动计时</p>
       <p>2. 切换到其他应用将暂停计时</p>
       <p>3. 暂停视频时立即停止计时</p>
-    </div>
-
-    <!-- ==================== 作业入口 ==================== -->
-    <div class="homework-entry">
-      <router-link :to="`/student-homework/${courseId}`" class="hw-btn">
-        查看课程作业 &rarr;
-      </router-link>
     </div>
 
     <!-- ==================== 评价本课入口 ==================== -->
@@ -441,24 +448,67 @@ watch(lastVideoProgress, (val) => {
 /* 作业入口按钮 */
 .homework-entry {
   padding: 16px;
-  text-align: center;
 }
 .hw-btn {
-  display: inline-block;
-  padding: 10px 28px;
-  background: #1890ff;
-  color: #fff;
-  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  background: #f6fbff;
+  color: #17324d;
+  border: 1px solid #cfe5f7;
+  border-radius: 10px;
   text-decoration: none;
-  font-size: 14px;
-  font-weight: 500;
-  transition: background 0.2s;
+  transition: background 0.2s, border-color 0.2s;
 }
 .hw-btn:hover {
-  background: #096dd9;
+  background: #eef7ff;
+  border-color: #91caff;
 }
 .hw-btn:active {
-  background: #0050b3;
+  background: #e6f4ff;
+}
+.hw-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.hw-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #1890ff;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+.hw-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hw-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #17324d;
+}
+.hw-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #607080;
+}
+.hw-arrow {
+  flex-shrink: 0;
+  color: #1890ff;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 /* 评价本课入口按钮 */
@@ -558,7 +608,12 @@ watch(lastVideoProgress, (val) => {
 
   /* 作业入口 */
   .homework-entry { padding: 12px; }
-  .hw-btn { padding: 8px 20px; font-size: 13px; }
+  .hw-btn { padding: 12px; gap: 10px; }
+  .hw-main { gap: 10px; }
+  .hw-badge { min-width: 38px; height: 26px; padding: 0 8px; }
+  .hw-title { font-size: 14px; }
+  .hw-subtitle { font-size: 11px; }
+  .hw-arrow { font-size: 12px; }
 
   /* 评价入口 */
   .feedback-entry { padding: 0 12px 12px; }

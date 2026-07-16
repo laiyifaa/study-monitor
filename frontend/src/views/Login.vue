@@ -155,6 +155,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '../utils/auth'
 import * as dd from 'dingtalk-jsapi'
 import api from '../utils/api'
+import { collectDeviceInfo } from '../utils/deviceInfo'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -231,6 +232,7 @@ async function handleLogin() {
     const res = await api.post('/auth/login', {
       username: username.value.trim(),
       password: password.value,
+      device_info: collectDeviceInfo(),
     })
 
     if (res.data.code === 0) {

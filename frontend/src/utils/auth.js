@@ -53,6 +53,7 @@
 import { ref, computed } from 'vue'
 import * as dd from 'dingtalk-jsapi'   // 钉钉 JSAPI：提供运行环境检测和免登能力
 import api from './api'                 // 【交互】用于向后端发送 /auth/dingtalk 请求
+import { collectDeviceInfo } from './deviceInfo'  // 设备信息采集，登录请求时一并上报
 
 /**
  * 认证状态（模块级闭包变量，全局共享）
@@ -172,7 +173,10 @@ export function useAuthStore() {
       })
 
       // 【交互】通过 api.js 向后端发送 authCode 换取 JWT
-      const resp = await api.post('/auth/dingtalk', { auth_code: authCode })
+      const resp = await api.post('/auth/dingtalk', {
+        auth_code: authCode,
+        device_info: collectDeviceInfo(),
+      })
       if (resp.data.code === 0) {
         // 后端返回 code=0 表示成功，data 中包含 token 和 user
         bindInfo.value = null
@@ -207,6 +211,7 @@ export function useAuthStore() {
         dingtalk_name: bindInfo.value.dingtalk_name || '',
         dingtalk_mobile: bindInfo.value.dingtalk_mobile || '',
         dingtalk_avatar: bindInfo.value.dingtalk_avatar || '',
+        device_info: collectDeviceInfo(),
       })
       if (resp.data.code === 0) {
         bindInfo.value = null

@@ -1886,6 +1886,7 @@ function stopRegradePolling() {
 }
 
 function canRegradeSubmission(submission) {
+  if (submission?.task?.status === 'failed') return true
   const generatedBy = String(submission?.report?.generated_by || '').toLowerCase()
   if (!submission?.report) return false
   return !generatedBy.includes('teacher')
@@ -1931,7 +1932,7 @@ async function regradeSubmission(submission) {
   if (!assignment) return
 
   if (!canRegradeSubmission(submission)) {
-    alert('该提交已被人工修改，不可重新智能批改')
+    alert('当前提交不支持重新智能批改')
     return
   }
 

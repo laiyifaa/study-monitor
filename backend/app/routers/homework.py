@@ -40,7 +40,6 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Request, Query
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,7 +51,7 @@ from app.models.models import Assignment, Submission, GradingReport, GradingTask
 from app.services.agent_caller import parse_answer_file_with_agent, call_grading_agent
 from app.services.image_stitcher import stitch_images, image_url_to_local_path
 from app.utils.datetime_helper import now_cn_naive, parse_cn_datetime_input
-from app.utils.file_access import create_answer_file_access_token, decode_answer_file_access_token
+
 from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/homework", tags=["作业管理"])
@@ -880,11 +879,9 @@ async def create_answer_file_access_url(
 ):
     file_url = ""
     section_id = req.section_id
-    token_section_id = section_id
 
     if current_user.role in ["teacher", "admin"] and req.file_url:
         file_url = req.file_url
-        token_section_id = None
     else:
         if section_id is None or req.file_index is None:
             raise HTTPException(status_code=400, detail="缺少答案附件定位信息")
@@ -902,50 +899,14 @@ async def create_answer_file_access_url(
     if not _resolve_answer_file_path(file_url):
         raise HTTPException(status_code=404, detail="答案附件不存在")
 
-    token = create_answer_file_access_token({
-        "file_url": file_url,
-        "section_id": token_section_id,
-        "user_id": current_user.id,
-        "role": current_user.role,
-    })
-    return {"code": 0, "data": {"url": f"/api/homework/answer-files/download?token={token}"}}
-
-
-@router.get("/answer-files/download")
-async def download_answer_file(
-    token: str,
-    download: bool = False,
-    db: AsyncSession = Depends(get_db),
-):
-    payload = decode_answer_file_access_token(token)
-    file_url = str(payload.get("file_url") or "").strip()
-    section_id = payload.get("section_id")
-    user_id = int(payload.get("user_id") or 0)
-    role = str(payload.get("role") or "")
-
-    if not file_url or role not in {"teacher", "admin", "student"}:
-        raise HTTPException(status_code=401, detail="答案附件令牌无效")
-
-    if role == "student":
-        if section_id is None:
-            raise HTTPException(status_code=401, detail="答案附件令牌缺少作业信息")
-        assignment = await _ensure_assignment_contains_answer_file(int(section_id), file_url, db)
-        if not await _student_can_view_answer_files(assignment.id, user_id, db):
-            raise HTTPException(status_code=403, detail="当前不可查看答案附件")
-
-    elif section_id is not None:
-        await _ensure_assignment_contains_answer_file(int(section_id), file_url, db)
-
-    file_path = _resolve_answer_file_path(file_url)
-    if not file_path:
-        raise HTTPException(status_code=404, detail="答案附件不存在")
-
-    headers = {}
-    if download:
-        headers["Content-Disposition"] = f'attachment; filename="{os.path.basename(file_path)}"'
-        headers["Content-Type"] = "application/octet-stream"
-    mt = "application/pdf" if isinstance(file_path, Path) and file_path.suffix.lower() == ".pdf" else None
-    return FileResponse(file_path, headers=headers, media_type=mt)
+    # 转为直接文件 URL，与题目 PDF 格式一致
+    if file_url.startswith('/uploads/'):
+        public_url = f"/api/uploads/{file_url[len('/uploads/'):]}"
+    elif file_url.startswith('uploads/'):
+        public_url = f"/api/uploads/{file_url[len('uploads/'):]}"
+    else:
+        public_url = f"/api/uploads/{file_url.lstrip('/')}"
+    return {"code": 0, "data": {"url": public_url}}
 
 
 @router.post("/answer/parse")

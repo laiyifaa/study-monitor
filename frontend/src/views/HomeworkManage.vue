@@ -61,7 +61,7 @@
             <button class="btn-sm answer-action" @click="openAnswerForSection(section)">答案管理</button>
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
             <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
-            <button class="btn-sm" @click="openUnsubmittedModal">未交名单</button>
+            <button class="btn-sm" @click="openUnsubmittedModal(section.id)">未交名单</button>
             <button class="btn-sm" @click="openLateModal(section.id)">迟交名单</button>
             <button
               v-if="getAssignment(section.id).status === 'published' && getAssignment(section.id).grading_mode !== 'manual'"
@@ -371,10 +371,10 @@
             </div>
             <div v-if="s.report" class="report-preview">
               <div class="score">
-                分数：{{ s.report.score }}<span v-if="s.report.full_score"> / {{ s.report.full_score }}</span>
+                分数：{{ s.report.score ?? '--' }}<span v-if="s.report.full_score"> / {{ s.report.full_score }}</span>
                 <span v-if="s.report.status" class="status-tag" :class="s.report.status">{{ reportStatusText(s.report.status) }}</span>
               </div>
-              <div v-if="s.report.accuracy" class="report-meta">正确率：{{ (s.report.accuracy * 100).toFixed(0) }}% &nbsp; 对{{ s.report.correct_count }} / 错{{ s.report.wrong_count }}</div>
+              <div v-if="s.report.accuracy != null" class="report-meta">正确率：{{ formatAccuracy(s.report.accuracy) }} &nbsp; 对{{ s.report.correct_count ?? 0 }} / 错{{ s.report.wrong_count ?? 0 }}</div>
               <div class="feedback">{{ s.report.feedback }}</div>
             </div>
             <div v-if="s.task && s.task.status === 'failed'" class="task-error">
@@ -493,7 +493,7 @@
 
     <div v-if="showUnsubmittedModal" class="modal-overlay" @click.self="showUnsubmittedModal = false">
       <div class="modal modal-lg">
-        <h3>未交名单</h3>
+        <h3>未交名单{{ currentViewSectionId ? ` - ${getSectionTitle(currentViewSectionId)}` : '' }}</h3>
         <div v-if="unsubmittedStudents.length === 0" class="empty">暂无未交学生</div>
         <div v-else class="submissions-list">
           <div v-for="u in unsubmittedStudents" :key="u.id" class="submission-item">
@@ -1192,9 +1192,10 @@ async function loadSectionSubmissions(sectionId) {
   submissions.value = res.data.data || []
 }
 
-async function openUnsubmittedModal() {
+async function openUnsubmittedModal(sectionId) {
   try {
-    const res = await api.get(`/homework/assignments/${courseId}/submissions-summary`)
+    currentViewSectionId.value = sectionId
+    const res = await api.get(`/homework/assignments/${sectionId}/submissions-summary`)
     unsubmittedStudents.value = res.data.data?.unsubmitted_students || []
   } catch {
     unsubmittedStudents.value = []
@@ -1456,7 +1457,7 @@ async function submitGrade() {
       feedback: gradeForm.value.feedback,
     })
     showGradeModal.value = false
-    if (currentViewSectionId.value) await loadSubmissions(currentViewSectionId.value)
+    if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
   } catch (e) {
     alert('批改失败：' + (e.response?.data?.detail || e.message))
   } finally {
@@ -1553,7 +1554,11 @@ async function pollRegradeStatus(submissionId, sectionId) {
       regradingSubmissionId.value = null
       await loadSubmissions(sectionId)
       if (reportSubmission.value?.id === submissionId) {
-        await openReportModal({ id: submissionId })
+        const fullSubmission = submissions.value.find(s => s.id === submissionId)
+        if (fullSubmission) {
+          reportSubmission.value = fullSubmission
+        }
+        await openReportModal(fullSubmission || { id: submissionId })
       }
     }
   } catch (e) {
@@ -1573,7 +1578,7 @@ async function pollGradingStatus(assignmentId) {
       triggeringSection.value = null
       triggerStatus.value = null
       await loadData()
-      if (currentViewSectionId.value) await loadSubmissions(currentViewSectionId.value)
+      if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
     }
   } catch (e) {
     console.error('轮询失败', e)

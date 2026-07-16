@@ -117,8 +117,8 @@ async def start_session(req: StartRequest, user: User = Depends(get_current_user
         course_id=req.course_id,
         section_id=req.section_id,  # v3.0: 关联到小节
         session_id=session_id,
-        start_time=datetime.now(),
-        last_heartbeat=datetime.now(),
+        start_time=now_cn_naive(),
+        last_heartbeat=now_cn_naive(),
         effective_seconds=0,
         video_progress=0,  # 从0开始，避免历史进度导致"死区"（新会话中视频从头播放时增量永远为0）
         is_active=True,
@@ -229,7 +229,7 @@ async def end_session(req: BeatRequest, user: User = Depends(get_current_user), 
             action="end",  # 显式标记为结束动作，Engine可做特殊处理
         )
         session.is_active = False  # 标记会话已结束
-        session.end_time = datetime.now()  # 记录实际结束时间
+        session.end_time = now_cn_naive()  # 记录实际结束时间
         await db.commit()
 
     return {"code": 0, "data": {"status": "ok"}}

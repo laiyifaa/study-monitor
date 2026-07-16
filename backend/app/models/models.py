@@ -313,17 +313,20 @@ class Submission(Base):
     作业提交模型
 
     用途：学生提交的作业，包含上传的图片列表。支持多次提交（截止前可修改）。
+    教师可打回作业，学生重新提交后产生新版本。
 
     字段说明：
         id              — 自增主键
         assignment_id   — 所属作业 ID，外键关联 assignments 表
         user_id         — 提交的学生 ID，外键关联 users 表
         images          — 图片 URL 数组（JSON 格式）
-        status          — 提交状态：pending=待批改/graded=已批改
+        status          — 提交状态：pending=待批改/graded=已批改/returned=已打回
         is_late         — 是否迟交：截止时间后提交标记为 True，仍可提交但记录迟交
         version         — 提交版本号（1, 2, 3...）
         is_latest       — 是否为最新版本
         submitted_at    — 提交时间
+        return_reason   — 教师打回原因（仅在 status=returned 时有值）
+        returned_at     — 打回时间
     """
     __tablename__ = "submissions"
 
@@ -331,12 +334,14 @@ class Submission(Base):
     assignment_id = Column(BigInteger, ForeignKey("assignments.id"), nullable=False, index=True)
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     images = Column(Text, default="[]", comment="图片URL数组(JSON)")
-    status = Column(Enum("pending", "graded"), default="pending", nullable=False)
+    status = Column(Enum("pending", "graded", "returned"), default="pending", nullable=False)
     # 是否迟交：截止时间后仍可提交，但标记为迟交，方便教师统计
     is_late = Column(Boolean, default=False, comment="是否迟交（截止时间后提交）")
     version = Column(Integer, default=1, comment="提交版本号")
     is_latest = Column(Boolean, default=True, index=True, comment="是否最新版本")
     submitted_at = Column(DateTime, server_default=func.now())
+    return_reason = Column(Text, default=None, nullable=True, comment="打回原因")
+    returned_at = Column(DateTime, default=None, nullable=True, comment="打回时间")
 
 
 class GradingReport(Base):

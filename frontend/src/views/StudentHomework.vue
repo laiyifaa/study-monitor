@@ -49,7 +49,7 @@
 
           <div v-if="assignmentMap[section.id].status === 'published'" class="submit-section">
             <button class="btn-primary" :disabled="isSubmissionLocked(section.id)" @click="openSubmitModal(section.id)">
-              {{ isSubmissionLocked(section.id) ? '已批改，不可再提交' : (mySubmissionMap[section.id] ? '修改提交' : '提交作业') }}
+              {{ submitButtonText(section.id) }}
             </button>
           </div>
           </div>
@@ -95,6 +95,13 @@
                 </div>
               </div>
             </div>
+            <div v-else-if="mySubmissionMap[section.id].status === 'returned'" class="returned-notice">
+              <div class="returned-header">已被打回</div>
+              <div v-if="mySubmissionMap[section.id].return_reason" class="returned-reason">
+                原因：{{ mySubmissionMap[section.id].return_reason }}
+              </div>
+              <div class="returned-hint">请修改后重新提交</div>
+            </div>
             <div v-else class="pending">等待批改中...</div>
           </div>
           <div v-else class="pending">暂未提交作业</div>
@@ -105,6 +112,10 @@
     <div v-if="showSubmitModal" class="modal-overlay" @click.self="closeSubmitModal">
       <div class="modal">
         <h3>提交作业</h3>
+        <div v-if="isResubmitReturned" class="returned-warning">
+          <strong>作业已被打回，请根据反馈修改后重新提交</strong>
+          <span v-if="returnedReasonText">打回原因：{{ returnedReasonText }}</span>
+        </div>
         <div class="form-group">
           <label>上传作业图片</label>
           <input type="file" multiple accept="image/*" @change="handleFileSelect" />
@@ -279,8 +290,29 @@ function isOverdue(assignment) {
 }
 
 function isSubmissionLocked(sectionId) {
-  return Boolean(mySubmissionMap.value[sectionId]?.report)
+  const sub = mySubmissionMap.value[sectionId]
+  if (!sub) return false
+  if (sub.status === 'returned') return false
+  return Boolean(sub.report)
 }
+
+function submitButtonText(sectionId) {
+  const sub = mySubmissionMap.value[sectionId]
+  if (!sub) return '提交作业'
+  if (sub.status === 'returned') return '修改后重新提交'
+  if (sub.report) return '已批改，不可再提交'
+  return '修改提交'
+}
+
+const isResubmitReturned = computed(() => {
+  if (!currentSectionId.value) return false
+  return mySubmissionMap.value[currentSectionId.value]?.status === 'returned'
+})
+
+const returnedReasonText = computed(() => {
+  if (!currentSectionId.value) return ''
+  return mySubmissionMap.value[currentSectionId.value]?.return_reason || ''
+})
 
 function isReportExpanded(sectionId) {
   return Boolean(expandedReports.value[sectionId])
@@ -345,7 +377,7 @@ function openQuestionFile(sectionId, file, index = 0) {
 
   if (isDingTalk) {
     if (isPdf(file)) {
-      window.open(getAbsoluteMediaUrl(file), '_blank')
+      previewFile(getAbsoluteMediaUrl(file), downloadName)
     } else {
       openFileDownload(getAbsoluteMediaUrl(file), downloadName)
     }
@@ -369,30 +401,63 @@ async function requestAnswerFileAccessUrl(sectionId, fileIndex) {
 }
 
 async function openStudentAnswerFile(sectionId, file) {
-  try {
-    const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
-    if (!accessUrl) return
-    const sectionTitle = getSectionTitle(sectionId)
-    const total = getAnswerFiles(sectionId).length
-    const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
+  const sectionTitle = getSectionTitle(sectionId)
+  const total = getAnswerFiles(sectionId).length
+  const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
 
-    if (isDingTalk) {
-      if (isPdf(file.name) || isImageFile(file.name)) {
+  if (isDingTalk) {
+    try {
+      const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
+      if (!accessUrl) return
+      if (isPdf(file.name)) {
+        previewFile(accessUrl, downloadName)
+      } else if (isImageFile(file.name)) {
         window.open(accessUrl, '_blank')
       } else {
         openFileDownload(accessUrl, downloadName)
       }
-      return
+    } catch (e) {
+      const detail = e.response?.data?.detail || e.message
+      if (e.response?.status === 403) {
+        alert('答案暂不可查看，需要先提交作业并等待批改完成')
+      } else {
+        alert('打开答案附件失败：' + detail)
+      }
     }
+    return
+  }
 
-    if (isPdf(file.name) || isImageFile(file.name)) {
-      window.open(accessUrl, '_blank')
-      return
+  let pdfWindow = null
+  try { pdfWindow = window.open('', '_blank') } catch {}
+  if (!pdfWindow) {
+    try {
+      const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
+      if (accessUrl) window.location.href = accessUrl
+    } catch (e) {
+      const detail = e.response?.data?.detail || e.message
+      if (e.response?.status === 403) {
+        alert('答案暂不可查看，需要先提交作业并等待批改完成')
+      } else {
+        alert('打开答案附件失败：' + detail)
+      }
     }
+    return
+  }
 
-    openFileDownload(accessUrl, downloadName)
+  pdfWindow.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>加载中...</title><style>body{text-align:center;padding:40px;font-size:14px;color:#888}</style></head><body>加载中...</body></html>')
+
+  try {
+    const accessUrl = await requestAnswerFileAccessUrl(sectionId, file.index)
+    if (!accessUrl) { pdfWindow.close(); return }
+    pdfWindow.location.href = accessUrl
   } catch (e) {
-    alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
+    pdfWindow.close()
+    const detail = e.response?.data?.detail || e.message
+    if (e.response?.status === 403) {
+      alert('答案暂不可查看，需要先提交作业并等待批改完成')
+    } else {
+      alert('打开答案附件失败：' + detail)
+    }
   }
 }
 
@@ -918,5 +983,41 @@ function hasQuestionStats(report) {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.returned-notice {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 8px;
+}
+.returned-header {
+  font-weight: 700;
+  color: #d46b08;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.returned-reason {
+  color: #d46b08;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.returned-hint {
+  color: #999;
+  font-size: 12px;
+}
+.returned-warning {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #d46b08;
+}
+.returned-warning strong {
+  display: block;
+  margin-bottom: 4px;
 }
 </style>

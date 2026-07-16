@@ -154,6 +154,12 @@ const routes = [
     meta: { title: '课程评价概览', role: 'teacher' },
   },
   {
+    path: '/grading-overview/:courseId?',
+    name: 'GradingOverview',
+    component: () => import('../views/GradingOverview.vue'),
+    meta: { title: '批改概览', role: 'teacher' },
+  },
+  {
     // v4.0: 签到日历
     path: '/checkin',
     name: 'CheckInCalendar',

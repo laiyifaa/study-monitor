@@ -61,6 +61,7 @@
             <button class="btn-sm answer-action" @click="openAnswerForSection(section)">答案管理</button>
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
             <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
+            <button class="btn-sm" @click="openStudentLookup(section.id)">查询学生</button>
             <button class="btn-sm" @click="openUnsubmittedModal(section.id)">未交名单</button>
             <button class="btn-sm" @click="openLateModal(section.id)">迟交名单</button>
             <button
@@ -361,8 +362,8 @@
             <div class="submission-header">
               <span class="student-name">{{ s.user?.name }}</span>
               <div class="status-group">
-                <span v-if="s.is_late" class="status-badge late">迟交</span>
-                <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
+                <span v-if="s.is_late" class="status-badge late">迟交<button class="unlate-btn" title="取消迟交标签" @click.stop="unlateSubmission(s)">✕</button></span>
+                <span class="status-badge" :class="s.status">{{ submissionStatusText(s) }}</span>
                 <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
               </div>
             </div>
@@ -377,6 +378,9 @@
               <div v-if="s.report.accuracy != null" class="report-meta">正确率：{{ formatAccuracy(s.report.accuracy) }} &nbsp; 对{{ s.report.correct_count ?? 0 }} / 错{{ s.report.wrong_count ?? 0 }}</div>
               <div class="feedback">{{ s.report.feedback }}</div>
             </div>
+            <div v-if="s.status === 'returned' && s.return_reason" class="return-reason">
+              <span class="return-label">打回原因：</span>{{ s.return_reason }}
+            </div>
             <div v-if="s.task && s.task.status === 'failed'" class="task-error">
               <span class="error-label">批改失败：</span>{{ s.task.error_message || '未知错误' }}
               <span v-if="s.task.retry_count > 0" class="retry-info">(已重试 {{ s.task.retry_count }} 次)</span>
@@ -389,6 +393,7 @@
                 {{ regradingSubmissionId === s.id ? '重批中...' : '重新智能批改' }}
               </button>
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
+              <button v-if="s.status !== 'returned'" class="btn-sm danger" @click="openReturnModal(s)">打回重交</button>
             </div>
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
           </div>
@@ -534,6 +539,71 @@
       </div>
     </div>
 
+    <div v-if="showStudentLookupModal" class="modal-overlay" @click.self="showStudentLookupModal = false">
+      <div class="modal modal-lg">
+        <h3>查询学生 - {{ getSectionTitle(studentLookupSectionId) }}</h3>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <input v-model="studentSearchQuery" type="text" placeholder="输入学生姓名或账号搜索..." @input="debouncedSearchStudent" />
+          <span v-if="searchingStudent" class="loading" style="display:inline;margin-left:8px;">搜索中...</span>
+        </div>
+        <div v-if="selectedStudent && !studentSubmissionsLoading" class="selected-student-info" style="margin-bottom:12px;padding:8px 12px;background:#f0f5ff;border-radius:6px;">
+          已选择：<strong>{{ selectedStudent.name }}</strong>
+          <span v-if="selectedStudent.class_name">（{{ selectedStudent.class_name }}）</span>
+          <button class="btn-sm" style="margin-left:12px;" @click="selectedStudent = null; studentSearchQuery = ''; searchResults = []; studentSubmissions = []">更换学生</button>
+        </div>
+        <div v-if="!selectedStudent && searchResults.length > 0" class="student-search-results" style="max-height:200px;overflow-y:auto;margin-bottom:12px;">
+          <div v-for="u in searchResults" :key="u.id" class="submission-item" style="cursor:pointer;" @click="selectStudent(u)">
+            <div class="submission-header">
+              <span class="student-name">{{ u.name }}</span>
+              <span>{{ u.class_name || '未分配班级' }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="selectedStudent && studentSubmissionsLoading" class="loading">加载提交记录中...</div>
+        <div v-else-if="selectedStudent && studentSubmissions.length === 0" class="empty">该学生暂无提交记录</div>
+        <div v-else-if="studentSubmissions.length > 0" class="submissions-list">
+          <div v-for="s in studentSubmissions" :key="s.id" class="submission-item">
+            <div class="submission-header">
+              <span class="student-name">{{ s.user?.name }} <span v-if="studentSubmissions.length > 1" class="version-badge">v{{ s.version }}{{ s.is_latest ? ' (最新)' : '' }}</span></span>
+              <div class="status-group">
+                <span v-if="s.is_late" class="status-badge late">迟交<button class="unlate-btn" title="取消迟交标签" @click.stop="unlateSubmission(s)">✕</button></span>
+                <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
+                <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
+              </div>
+            </div>
+            <div class="submission-images">
+              <img v-for="(img, i) in s.images" :key="i" :src="getMediaUrl(img)" class="thumb" @click="previewImage(getMediaUrl(img))" />
+            </div>
+            <div v-if="s.report" class="report-preview">
+              <div class="score">
+                分数：{{ s.report.score ?? '--' }}<span v-if="s.report.full_score"> / {{ s.report.full_score }}</span>
+                <span v-if="s.report.status" class="status-tag" :class="s.report.status">{{ reportStatusText(s.report.status) }}</span>
+              </div>
+              <div v-if="s.report.accuracy != null" class="report-meta">正确率：{{ formatAccuracy(s.report.accuracy) }} &nbsp; 对{{ s.report.correct_count ?? 0 }} / 错{{ s.report.wrong_count ?? 0 }}</div>
+              <div class="feedback">{{ s.report.feedback }}</div>
+            </div>
+            <div v-if="s.task && s.task.status === 'failed'" class="task-error">
+              <span class="error-label">批改失败：</span>{{ s.task.error_message || '未知错误' }}
+              <span v-if="s.task.retry_count > 0" class="retry-info">(已重试 {{ s.task.retry_count }} 次)</span>
+            </div>
+            <div v-if="s.task && s.task.status === 'sent'" class="task-info">智能体批改中...</div>
+            <div v-if="s.task && s.task.status === 'pending'" class="task-info">等待批改...</div>
+            <div class="submission-actions">
+              <button v-if="s.report || s.status === 'graded'" class="btn-sm" @click="openReportModal(s)">查看报告</button>
+              <button v-if="canRegradeSubmission(s)" class="btn-sm" :disabled="regradingSubmissionId === s.id" @click="regradeSubmission(s)">
+                {{ regradingSubmissionId === s.id ? '重批中...' : '重新智能批改' }}
+              </button>
+              <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
+            </div>
+            <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showStudentLookupModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showGradeModal" class="modal-overlay" @click.self="showGradeModal = false">
       <div class="modal">
         <h3>手动批改 - {{ gradingSubmission?.user?.name }}</h3>
@@ -549,6 +619,21 @@
         <div class="modal-actions">
           <button class="btn-secondary" @click="showGradeModal = false">取消</button>
           <button class="btn-primary" :disabled="gradeSubmitting" @click="submitGrade">确认批改</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showReturnModal" class="modal-overlay" @click.self="showReturnModal = false">
+      <div class="modal">
+        <h3>打回重交 - {{ returnSubmission?.user?.name }}</h3>
+        <div class="form-group">
+          <label>打回原因</label>
+          <textarea v-model="returnReason" placeholder="请说明打回原因，学生将看到此原因并重新提交" rows="4"></textarea>
+        </div>
+        <div v-if="returnSubmitting" class="loading">提交中...</div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showReturnModal = false">取消</button>
+          <button class="btn-primary danger" :disabled="returnSubmitting" @click="submitReturn">确认打回</button>
         </div>
       </div>
     </div>
@@ -613,8 +698,21 @@ const regradingSubmissionId = ref(null)
 const showAnswerPreview = ref(false)
 const quickAnswerFieldRef = ref(null)
 const quickAnswerBarRef = ref(null)
+const showStudentLookupModal = ref(false)
+const studentSearchQuery = ref('')
+const searchResults = ref([])
+const searchingStudent = ref(false)
+const selectedStudent = ref(null)
+const studentLookupSectionId = ref(null)
+const studentSubmissions = ref([])
+const studentSubmissionsLoading = ref(false)
+const showReturnModal = ref(false)
+const returnSubmission = ref(null)
+const returnReason = ref('')
+const returnSubmitting = ref(false)
 let pollTimer = null
 let regradeTimer = null
+let studentSearchTimer = null
 
 function getNextAnswerNo(rows = form.value?.answer_items || []) {
   const numericNos = rows
@@ -1192,6 +1290,16 @@ async function loadSectionSubmissions(sectionId) {
   submissions.value = res.data.data || []
 }
 
+async function unlateSubmission(submission) {
+  if (!confirm('确定取消该提交的「迟交」标签？')) return
+  try {
+    await api.patch(`/homework/submissions/${submission.id}/unlate`)
+    if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
+  } catch (e) {
+    alert('操作失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
 async function openUnsubmittedModal(sectionId) {
   try {
     currentViewSectionId.value = sectionId
@@ -1203,8 +1311,60 @@ async function openUnsubmittedModal(sectionId) {
   showUnsubmittedModal.value = true
 }
 
+function openStudentLookup(sectionId) {
+  studentLookupSectionId.value = sectionId
+  studentSearchQuery.value = ''
+  searchResults.value = []
+  selectedStudent.value = null
+  studentSubmissions.value = []
+  showStudentLookupModal.value = true
+}
+
+function debouncedSearchStudent() {
+  if (studentSearchTimer) clearTimeout(studentSearchTimer)
+  const q = studentSearchQuery.value
+  if (!q || q.length < 1) { searchResults.value = []; return }
+  studentSearchTimer = setTimeout(async () => {
+    searchingStudent.value = true
+    try {
+      const res = await api.get('/admin/users', { params: { role: 'student', search: q } })
+      searchResults.value = res.data.data || []
+    } catch {
+      searchResults.value = []
+    } finally {
+      searchingStudent.value = false
+    }
+  }, 300)
+}
+
+async function selectStudent(user) {
+  selectedStudent.value = user
+  searchResults.value = []
+  studentSearchQuery.value = user.name
+  const sectionId = studentLookupSectionId.value
+  if (!sectionId || !user?.id) return
+  studentSubmissionsLoading.value = true
+  try {
+    const res = await api.get(`/homework/assignments/${sectionId}/student-submissions`, {
+      params: { user_id: user.id }
+    })
+    studentSubmissions.value = res.data.data || []
+  } catch (e) {
+    alert('加载学生提交失败：' + (e.response?.data?.detail || e.message))
+    studentSubmissions.value = []
+  } finally {
+    studentSubmissionsLoading.value = false
+  }
+}
+
 function statusText(status) {
-  return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
+  return { draft: '草稿', published: '已发布', closed: '已关闭', returned: '已打回' }[status] || status
+}
+
+function submissionStatusText(s) {
+  if (s.status === 'returned') return '已打回'
+  if (s.status === 'graded') return '已批改'
+  return '待批改'
 }
 
 function gradingStatusText(status) {
@@ -1462,6 +1622,31 @@ async function submitGrade() {
     alert('批改失败：' + (e.response?.data?.detail || e.message))
   } finally {
     gradeSubmitting.value = false
+  }
+}
+
+function openReturnModal(submission) {
+  returnSubmission.value = submission
+  returnReason.value = ''
+  showReturnModal.value = true
+}
+
+async function submitReturn() {
+  if (!returnReason.value.trim()) {
+    alert('请输入打回原因')
+    return
+  }
+  returnSubmitting.value = true
+  try {
+    await api.post(`/homework/return/${returnSubmission.value.id}`, {
+      reason: returnReason.value,
+    })
+    showReturnModal.value = false
+    if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
+  } catch (e) {
+    alert('打回失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    returnSubmitting.value = false
   }
 }
 
@@ -2517,6 +2702,56 @@ async function pollGradingStatus(assignmentId) {
   background: #ffffff;
   border: 1px dashed #cfdce3;
   border-radius: 6px;
+}
+
+.status-badge.returned {
+  background: #fff7e6;
+  color: #d46b08;
+  border-color: #ffd591;
+}
+
+.btn-sm.danger {
+  color: #ff4d4f;
+  border-color: #ffccc7;
+}
+.btn-sm.danger:hover {
+  background: #fff2f0;
+}
+
+.btn-primary.danger {
+  background: #ff4d4f;
+  border-color: #ff4d4f;
+  color: #fff;
+}
+.btn-primary.danger:hover {
+  background: #ff7875;
+}
+
+.return-reason {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #d46b08;
+}
+.return-label {
+  font-weight: 600;
+}
+
+.unlate-btn {
+  background: none;
+  border: none;
+  color: #ff4d4f;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  margin-left: 2px;
+}
+.unlate-btn:hover {
+  color: #cf1322;
 }
 
 @media (max-width: 720px) {

@@ -117,7 +117,9 @@ async def serve_upload(file_path: str, download: bool = False):
                 headers = {}
                 if download:
                     headers["Content-Disposition"] = f'attachment; filename="{candidate.name}"'
-                return FileResponse(candidate, headers=headers)
+                    headers["Content-Type"] = "application/octet-stream"
+                mt = "application/pdf" if isinstance(candidate, Path) and candidate.suffix.lower() == ".pdf" else None
+                return FileResponse(candidate, headers=headers, media_type=mt)
 
     raise HTTPException(status_code=404, detail="文件不存在")
 

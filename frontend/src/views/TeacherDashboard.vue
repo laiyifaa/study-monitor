@@ -56,6 +56,7 @@
       </template>
       <!-- v4.0: 全局功能入口 -->
       <router-link to="/announcements" class="btn">公告管理</router-link>
+      <router-link to="/grading-overview" class="btn">批改概览</router-link>
       <router-link to="/study-report" class="btn">学习报告</router-link>
       <button v-if="isTeacherOrAdmin" type="button" class="btn info agent-toggle" @click="toggleAgentDrawer">
         <span>智能体联通</span>

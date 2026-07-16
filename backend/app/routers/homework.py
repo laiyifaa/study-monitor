@@ -102,9 +102,9 @@ async def _prepare_grading_task(
     batch_started_at: datetime | None = None,
 ) -> GradingTask | None:
     existing_result = await session.execute(
-        select(GradingTask).where(GradingTask.submission_id == submission_id)
+        select(GradingTask).where(GradingTask.submission_id == submission_id).order_by(GradingTask.id.desc())
     )
-    task = existing_result.scalar_one_or_none()
+    task = existing_result.scalars().first()
 
     if task and task.status in {"graded", "sent"} and not force:
         return None
@@ -153,7 +153,7 @@ async def _execute_grading_for_submission(
             if not submission:
                 raise Exception(f"提交 {submission_id} 不存在")
 
-            images = json.loads(submission.images)
+            images = _load_url_list(submission.images)
             if not images:
                 raise ValueError("提交未包含可批改图片")
 
@@ -526,8 +526,8 @@ async def _student_can_view_answer_files(assignment_id: int, student_id: int, db
                 Submission.user_id == student_id,
                 Submission.is_latest == True,
             )
-        )
-    )).scalar_one_or_none()
+        ).order_by(Submission.id.desc())
+    )).scalars().first()
     if not latest_submission:
         return False
 
@@ -792,10 +792,13 @@ async def update_assignment(
     if req.reference_answer is not None:
         assignment.reference_answer = _normalize_answer_json(req.reference_answer)
     if req.deadline is not None:
-        try:
-            assignment.deadline = parse_cn_datetime_input(req.deadline)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="截止时间格式错误")
+        if req.deadline == "":
+            assignment.deadline = None
+        else:
+            try:
+                assignment.deadline = parse_cn_datetime_input(req.deadline)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="截止时间格式错误")
     if req.auto_grade_at is not None:
         if req.auto_grade_at == "":
             assignment.auto_grade_at = None
@@ -1021,32 +1024,42 @@ async def list_submissions(
         return {"code": 0, "data": []}
 
     result = await db.execute(
-        select(Submission).where(Submission.assignment_id == assignment.id).order_by(Submission.submitted_at.desc())
+        select(Submission)
+        .where(Submission.assignment_id == assignment.id)
+        .where(Submission.is_latest == True)
+        .order_by(Submission.submitted_at.desc())
     )
     submissions = result.scalars().all()
 
+    submission_ids = [s.id for s in submissions]
+    student_ids = [s.user_id for s in submissions]
+
+    # 批量查询用户、报告、任务，避免 N+1
+    user_rows = await db.execute(select(User).where(User.id.in_(student_ids))) if student_ids else []
+    users = {u.id: u for u in user_rows.scalars().all()} if student_ids else {}
+
+    report_rows = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id.in_(submission_ids))
+    ) if submission_ids else []
+    reports = {r.submission_id: r for r in report_rows.scalars().all()} if submission_ids else {}
+
+    task_rows = await db.execute(
+        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids))
+    ) if submission_ids else []
+    tasks = {t.submission_id: t for t in task_rows.scalars().all()} if submission_ids else {}
+
     data = []
     for s in submissions:
-        user_result = await db.execute(select(User).where(User.id == s.user_id))
-        user = user_result.scalar_one_or_none()
-
-        report_result = await db.execute(
-            select(GradingReport).where(GradingReport.submission_id == s.id)
-        )
-        report = report_result.scalar_one_or_none()
-
-        task_result = await db.execute(
-            select(GradingTask).where(GradingTask.submission_id == s.id)
-        )
-        task = task_result.scalar_one_or_none()
-
+        user = users.get(s.user_id)
+        report = reports.get(s.id)
+        task = tasks.get(s.id)
         data.append({
             "id": s.id,
             "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
-            "images": json.loads(s.images),
+            "images": _load_url_list(s.images),
             "status": s.status,
             "is_late": s.is_late,  # v4.0: 迟交标记
-            "submitted_at": s.submitted_at.isoformat(),
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
             "report": {
                 "score": report.score,
                 "full_score": report.full_score,
@@ -1056,35 +1069,37 @@ async def list_submissions(
                 "wrong_count": report.wrong_count,
                 "feedback": report.feedback,
                 "generated_by": report.generated_by,
-                "created_at": report.created_at.isoformat(),
+                "created_at": report.created_at.isoformat() if report.created_at else None,
             } if report else None,
             "task": {
                 "status": task.status,
                 "retry_count": task.retry_count,
                 "error_message": task.error_message,
-                "sent_at": task.sent_at.isoformat() if task.sent_at else None,
-                "graded_at": task.graded_at.isoformat() if task.graded_at else None,
+                "sent_at": task.sent_at.isoformat() if task and task.sent_at else None,
+                "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
             } if task else None,
         })
 
     return {"code": 0, "data": data}
 
 
-@router.get("/assignments/{course_id}/submissions-summary")
+@router.get("/assignments/{section_id}/submissions-summary")
 async def list_submissions_summary(
-    course_id: int,
+    section_id: int,
     current_user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    获取课程作业提交汇总（含已交/未交）
+    获取小节作业提交汇总（含已交/未交）
+
+    v4.0: 从 course_id 切换到 section_id，1 section = 1 assignment
 
     数据口径说明：
     - 全部学生：按角色筛选 users.role == 'student'
-    - 已交：提交该课程作业的学生（基于 assignment_id 的最新提交 is_latest=True）
+    - 已交：提交该小节作业的学生（基于 assignment_id 的最新提交 is_latest=True）
     - 未交：全体学生减已交学生集合
     """
-    assignment_result = await db.execute(select(Assignment).where(Assignment.course_id == course_id))
+    assignment_result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
     assignment = assignment_result.scalar_one_or_none()
 
     if not assignment:
@@ -1136,9 +1151,9 @@ async def list_submissions_summary(
         data.append({
             "id": s.id,
             "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
-            "images": json.loads(s.images),
+            "images": _load_url_list(s.images),
             "status": s.status,
-            "submitted_at": s.submitted_at.isoformat(),
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
             "report": {
                 "score": report.score,
                 "full_score": report.full_score,
@@ -1148,7 +1163,7 @@ async def list_submissions_summary(
                 "wrong_count": report.wrong_count,
                 "feedback": report.feedback,
                 "generated_by": report.generated_by,
-                "created_at": report.created_at.isoformat(),
+                "created_at": report.created_at.isoformat() if report.created_at else None,
             } if report else None,
             "task": {
                 "status": task.status,
@@ -1271,7 +1286,7 @@ async def create_submission(
         )
         .order_by(Submission.version.desc())
     )
-    existing = existing_result.scalar_one_or_none()
+    existing = existing_result.scalars().first()
 
     next_version = 1
     if existing:
@@ -1329,15 +1344,22 @@ async def list_my_submissions(
     result = await db.execute(query)
     submissions = result.scalars().all()
 
+    # 批量查询 assignment 和 report，避免 N+1
+    assignment_ids = list({s.assignment_id for s in submissions})
+    submission_ids = [s.id for s in submissions]
+
+    assignment_rows = await db.execute(select(Assignment).where(Assignment.id.in_(assignment_ids))) if assignment_ids else []
+    assignments = {a.id: a for a in assignment_rows.scalars().all()} if assignment_ids else {}
+
+    report_rows = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id.in_(submission_ids))
+    ) if submission_ids else []
+    reports = {r.submission_id: r for r in report_rows.scalars().all()} if submission_ids else {}
+
     data = []
     for s in submissions:
-        assignment_result = await db.execute(select(Assignment).where(Assignment.id == s.assignment_id))
-        assignment = assignment_result.scalar_one_or_none()
-
-        report_result = await db.execute(
-            select(GradingReport).where(GradingReport.submission_id == s.id)
-        )
-        report = report_result.scalar_one_or_none()
+        assignment = assignments.get(s.assignment_id)
+        report = reports.get(s.id)
         can_view_answer_files = bool(assignment and s.is_latest and report)
 
         data.append({
@@ -1348,10 +1370,10 @@ async def list_my_submissions(
                 "section_id": assignment.section_id,  # v4.0
                 "course_id": assignment.course_id,
             } if assignment else None,
-            "images": json.loads(s.images),
+            "images": _load_url_list(s.images),
             "status": s.status,
-            "is_late": s.is_late,  # v4.0
-            "submitted_at": s.submitted_at.isoformat(),
+            "is_late": s.is_late,
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
             "can_view_answer_files": can_view_answer_files,
             "answer_files": _answer_files_to_student_entries(_load_url_list(getattr(assignment, "answer_files", None))) if can_view_answer_files else [],
             "report": _report_to_student_summary(report) if report else None,
@@ -1384,6 +1406,7 @@ async def manual_grade(
     report = GradingReport(
         submission_id=submission_id,
         score=req.score,
+        full_score=100,
         feedback=req.feedback,
         detail="{}",
         generated_by="teacher",
@@ -1443,7 +1466,8 @@ async def review_grade(
         if req.feedback is not None:
             report.feedback = req.feedback
         report.review_status = "modified"
-        report.generated_by = f"{report.generated_by}+teacher"
+        if "+teacher" not in (report.generated_by or ""):
+            report.generated_by = f"{report.generated_by}+teacher"
         submission.status = "graded"
     else:
         raise HTTPException(status_code=400, detail="无效的操作类型")
@@ -1496,13 +1520,13 @@ async def regrade_submission(
         raise HTTPException(status_code=400, detail="该提交已被人工修改，不可重新智能批改")
 
     task_result = await db.execute(
-        select(GradingTask).where(GradingTask.submission_id == submission_id)
+        select(GradingTask).where(GradingTask.submission_id == submission_id).order_by(GradingTask.id.desc())
     )
-    task = task_result.scalar_one_or_none()
+    task = task_result.scalars().first()
     if task and task.status in {"pending", "sent"}:
         raise HTTPException(status_code=400, detail="当前已有批改任务在进行")
 
-    images = json.loads(submission.images)
+    images = _load_url_list(submission.images)
     if not images:
         raise HTTPException(status_code=400, detail="提交未包含可批改图片")
     local_paths = [image_url_to_local_path(url) for url in images]
@@ -1547,9 +1571,9 @@ async def get_grading_task_status(
         raise HTTPException(status_code=403, detail="无权查看此任务")
 
     task_result = await db.execute(
-        select(GradingTask).where(GradingTask.submission_id == submission_id)
+        select(GradingTask).where(GradingTask.submission_id == submission_id).order_by(GradingTask.id.desc())
     )
-    task = task_result.scalar_one_or_none()
+    task = task_result.scalars().first()
 
     report_result = await db.execute(
         select(GradingReport).where(GradingReport.submission_id == submission_id)
@@ -1611,7 +1635,7 @@ async def trigger_grading(
     if not submissions:
         return {"code": 0, "data": {"message": "无待批改的提交", "submission_count": 0}}
 
-    batch_started_at = datetime.utcnow()
+    batch_started_at = now_cn_naive()
     queued_submission_ids: list[int] = []
     for submission in submissions:
         task = await _prepare_grading_task(
@@ -1677,10 +1701,19 @@ async def trigger_grading_status(
 
     latest_batch_started_at = None
     tasks_by_submission_id: dict[int, GradingTask] = {}
+    # 批量查询所有 GradingTask，避免 N+1
+    sub_ids = [s.id for s in submissions]
+    all_task_rows = await db.execute(
+        select(GradingTask).where(GradingTask.submission_id.in_(sub_ids)).order_by(GradingTask.id.desc())
+    ) if sub_ids else []
+    # 每个 submission 取最新的一条 task
+    task_map: dict[int, GradingTask] = {}
+    for t in all_task_rows.scalars().all() if sub_ids else []:
+        if t.submission_id not in task_map:
+            task_map[t.submission_id] = t
+
     for s in submissions:
-        task = (await db.execute(
-            select(GradingTask).where(GradingTask.submission_id == s.id)
-        )).scalar_one_or_none()
+        task = task_map.get(s.id)
         if not task or not task.sent_at:
             continue
 

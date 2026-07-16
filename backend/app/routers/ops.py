@@ -43,6 +43,7 @@ from app.database_redis import get_redis
 from app.models.models import User, StudySession, Course
 from app.utils.jwt_helper import require_role
 from app.config import get_settings
+from app.utils.datetime_helper import now_cn_naive
 
 router = APIRouter(prefix="/api/ops", tags=["运维监控"])
 settings = get_settings()
@@ -514,7 +515,7 @@ async def business_stats(
         today_effective_minutes — 今日总有效学习时长（分钟）
         alerts            — 心跳QPS异常等
     """
-    now = datetime.now()
+    now = now_cn_naive()
     two_min_ago = now - timedelta(minutes=2)
     one_min_ago = now - timedelta(minutes=1)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

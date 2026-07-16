@@ -111,16 +111,58 @@
           <span v-if="returnedReasonText">打回原因：{{ returnedReasonText }}</span>
         </div>
         <div class="form-group">
-          <label>上传作业图片</label>
-          <input type="file" multiple accept="image/*" @change="handleFileSelect" />
+          <div
+            class="drop-zone"
+            :class="{ 'drop-zone--dragging': isDragging }"
+            @dragenter.prevent="isDragging = true"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="handleDrop"
+            @click="selectFiles"
+          >
+            <span class="drop-zone-text">点击或拖拽图片到此处上传</span>
+            <span class="drop-zone-hint">支持 JPG/PNG/GIF/WebP，可多选</span>
+          </div>
+          <input
+            ref="fileInputRef"
+            type="file"
+            multiple
+            accept="image/*"
+            style="display:none"
+            @change="handleFileSelect"
+          />
         </div>
-        <div v-if="previewImages.length > 0" class="preview-images">
-          <img v-for="(img, i) in previewImages" :key="i" :src="img" class="preview" />
+        <div v-if="fileItems.length > 0" class="file-list">
+          <div class="file-list-header">
+            <span>共 {{ fileItems.length }} 张，已上传 {{ doneCount }} 张</span>
+          </div>
+          <div v-for="item in fileItems" :key="item.id" class="file-item">
+            <img :src="item.preview" class="file-thumb" />
+            <div class="file-info">
+              <span class="file-name">{{ item.file.name }}</span>
+              <span class="file-size">{{ formatSize(item.file.size) }}</span>
+            </div>
+            <span v-if="item.status === 'pending'" class="file-status pending">待上传</span>
+            <span v-else-if="item.status === 'uploading'" class="file-status uploading">上传中…</span>
+            <span v-else-if="item.status === 'done'" class="file-status done">已上传</span>
+            <span v-else-if="item.status === 'failed'" class="file-status failed">
+              失败
+              <button class="retry-btn" @click.stop="retryFile(item.id)">重试</button>
+            </span>
+            <button class="remove-btn" @click="removeFile(item.id)">×</button>
+          </div>
         </div>
-        <div v-if="uploading" class="uploading">上传中...</div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="closeSubmitModal">取消</button>
-          <button class="btn-primary" :disabled="uploading || uploadedUrls.length === 0" @click="submitHomework">提交</button>
+          <button
+            class="btn-primary"
+            :disabled="doneCount === 0 || isAnyUploading"
+            @click="submitHomework"
+          >
+            <template v-if="isAnyUploading">上传中 {{ doneCount }}/{{ fileItems.length }}…</template>
+            <template v-else-if="hasAnyFailed">提交（跳过失败图片）</template>
+            <template v-else>提交</template>
+          </button>
         </div>
       </div>
     </div>
@@ -161,9 +203,24 @@ const expandedReports = ref({})
 const showSubmitModal = ref(false)
 const currentSectionId = ref(null)
 
-const previewImages = ref([])
-const uploadedUrls = ref([])
-const uploading = ref(false)
+const fileInputRef = ref(null)
+const fileItems = ref([])
+const isDragging = ref(false)
+
+function selectFiles() {
+  fileInputRef.value?.click()
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + 'B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + 'MB'
+}
+
+let fileIdCounter = 0
+function nextFileId() {
+  return ++fileIdCounter
+}
 
 onMounted(() => {
   loadData()
@@ -231,37 +288,87 @@ function openSubmitModal(sectionId) {
 async function handleFileSelect(e) {
   const files = Array.from(e.target.files)
   if (files.length === 0) return
-
-  previewImages.value = files.map(f => URL.createObjectURL(f))
-  uploadedUrls.value = []
-  uploading.value = true
-
-  for (const file of files) {
-    const formData = new FormData()
-    formData.append('file', file)
-    try {
-      const res = await api.post('/homework/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
-      uploadedUrls.value.push(res.data.data.url)
-    } catch (err) {
-      alert('上传失败：' + err.message)
-    }
-  }
-  uploading.value = false
+  addFiles(files)
+  e.target.value = ''
 }
 
+function handleDrop(e) {
+  isDragging.value = false
+  const rawFiles = Array.from(e.dataTransfer.files)
+  const imageFiles = rawFiles.filter(f => f.type.startsWith('image/'))
+  if (imageFiles.length === 0) return
+  addFiles(imageFiles)
+}
+
+function addFiles(files) {
+  const newItems = files.map(file => ({
+    id: nextFileId(),
+    file,
+    url: '',
+    preview: URL.createObjectURL(file),
+    status: 'pending',
+    error: '',
+  }))
+  fileItems.value = [...fileItems.value, ...newItems]
+  uploadAllPending()
+}
+
+async function uploadAllPending() {
+  const pending = fileItems.value.filter(f => f.status === 'pending' || f.status === 'failed')
+  if (pending.length === 0) return
+
+  pending.forEach(f => (f.status = 'uploading'))
+
+  const results = await Promise.allSettled(
+    pending.map(item => {
+      const fd = new FormData()
+      fd.append('file', item.file)
+      return api.post('/homework/upload', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+    })
+  )
+
+  results.forEach((result, i) => {
+    const item = pending[i]
+    if (result.status === 'fulfilled') {
+      item.url = result.value.data.data.url
+      item.status = 'done'
+    } else {
+      item.status = 'failed'
+      const err = result.reason
+      item.error = err?.response?.data?.detail || err?.message || '上传失败'
+    }
+  })
+}
+
+function retryFile(id) {
+  const item = fileItems.value.find(f => f.id === id)
+  if (!item) return
+  item.status = 'pending'
+  item.error = ''
+  uploadAllPending()
+}
+
+function removeFile(id) {
+  const item = fileItems.value.find(f => f.id === id)
+  if (item) URL.revokeObjectURL(item.preview)
+  fileItems.value = fileItems.value.filter(f => f.id !== id)
+}
+
+const doneCount = computed(() => fileItems.value.filter(f => f.status === 'done').length)
+const hasAnyFailed = computed(() => fileItems.value.some(f => f.status === 'failed'))
+const isAnyUploading = computed(() => fileItems.value.some(f => f.status === 'uploading'))
+
 async function submitHomework() {
-  if (uploadedUrls.value.length === 0) {
-    alert('请先上传图片')
-    return
-  }
+  const urls = fileItems.value.filter(f => f.status === 'done').map(f => f.url)
+  if (urls.length === 0) return
   const assignment = assignmentMap.value[currentSectionId.value]
   if (!assignment) return
   try {
     await api.post('/homework/submissions', {
       assignment_id: assignment.id,
-      images: uploadedUrls.value,
+      images: urls,
     })
     alert('提交成功')
     closeSubmitModal()
@@ -274,8 +381,9 @@ async function submitHomework() {
 function closeSubmitModal() {
   showSubmitModal.value = false
   currentSectionId.value = null
-  previewImages.value = []
-  uploadedUrls.value = []
+  fileItems.value.forEach(f => URL.revokeObjectURL(f.preview))
+  fileItems.value = []
+  isDragging.value = false
 }
 
 function isOverdue(assignment) {
@@ -798,10 +906,142 @@ function openStudentAnswerFile(sectionId, file) {
   background: #ffffff;
 }
 
-.uploading {
+.drop-zone {
+  border: 2px dashed #c4d4e0;
+  border-radius: 8px;
+  padding: 32px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  background: #fafcfd;
+}
+
+.drop-zone:hover {
+  border-color: #2563eb;
+  background: #f0f7ff;
+}
+
+.drop-zone--dragging {
+  border-color: #2563eb;
+  background: #e8f2ff;
+}
+
+.drop-zone-text {
+  display: block;
+  font-weight: 700;
+  color: #374b5c;
+  margin-bottom: 4px;
+}
+
+.drop-zone-hint {
+  font-size: 12px;
+  color: #8a9aa8;
+}
+
+.file-list {
+  margin-top: 12px;
+  border: 1px solid #e4edf0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.file-list-header {
+  padding: 8px 12px;
+  background: #f5f9fb;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a6274;
+  border-bottom: 1px solid #e4edf0;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eff3f5;
+  transition: background 0.15s;
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #dce6eb;
+  flex-shrink: 0;
+}
+
+.file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-name {
+  font-size: 13px;
+  color: #263238;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  font-size: 11px;
+  color: #8899a6;
+}
+
+.file-status {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.file-status.pending { color: #8899a6; }
+
+.file-status.uploading { color: #2563eb; }
+
+.file-status.done { color: #15803d; }
+
+.file-status.failed { color: #b42318; }
+
+.retry-btn {
+  margin-left: 4px;
+  border: none;
+  background: transparent;
   color: #2563eb;
   font-weight: 700;
-  margin-bottom: 16px;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.retry-btn:hover {
+  color: #1d4ed8;
+}
+
+.remove-btn {
+  border: none;
+  background: transparent;
+  color: #9aabb8;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.remove-btn:hover {
+  color: #b42318;
 }
 
 .modal-actions {

@@ -550,3 +550,68 @@ class GradingTask(Base):
     sent_at = Column(DateTime, nullable=True, comment="发送时间")
     graded_at = Column(DateTime, nullable=True, comment="批改完成时间")
     created_at = Column(DateTime, server_default=func.now())
+
+
+class LoginLog(Base):
+    """
+    登录日志模型
+
+    用途：记录每次登录尝试的设备、环境、结果信息，
+         为后续设备兼容性问题排查（如部分用户视频无法播放）提供数据支撑。
+
+    设计动机：
+        2026-07-16 出现"部分学生反馈物理第二节视频无法播放"现象，但无法定位
+        是哪些设备/操作系统/浏览器/网络环境失败。本表从登录时刻即采集完整
+        设备画像，后续问题排查可直接 JOIN login_logs 拿到设备信息。
+
+    字段说明：
+        id                — 自增主键
+        user_id           — 登录用户 ID（失败时可能为 null），外键关联 users 表
+        account           — 尝试登录的账号（失败时也需要记录，便于排查）
+        login_type        — 登录方式：dingtalk=钉钉免登/password=账号密码/bind=钉钉绑定
+        ip                — 客户端真实 IP（优先取 X-Forwarded-For，其次 request.client.host）
+        user_agent_raw    — 浏览器原始 User-Agent 字符串（服务端从 header 取）
+        device_platform   — navigator.platform 值（如 iPhone/Win32/MacIntel，前端上报）
+        device_os         — 解析后的操作系统（如 iOS 15.2 / Android 12 / Windows 10）
+        browser           — 浏览器或 WebView 标识（如 DingTalk-iOS / Chrome 102 / Safari 15）
+        screen_size       — 屏幕分辨率（如 390x844）
+        in_dingtalk       — 是否在钉钉容器内（前端 dd.env.platform 判断）
+        in_wechat         — 是否在微信容器内
+        is_mobile         — 是否移动端
+        network_type      — 网络类型（wifi/4g/3g 等，navigator.connection.effectiveType）
+        success           — 登录是否成功
+        message           — 结果消息（成功="登录成功"，失败=具体原因）
+        created_at        — 日志创建时间
+
+    数据流：
+        前端登录请求带上 device_info → 后端 auth.py 登录端点
+        → 注入 Request 取 IP/UA
+        → 登录逻辑执行（成功或失败）
+        → 写入 login_logs 表（统一辅助函数 _log_login）
+        → 返回原响应
+    """
+    __tablename__ = "login_logs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True, comment="用户ID(失败可能为null)")
+    account = Column(String(50), default="", comment="尝试登录的账号")
+    login_type = Column(Enum("dingtalk", "password", "bind"), nullable=False, comment="登录方式")
+
+    # 服务端采集（即使前端不上报也可拿到）
+    ip = Column(String(50), default="", index=True, comment="客户端IP")
+    user_agent_raw = Column(String(500), default="", comment="原始User-Agent")
+
+    # 客户端采集（前端 navigator 主动上报，精度更高）
+    device_platform = Column(String(50), default="", comment="navigator.platform")
+    device_os = Column(String(100), default="", comment="解析后的操作系统")
+    browser = Column(String(100), default="", comment="浏览器或WebView")
+    screen_size = Column(String(20), default="", comment="屏幕分辨率(如390x844)")
+    in_dingtalk = Column(Boolean, default=False, comment="是否钉钉环境")
+    in_wechat = Column(Boolean, default=False, comment="是否微信环境")
+    is_mobile = Column(Boolean, default=False, comment="是否移动端")
+    network_type = Column(String(20), default="", comment="网络类型(wifi/4g等)")
+
+    # 登录结果
+    success = Column(Boolean, default=False, index=True, comment="是否登录成功")
+    message = Column(String(200), default="", comment="结果消息")
+    created_at = Column(DateTime, server_default=func.now(), index=True)

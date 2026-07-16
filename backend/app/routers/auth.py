@@ -26,7 +26,8 @@ import secrets
 import random
 import httpx
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,11 +35,83 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.database_redis import get_redis
-from app.models.models import User, DingTalkBinding
+from app.models.models import User, DingTalkBinding, LoginLog
 from app.utils.jwt_helper import create_token, get_current_user, require_role
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 settings = get_settings()
+
+
+# ============================================================
+# 设备信息 schema（前端上报）+ 登录日志辅助函数
+# ============================================================
+
+class DeviceInfo(BaseModel):
+    """前端采集的设备信息（可选，所有字段 default 空字符串）"""
+    platform: str = ""             # navigator.platform, 如 "iPhone" / "Win32"
+    os: str = ""                   # 解析后的 OS, 如 "iOS 15.2" / "Android 12"
+    browser: str = ""              # 浏览器或 WebView, 如 "DingTalk-iOS 6.5.20" / "Chrome 102"
+    screen: str = ""               # 屏幕分辨率, 如 "390x844"
+    in_dingtalk: bool = False      # 是否在钉钉容器内
+    in_wechat: bool = False        # 是否在微信容器内
+    is_mobile: bool = False        # 是否移动端
+    network_type: str = ""         # 网络类型, 如 "wifi" / "4g"
+
+
+def _extract_ip(request: Request) -> str:
+    """从 Request 中取出客户端真实 IP，优先取 X-Forwarded-For（Nginx 反代后）"""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        # X-Forwarded-For 可能是 "client, proxy1, proxy2" 链式格式，取第一个
+        return xff.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return ""
+
+
+async def _log_login(
+    db: AsyncSession,
+    *,
+    user_id: Optional[int],
+    account: str,
+    login_type: str,
+    request: Request,
+    device_info: Optional[DeviceInfo],
+    success: bool,
+    message: str,
+) -> None:
+    """
+    统一写登录日志（所有登录端点调用）。
+
+    任何写入异常都不阻断登录流程——日志失败只 console.warn，不让用户登录失败。
+    """
+    try:
+        ua = request.headers.get("user-agent", "")[:500]
+        ip = _extract_ip(request)
+        di = device_info  # 可能为 None
+        log = LoginLog(
+            user_id=user_id,
+            account=account[:50],
+            login_type=login_type,
+            ip=ip,
+            user_agent_raw=ua,
+            device_platform=(di.platform if di else "")[:50],
+            device_os=(di.os if di else "")[:100],
+            browser=(di.browser if di else "")[:100],
+            screen_size=(di.screen if di else "")[:20],
+            in_dingtalk=(di.in_dingtalk if di else False),
+            in_wechat=(di.in_wechat if di else False),
+            is_mobile=(di.is_mobile if di else False),
+            network_type=(di.network_type if di else "")[:20],
+            success=success,
+            message=message[:200] if message else "",
+        )
+        db.add(log)
+        await db.commit()
+    except Exception as e:
+        # 日志写入失败不影响登录流程
+        import sys
+        print(f"[login_log] 写入登录日志失败: {e}", file=sys.stderr)
 
 
 # ============================================================
@@ -99,10 +172,11 @@ def _user_dict(user: User) -> dict:
 
 class DingTalkLoginRequest(BaseModel):
     auth_code: str
+    device_info: Optional[DeviceInfo] = None
 
 
 @router.post("/dingtalk")
-async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(get_db)):
+async def dingtalk_login(req: DingTalkLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     钉钉免登接口
 
@@ -123,6 +197,9 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
         result = resp.json().get("result", {})
         userid = result.get("userid")
         if not userid:
+            await _log_login(db, user_id=None, account="", login_type="dingtalk",
+                             request=request, device_info=req.device_info,
+                             success=False, message="免登失败，无法获取用户ID")
             return {"code": 1, "msg": "免登失败，无法获取用户ID"}
 
     # 第二步：userid → 钉钉用户详情
@@ -167,6 +244,9 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
             await db.commit()
 
             jwt_token = create_token(user.id, user.role)
+            await _log_login(db, user_id=user.id, account=user.account, login_type="dingtalk",
+                             request=request, device_info=req.device_info,
+                             success=True, message="免登成功(已绑定)")
             return {
                 "code": 0,
                 "data": {
@@ -206,6 +286,9 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
             await db.commit()
 
             jwt_token = create_token(matched_user.id, matched_user.role)
+            await _log_login(db, user_id=matched_user.id, account=matched_user.account, login_type="dingtalk",
+                             request=request, device_info=req.device_info,
+                             success=True, message="免登成功(手机号自动绑定)")
             return {
                 "code": 0,
                 "data": {
@@ -215,6 +298,9 @@ async def dingtalk_login(req: DingTalkLoginRequest, db: AsyncSession = Depends(g
             }
 
     # 第五步：无法自动绑定 → 返回 need_bind_account，前端弹窗
+    await _log_login(db, user_id=None, account="", login_type="dingtalk",
+                     request=request, device_info=req.device_info,
+                     success=False, message="需要手动绑定账号")
     return {
         "code": 2,
         "data": {
@@ -238,10 +324,11 @@ class BindAccountRequest(BaseModel):
     dingtalk_name: str = ""
     dingtalk_mobile: str = ""
     dingtalk_avatar: str = ""
+    device_info: Optional[DeviceInfo] = None
 
 
 @router.post("/bind-account")
-async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_db)):
+async def bind_account(req: BindAccountRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     钉钉用户手动绑定账号
 
@@ -249,6 +336,9 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
     支持一个学生绑定多个钉钉账号（父亲、母亲），但每个钉钉只能绑一个学生
     """
     if not req.account.strip():
+        await _log_login(db, user_id=None, account=req.account, login_type="bind",
+                         request=request, device_info=req.device_info,
+                         success=False, message="请输入账号")
         return {"code": 1, "msg": "请输入账号"}
 
     # 按账号查找用户
@@ -256,13 +346,22 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
     user = result.scalar_one_or_none()
 
     if not user:
+        await _log_login(db, user_id=None, account=req.account, login_type="bind",
+                         request=request, device_info=req.device_info,
+                         success=False, message="账号不存在")
         return {"code": 1, "msg": "账号不存在，请检查后重新输入"}
 
     # 验证密码（防止未授权绑定）
     if user.password_hash:
         if not req.password:
+            await _log_login(db, user_id=user.id, account=req.account, login_type="bind",
+                             request=request, device_info=req.device_info,
+                             success=False, message="请输入密码")
             return {"code": 1, "msg": "请输入密码"}
         if not verify_password(req.password, user.password_hash):
+            await _log_login(db, user_id=user.id, account=req.account, login_type="bind",
+                             request=request, device_info=req.device_info,
+                             success=False, message="密码错误")
             return {"code": 1, "msg": "密码错误，请检查后重新输入"}
     # 无密码的账号（纯钉钉用户）不需要验证密码，允许直接绑定
 
@@ -271,6 +370,9 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
         select(DingTalkBinding).where(DingTalkBinding.dingtalk_user_id == req.dingtalk_user_id)
     )
     if existing_binding.scalar_one_or_none():
+        await _log_login(db, user_id=user.id, account=req.account, login_type="bind",
+                         request=request, device_info=req.device_info,
+                         success=False, message="该钉钉已绑定其他账号")
         return {"code": 1, "msg": "该钉钉已绑定其他账号"}
 
     # 检查该用户是否已绑定过这个钉钉（防止重复绑定）
@@ -281,6 +383,9 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
         )
     )
     if dup_check.scalar_one_or_none():
+        await _log_login(db, user_id=user.id, account=req.account, login_type="bind",
+                         request=request, device_info=req.device_info,
+                         success=False, message="该账号已绑定此钉钉")
         return {"code": 1, "msg": "该账号已绑定此钉钉"}
 
     # 写入 dingtalk_bindings 表（允许多个钉钉绑定同一个学生）
@@ -303,6 +408,9 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
     await db.commit()
 
     jwt_token = create_token(user.id, user.role)
+    await _log_login(db, user_id=user.id, account=user.account, login_type="bind",
+                     request=request, device_info=req.device_info,
+                     success=True, message="绑定账号成功")
     return {
         "code": 0,
         "data": {
@@ -319,10 +427,11 @@ async def bind_account(req: BindAccountRequest, db: AsyncSession = Depends(get_d
 class LoginRequest(BaseModel):
     username: str  # 前端字段名保持 username，实际传的是 account
     password: str
+    device_info: Optional[DeviceInfo] = None
 
 
 @router.post("/login")
-async def browser_login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def browser_login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     账号密码登录 — 用账号+密码换取 JWT
 
@@ -337,15 +446,27 @@ async def browser_login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     if not user:
+        await _log_login(db, user_id=None, account=account, login_type="password",
+                         request=request, device_info=req.device_info,
+                         success=False, message="账号或密码错误")
         return {"code": 1, "msg": "账号或密码错误"}
 
     if not user.password_hash:
+        await _log_login(db, user_id=user.id, account=account, login_type="password",
+                         request=request, device_info=req.device_info,
+                         success=False, message="账号未设置密码")
         return {"code": 1, "msg": "该账号未设置密码，请先设置密码"}
 
     if not verify_password(req.password, user.password_hash):
+        await _log_login(db, user_id=user.id, account=account, login_type="password",
+                         request=request, device_info=req.device_info,
+                         success=False, message="账号或密码错误")
         return {"code": 1, "msg": "账号或密码错误"}
 
     jwt_token = create_token(user.id, user.role)
+    await _log_login(db, user_id=user.id, account=user.account, login_type="password",
+                     request=request, device_info=req.device_info,
+                     success=True, message="账号密码登录成功")
     return {
         "code": 0,
         "data": {

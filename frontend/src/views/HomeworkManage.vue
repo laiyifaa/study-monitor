@@ -60,7 +60,7 @@
             <button class="btn-sm" @click="openEditForSection(section)">编辑</button>
             <button class="btn-sm answer-action" @click="openAnswerForSection(section)">答案管理</button>
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
-            <button class="btn-sm" @click="loadSubmissions(section.id)">查看提交</button>
+            <button class="btn-sm" @click="loadSubmissions(section.id, { reset: true, openModal: true })">查看提交</button>
             <button class="btn-sm" @click="openStudentLookup(section.id)">查询学生</button>
             <button class="btn-sm" @click="openUnsubmittedModal(section.id)">未交名单</button>
             <button class="btn-sm" @click="openLateModal(section.id)">迟交名单</button>
@@ -356,7 +356,19 @@
     <div v-if="showSubmissionsModal" class="modal-overlay" @click.self="showSubmissionsModal = false">
       <div class="modal modal-lg">
         <h3>提交列表</h3>
-        <div v-if="submissions.length === 0" class="empty">暂无提交</div>
+        <div class="list-toolbar">
+          <div class="list-search">
+            <div class="search-input-wrap">
+              <span class="search-icon">🔍</span>
+              <input v-model="submissionsSearch" type="text" placeholder="按学生姓名查询" @keydown.enter.prevent="searchSubmissionsByName" />
+              <button v-if="submissionsSearch" class="search-clear" @click="resetSubmissionsSearch" title="清空">✕</button>
+            </div>
+            <button class="btn-sm primary search-go" @click="searchSubmissionsByName">查询</button>
+          </div>
+          <div class="list-summary">共 {{ submissionsTotal }} 条</div>
+        </div>
+        <div v-if="submissionsLoading" class="loading">加载中...</div>
+        <div v-else-if="submissions.length === 0" class="empty">暂无提交</div>
         <div v-else class="submissions-list">
           <div v-for="s in submissions" :key="s.id" class="submission-item">
             <div class="submission-header">
@@ -398,7 +410,15 @@
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
           </div>
         </div>
-        <div class="modal-actions">
+        <div class="modal-actions modal-actions-between">
+          <div v-if="submissionsTotal > 0" class="list-pagination">
+            <span class="list-pagination-meta">{{ pageRangeText(submissionsTotal, submissionsPage) }}</span>
+            <div class="list-pagination-actions">
+              <button class="btn-sm" :disabled="submissionsPage <= 1 || submissionsLoading" @click="changeSubmissionsPage(submissionsPage - 1)">上一页</button>
+              <span>第 {{ submissionsPage }} / {{ totalPages(submissionsTotal) }} 页</span>
+              <button class="btn-sm" :disabled="submissionsPage >= totalPages(submissionsTotal) || submissionsLoading" @click="changeSubmissionsPage(submissionsPage + 1)">下一页</button>
+            </div>
+          </div>
           <button class="btn-secondary" @click="showSubmissionsModal = false">关闭</button>
         </div>
       </div>
@@ -499,7 +519,19 @@
     <div v-if="showUnsubmittedModal" class="modal-overlay" @click.self="showUnsubmittedModal = false">
       <div class="modal modal-lg">
         <h3>未交名单{{ currentViewSectionId ? ` - ${getSectionTitle(currentViewSectionId)}` : '' }}</h3>
-        <div v-if="unsubmittedStudents.length === 0" class="empty">暂无未交学生</div>
+        <div class="list-toolbar">
+          <div class="list-search">
+            <div class="search-input-wrap">
+              <span class="search-icon">🔍</span>
+              <input v-model="unsubmittedSearch" type="text" placeholder="按学生姓名查询" @keydown.enter.prevent="searchUnsubmittedByName" />
+              <button v-if="unsubmittedSearch" class="search-clear" @click="resetUnsubmittedSearch" title="清空">✕</button>
+            </div>
+            <button class="btn-sm primary search-go" @click="searchUnsubmittedByName">查询</button>
+          </div>
+          <div class="list-summary">共 {{ unsubmittedTotal }} 人</div>
+        </div>
+        <div v-if="unsubmittedLoading" class="loading">加载中...</div>
+        <div v-else-if="unsubmittedStudents.length === 0" class="empty">暂无未交学生</div>
         <div v-else class="submissions-list">
           <div v-for="u in unsubmittedStudents" :key="u.id" class="submission-item">
             <div class="submission-header">
@@ -508,7 +540,15 @@
             </div>
           </div>
         </div>
-        <div class="modal-actions">
+        <div class="modal-actions modal-actions-between">
+          <div v-if="unsubmittedTotal > 0" class="list-pagination">
+            <span class="list-pagination-meta">{{ pageRangeText(unsubmittedTotal, unsubmittedPage) }}</span>
+            <div class="list-pagination-actions">
+              <button class="btn-sm" :disabled="unsubmittedPage <= 1 || unsubmittedLoading" @click="changeUnsubmittedPage(unsubmittedPage - 1)">上一页</button>
+              <span>第 {{ unsubmittedPage }} / {{ totalPages(unsubmittedTotal) }} 页</span>
+              <button class="btn-sm" :disabled="unsubmittedPage >= totalPages(unsubmittedTotal) || unsubmittedLoading" @click="changeUnsubmittedPage(unsubmittedPage + 1)">下一页</button>
+            </div>
+          </div>
           <button class="btn-secondary" @click="showUnsubmittedModal = false">关闭</button>
         </div>
       </div>
@@ -517,13 +557,25 @@
     <div v-if="showLateModal" class="modal-overlay" @click.self="showLateModal = false">
       <div class="modal modal-lg">
         <h3>迟交名单{{ currentViewSectionId ? ` - ${getSectionTitle(currentViewSectionId)}` : '' }}</h3>
-        <div v-if="lateSubmissions.length === 0" class="empty">暂无迟交学生</div>
+        <div class="list-toolbar">
+          <div class="list-search">
+            <div class="search-input-wrap">
+              <span class="search-icon">🔍</span>
+              <input v-model="lateSearch" type="text" placeholder="按学生姓名查询" @keydown.enter.prevent="searchLateByName" />
+              <button v-if="lateSearch" class="search-clear" @click="resetLateSearch" title="清空">✕</button>
+            </div>
+            <button class="btn-sm primary search-go" @click="searchLateByName">查询</button>
+          </div>
+          <div class="list-summary">共 {{ lateTotal }} 条</div>
+        </div>
+        <div v-if="lateLoading" class="loading">加载中...</div>
+        <div v-else-if="lateSubmissions.length === 0" class="empty">暂无迟交学生</div>
         <div v-else class="submissions-list">
           <div v-for="s in lateSubmissions" :key="s.id" class="submission-item">
             <div class="submission-header">
               <span class="student-name">{{ s.user?.name }}</span>
               <div class="status-group">
-                <span class="status-badge late">迟交</span>
+                <span class="status-badge late">迟交<button class="unlate-btn" title="取消迟交标签" @click.stop="unlateSubmission(s)">✕</button></span>
                 <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
               </div>
             </div>
@@ -533,7 +585,15 @@
             </div>
           </div>
         </div>
-        <div class="modal-actions">
+        <div class="modal-actions modal-actions-between">
+          <div v-if="lateTotal > 0" class="list-pagination">
+            <span class="list-pagination-meta">{{ pageRangeText(lateTotal, latePage) }}</span>
+            <div class="list-pagination-actions">
+              <button class="btn-sm" :disabled="latePage <= 1 || lateLoading" @click="changeLatePage(latePage - 1)">上一页</button>
+              <span>第 {{ latePage }} / {{ totalPages(lateTotal) }} 页</span>
+              <button class="btn-sm" :disabled="latePage >= totalPages(lateTotal) || lateLoading" @click="changeLatePage(latePage + 1)">下一页</button>
+            </div>
+          </div>
           <button class="btn-secondary" @click="showLateModal = false">关闭</button>
         </div>
       </div>
@@ -660,13 +720,26 @@ import {
 const route = useRoute()
 const courseId = route.params.courseId
 const { isDingTalk, previewFile } = useDingTalk()
+const LIST_PAGE_SIZE = 20
 
 const loading = ref(false)
 const sections = ref([])
 const assignmentMap = ref({})
 const submissions = ref([])
+const submissionsTotal = ref(0)
+const submissionsPage = ref(1)
+const submissionsSearch = ref('')
+const submissionsLoading = ref(false)
 const unsubmittedStudents = ref([])
-const lateSubmissions = computed(() => submissions.value.filter(s => s.is_late))
+const unsubmittedTotal = ref(0)
+const unsubmittedPage = ref(1)
+const unsubmittedSearch = ref('')
+const unsubmittedLoading = ref(false)
+const lateSubmissions = ref([])
+const lateTotal = ref(0)
+const latePage = ref(1)
+const lateSearch = ref('')
+const lateLoading = ref(false)
 const ANSWER_TYPE_DEFAULT_SCORE = {
   option_letter: 2,
   true_false: 1,
@@ -1264,19 +1337,136 @@ function removeAnswerFile(index) {
   form.value.answer_files.splice(index, 1)
 }
 
-async function loadSubmissions(sectionId) {
+function buildPagedParams(page, search, extra = {}) {
+  const params = { page, page_size: LIST_PAGE_SIZE, ...extra }
+  const normalizedSearch = (search || '').trim()
+  if (normalizedSearch) params.search = normalizedSearch
+  return params
+}
+
+function totalPages(total) {
+  return Math.max(1, Math.ceil((total || 0) / LIST_PAGE_SIZE))
+}
+
+function pageRangeText(total, page) {
+  if (!total) return '0 / 0'
+  const start = (page - 1) * LIST_PAGE_SIZE + 1
+  const end = Math.min(page * LIST_PAGE_SIZE, total)
+  return `${start}-${end} / ${total}`
+}
+
+async function loadSectionSubmissions(sectionId, page = submissionsPage.value) {
+  currentViewSectionId.value = sectionId
+  submissionsLoading.value = true
   try {
-    await loadSectionSubmissions(sectionId)
-    showSubmissionsModal.value = true
-    showLateModal.value = false
+    const res = await api.get(`/homework/assignments/${sectionId}/submissions`, {
+      params: buildPagedParams(page, submissionsSearch.value),
+    })
+    const data = res.data.data || {}
+    const items = data.items || []
+    const total = data.total || 0
+    if (!items.length && total > 0 && page > 1) {
+      return await loadSectionSubmissions(sectionId, page - 1)
+    }
+    submissions.value = items
+    submissionsTotal.value = total
+    submissionsPage.value = data.page || page
+  } finally {
+    submissionsLoading.value = false
+  }
+}
+
+async function loadLateSectionSubmissions(sectionId, page = latePage.value) {
+  currentViewSectionId.value = sectionId
+  lateLoading.value = true
+  try {
+    const res = await api.get(`/homework/assignments/${sectionId}/submissions`, {
+      params: buildPagedParams(page, lateSearch.value, { late_only: true }),
+    })
+    const data = res.data.data || {}
+    const items = data.items || []
+    const total = data.total || 0
+    if (!items.length && total > 0 && page > 1) {
+      return await loadLateSectionSubmissions(sectionId, page - 1)
+    }
+    lateSubmissions.value = items
+    lateTotal.value = total
+    latePage.value = data.page || page
+  } finally {
+    lateLoading.value = false
+  }
+}
+
+async function loadUnsubmittedStudentsPage(sectionId, page = unsubmittedPage.value) {
+  currentViewSectionId.value = sectionId
+  unsubmittedLoading.value = true
+  try {
+    const res = await api.get(`/homework/assignments/${sectionId}/submissions-summary`, {
+      params: buildPagedParams(page, unsubmittedSearch.value),
+    })
+    const data = res.data.data || {}
+    const items = data.unsubmitted_students || []
+    const total = data.total || 0
+    if (!items.length && total > 0 && page > 1) {
+      return await loadUnsubmittedStudentsPage(sectionId, page - 1)
+    }
+    unsubmittedStudents.value = items
+    unsubmittedTotal.value = total
+    unsubmittedPage.value = data.page || page
+  } catch {
+    unsubmittedStudents.value = []
+    unsubmittedTotal.value = 0
+  } finally {
+    unsubmittedLoading.value = false
+  }
+}
+
+async function loadSubmissions(sectionId, options = {}) {
+  const { reset = false, openModal = true } = options
+  if (reset) {
+    submissionsSearch.value = ''
+    submissionsPage.value = 1
+  }
+  try {
+    await loadSectionSubmissions(sectionId, submissionsPage.value)
+    if (openModal) {
+      showSubmissionsModal.value = true
+      showLateModal.value = false
+    }
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function searchSubmissionsByName() {
+  if (!currentViewSectionId.value) return
+  submissionsPage.value = 1
+  try {
+    await loadSectionSubmissions(currentViewSectionId.value, 1)
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function resetSubmissionsSearch() {
+  submissionsSearch.value = ''
+  await searchSubmissionsByName()
+}
+
+async function changeSubmissionsPage(page) {
+  if (!currentViewSectionId.value || page < 1 || page > totalPages(submissionsTotal.value)) return
+  try {
+    await loadSectionSubmissions(currentViewSectionId.value, page)
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   }
 }
 
 async function openLateModal(sectionId) {
+  lateSearch.value = ''
+  latePage.value = 1
   try {
-    await loadSectionSubmissions(sectionId)
+    await loadLateSectionSubmissions(sectionId, 1)
     showLateModal.value = true
     showSubmissionsModal.value = false
   } catch (e) {
@@ -1284,31 +1474,72 @@ async function openLateModal(sectionId) {
   }
 }
 
-async function loadSectionSubmissions(sectionId) {
-  currentViewSectionId.value = sectionId
-  const res = await api.get(`/homework/assignments/${sectionId}/submissions`)
-  submissions.value = res.data.data || []
+async function searchLateByName() {
+  if (!currentViewSectionId.value) return
+  latePage.value = 1
+  try {
+    await loadLateSectionSubmissions(currentViewSectionId.value, 1)
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function resetLateSearch() {
+  lateSearch.value = ''
+  await searchLateByName()
+}
+
+async function changeLatePage(page) {
+  if (!currentViewSectionId.value || page < 1 || page > totalPages(lateTotal.value)) return
+  try {
+    await loadLateSectionSubmissions(currentViewSectionId.value, page)
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
 }
 
 async function unlateSubmission(submission) {
   if (!confirm('确定取消该提交的「迟交」标签？')) return
   try {
     await api.patch(`/homework/submissions/${submission.id}/unlate`)
-    if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
+    if (showSubmissionsModal.value && currentViewSectionId.value) {
+      await loadSectionSubmissions(currentViewSectionId.value, submissionsPage.value)
+    }
+    if (showLateModal.value && currentViewSectionId.value) {
+      await loadLateSectionSubmissions(
+        currentViewSectionId.value,
+        lateSubmissions.value.length === 1 && latePage.value > 1 ? latePage.value - 1 : latePage.value,
+      )
+    }
+    if (showStudentLookupModal.value && selectedStudent.value) {
+      await selectStudent(selectedStudent.value)
+    }
   } catch (e) {
     alert('操作失败：' + (e.response?.data?.detail || e.message))
   }
 }
 
 async function openUnsubmittedModal(sectionId) {
-  try {
-    currentViewSectionId.value = sectionId
-    const res = await api.get(`/homework/assignments/${sectionId}/submissions-summary`)
-    unsubmittedStudents.value = res.data.data?.unsubmitted_students || []
-  } catch {
-    unsubmittedStudents.value = []
-  }
+  unsubmittedSearch.value = ''
+  unsubmittedPage.value = 1
+  await loadUnsubmittedStudentsPage(sectionId, 1)
   showUnsubmittedModal.value = true
+}
+
+async function searchUnsubmittedByName() {
+  if (!currentViewSectionId.value) return
+  unsubmittedPage.value = 1
+  await loadUnsubmittedStudentsPage(currentViewSectionId.value, 1)
+}
+
+async function resetUnsubmittedSearch() {
+  unsubmittedSearch.value = ''
+  await searchUnsubmittedByName()
+}
+
+async function changeUnsubmittedPage(page) {
+  if (!currentViewSectionId.value || page < 1 || page > totalPages(unsubmittedTotal.value)) return
+  await loadUnsubmittedStudentsPage(currentViewSectionId.value, page)
 }
 
 function openStudentLookup(sectionId) {
@@ -1521,50 +1752,25 @@ function previewImage(url) {
   window.open(url, '_blank')
 }
 
-async function requestAnswerFileAccessUrl(payload) {
-  const res = await api.post('/homework/answer-files/access', payload)
-  return toAbsoluteUrl(res.data.data?.url || '')
-}
-
-async function openTeacherAnswerFile(sectionTitle, file, index = 0, total = 1) {
+function openTeacherAnswerFile(sectionTitle, file, index = 0, total = 1) {
   const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', index, total, file)
+  const accessUrl = getAbsoluteMediaUrl(file)
+  if (!accessUrl) return
 
   if (isDingTalk) {
-    try {
-      const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
-      if (!accessUrl) return
-      if (isPdf(file) || isImageFile(file)) {
-        window.open(accessUrl, '_blank')
-      } else {
-        openFileDownload(accessUrl, downloadName)
-      }
-    } catch (e) {
-      alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
+    if (isPdf(file) || isImageFile(file)) {
+      window.open(accessUrl, '_blank')
+    } else {
+      openFileDownload(accessUrl, downloadName)
     }
     return
   }
 
-  let pdfWindow = null
-  try { pdfWindow = window.open('', '_blank') } catch {}
-  if (!pdfWindow) {
-    try {
-      const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
-      if (accessUrl) window.location.href = accessUrl
-    } catch (e) {
-      alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
-    }
+  if (isPdf(file) || isImageFile(file)) {
+    window.open(accessUrl, '_blank')
     return
   }
-
-  pdfWindow.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>加载中...</title><style>body{text-align:center;padding:40px;font-size:14px;color:#888}</style></head><body>加载中...</body></html>')
-  try {
-    const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
-    if (!accessUrl) { pdfWindow.close(); return }
-    pdfWindow.location.href = accessUrl
-  } catch (e) {
-    pdfWindow.close()
-    alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
-  }
+  openFileDownload(accessUrl, downloadName)
 }
 
 function openQuestionFile(sectionTitle, file, index = 0, total = 1) {
@@ -2415,6 +2621,117 @@ async function pollGradingStatus(assignmentId) {
   overflow-y: auto;
 }
 
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  background: #f8fafc;
+  border: 1px solid #e9eef3;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.list-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search-input-wrap {
+  display: flex;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d0dbe3;
+  border-radius: 8px;
+  padding: 0 4px 0 10px;
+  width: min(280px, 100%);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.search-input-wrap:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.search-icon {
+  font-size: 14px;
+  opacity: 0.5;
+  margin-right: 6px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.search-input-wrap input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 8px 4px;
+  font-size: 14px;
+  color: #1a2b3c;
+}
+
+.search-input-wrap input::placeholder {
+  color: #9aabba;
+}
+
+.search-clear {
+  border: none;
+  background: transparent;
+  color: #9aabba;
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.search-clear:hover {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.search-go {
+  flex-shrink: 0;
+}
+
+.list-summary {
+  font-size: 12px;
+  color: #607080;
+}
+
+.list-pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.list-pagination-meta {
+  font-size: 12px;
+  color: #607080;
+}
+
+.list-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #40515f;
+}
+
+.modal-actions-between {
+  justify-content: space-between;
+}
+
 .submission-item {
   border: 1px solid #dfe9e5;
   border-radius: 8px;
@@ -2788,6 +3105,26 @@ async function pollGradingStatus(assignmentId) {
 
   .answer-table {
     min-width: 560px;
+  }
+
+  .list-search {
+    width: 100%;
+  }
+
+  .search-input-wrap {
+    width: 100%;
+    flex: 1;
+  }
+
+  .list-pagination,
+  .modal-actions-between {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .list-pagination-actions {
+    justify-content: space-between;
   }
 
   .report-summary-grid {

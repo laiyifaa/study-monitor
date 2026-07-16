@@ -1527,27 +1527,42 @@ async function requestAnswerFileAccessUrl(payload) {
 }
 
 async function openTeacherAnswerFile(sectionTitle, file, index = 0, total = 1) {
-  try {
-    const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
-    if (!accessUrl) return
-    const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', index, total, file)
+  const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', index, total, file)
 
-    if (isDingTalk) {
+  if (isDingTalk) {
+    try {
+      const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
+      if (!accessUrl) return
       if (isPdf(file) || isImageFile(file)) {
         window.open(accessUrl, '_blank')
       } else {
         openFileDownload(accessUrl, downloadName)
       }
-      return
+    } catch (e) {
+      alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
     }
+    return
+  }
 
-    if (isPdf(file) || isImageFile(file)) {
-      window.open(accessUrl, '_blank')
-      return
+  let pdfWindow = null
+  try { pdfWindow = window.open('', '_blank') } catch {}
+  if (!pdfWindow) {
+    try {
+      const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
+      if (accessUrl) window.location.href = accessUrl
+    } catch (e) {
+      alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
     }
+    return
+  }
 
-    openFileDownload(accessUrl, downloadName)
+  pdfWindow.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>加载中...</title><style>body{text-align:center;padding:40px;font-size:14px;color:#888}</style></head><body>加载中...</body></html>')
+  try {
+    const accessUrl = await requestAnswerFileAccessUrl({ file_url: file })
+    if (!accessUrl) { pdfWindow.close(); return }
+    pdfWindow.location.href = accessUrl
   } catch (e) {
+    pdfWindow.close()
     alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
   }
 }

@@ -235,6 +235,11 @@ class ManualGradeRequest(BaseModel):
     feedback: str = ""
 
 
+class ReturnSubmissionRequest(BaseModel):
+    reason: str = ""
+    field_validator = field_validator("reason")(lambda cls, v: (v or "").strip()[:500])
+
+
 class SaveAnswerRequest(BaseModel):
     answer: Any  # 支持新旧答案 JSON 结构
     answer_files: Optional[List[str]] = None
@@ -1155,6 +1160,8 @@ async def list_student_submissions(
                 "sent_at": task.sent_at.isoformat() if task and task.sent_at else None,
                 "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
             } if task else None,
+            "return_reason": s.return_reason,
+            "returned_at": s.returned_at.isoformat() if s.returned_at else None,
         })
 
     return {"code": 0, "data": data}
@@ -1370,7 +1377,9 @@ async def create_submission(
         existing_report_id = await db.scalar(
             select(GradingReport.id).where(GradingReport.submission_id == existing.id)
         )
-        if existing.status == "graded" or existing_report_id is not None:
+        if existing.status == "returned":
+            pass
+        elif existing.status == "graded" or existing_report_id is not None:
             raise HTTPException(status_code=400, detail="当前提交已批改，不能再次提交")
         existing.is_latest = False
         next_version = existing.version + 1
@@ -1437,7 +1446,7 @@ async def list_my_submissions(
     for s in submissions:
         assignment = assignments.get(s.assignment_id)
         report = reports.get(s.id)
-        can_view_answer_files = bool(assignment and s.is_latest and report)
+        can_view_answer_files = bool(assignment and s.is_latest and report and s.status != "returned")
 
         data.append({
             "id": s.id,
@@ -1454,9 +1463,49 @@ async def list_my_submissions(
             "can_view_answer_files": can_view_answer_files,
             "answer_files": _answer_files_to_student_entries(_load_url_list(getattr(assignment, "answer_files", None))) if can_view_answer_files else [],
             "report": _report_to_student_summary(report) if report else None,
+            "return_reason": s.return_reason,
+            "returned_at": s.returned_at.isoformat() if s.returned_at else None,
         })
 
     return {"code": 0, "data": data}
+
+
+@router.post("/return/{submission_id}")
+async def return_submission(
+    submission_id: int,
+    req: ReturnSubmissionRequest,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Submission).where(Submission.id == submission_id))
+    submission = result.scalar_one_or_none()
+    if not submission:
+        raise HTTPException(status_code=404, detail="提交不存在")
+
+    submission.status = "returned"
+    submission.return_reason = req.reason or None
+    submission.returned_at = datetime.utcnow()
+    await db.commit()
+
+    return {"code": 0, "data": {"message": "已打回", "submission_id": submission.id}}
+
+
+@router.patch("/submissions/{submission_id}/unlate")
+async def unlate_submission(
+    submission_id: int,
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Submission).where(Submission.id == submission_id))
+    submission = result.scalar_one_or_none()
+    if not submission:
+        raise HTTPException(status_code=404, detail="提交不存在")
+    if not submission.is_late:
+        raise HTTPException(status_code=400, detail="该提交未被标记为迟交")
+
+    submission.is_late = False
+    await db.commit()
+    return {"code": 0, "data": {"message": "已取消迟交标签"}}
 
 
 @router.post("/manual-grade/{submission_id}")

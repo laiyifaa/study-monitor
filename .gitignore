@@ -41,9 +41,6 @@ logs/
 # Test videos (root-level src/ only)
 /src/
 
-# Sensitive docs (含服务器密码等敏感信息)
-项目服务器.md
-
 # Docker
 docker-compose.override.yml
 backend/uploads/videos/

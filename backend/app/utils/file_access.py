@@ -7,7 +7,7 @@ from app.config import get_settings
 
 settings = get_settings()
 ANSWER_FILE_ACCESS_SCOPE = "homework_answer_file"
-ANSWER_FILE_ACCESS_EXPIRE_MINUTES = 5
+ANSWER_FILE_ACCESS_EXPIRE_MINUTES = 30
 
 
 def create_answer_file_access_token(payload: dict, expires_minutes: int = ANSWER_FILE_ACCESS_EXPIRE_MINUTES) -> str:

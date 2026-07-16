@@ -345,7 +345,7 @@ function openQuestionFile(sectionId, file, index = 0) {
 
   if (isDingTalk) {
     if (isPdf(file)) {
-      window.open(getAbsoluteMediaUrl(file), '_blank')
+      previewFile(getAbsoluteMediaUrl(file), downloadName)
     } else {
       openFileDownload(getAbsoluteMediaUrl(file), downloadName)
     }
@@ -377,7 +377,9 @@ async function openStudentAnswerFile(sectionId, file) {
     const downloadName = getAttachmentDownloadName(sectionTitle, 'answer', file.index, total, file.name)
 
     if (isDingTalk) {
-      if (isPdf(file.name) || isImageFile(file.name)) {
+      if (isPdf(file.name)) {
+        previewFile(accessUrl, downloadName)
+      } else if (isImageFile(file.name)) {
         window.open(accessUrl, '_blank')
       } else {
         openFileDownload(accessUrl, downloadName)
@@ -392,7 +394,12 @@ async function openStudentAnswerFile(sectionId, file) {
 
     openFileDownload(accessUrl, downloadName)
   } catch (e) {
-    alert('打开答案附件失败：' + (e.response?.data?.detail || e.message))
+    const detail = e.response?.data?.detail || e.message
+    if (e.response?.status === 403) {
+      alert('答案暂不可查看，需要先提交作业并等待批改完成')
+    } else {
+      alert('打开答案附件失败：' + detail)
+    }
   }
 }
 

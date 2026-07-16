@@ -1083,6 +1083,83 @@ async def list_submissions(
     return {"code": 0, "data": data}
 
 
+@router.get("/assignments/{section_id}/student-submissions")
+async def list_student_submissions(
+    section_id: int,
+    user_id: int = Query(..., description="学生用户ID"),
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    assignment_result = await db.execute(select(Assignment).where(Assignment.section_id == section_id))
+    assignment = assignment_result.scalar_one_or_none()
+    if not assignment:
+        return {"code": 0, "data": []}
+
+    result = await db.execute(
+        select(Submission)
+        .where(
+            and_(
+                Submission.assignment_id == assignment.id,
+                Submission.user_id == user_id,
+            )
+        )
+        .order_by(Submission.version.desc())
+    )
+    submissions = result.scalars().all()
+    if not submissions:
+        return {"code": 0, "data": []}
+
+    submission_ids = [s.id for s in submissions]
+
+    user_rows = await db.execute(select(User).where(User.id == user_id))
+    user = user_rows.scalar_one_or_none()
+
+    report_rows = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id.in_(submission_ids))
+    )
+    reports = {r.submission_id: r for r in report_rows.scalars().all()}
+
+    task_rows = await db.execute(
+        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids))
+    )
+    tasks = {t.submission_id: t for t in task_rows.scalars().all()}
+
+    data = []
+    for s in submissions:
+        report = reports.get(s.id)
+        task = tasks.get(s.id)
+        data.append({
+            "id": s.id,
+            "version": s.version,
+            "user": {"id": user.id, "name": user.name, "class_name": user.class_name} if user else None,
+            "images": _load_url_list(s.images),
+            "status": s.status,
+            "is_late": s.is_late,
+            "is_latest": s.is_latest,
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+            "report": {
+                "score": report.score,
+                "full_score": report.full_score,
+                "status": report.status,
+                "accuracy": report.accuracy,
+                "correct_count": report.correct_count,
+                "wrong_count": report.wrong_count,
+                "feedback": report.feedback,
+                "generated_by": report.generated_by,
+                "created_at": report.created_at.isoformat() if report.created_at else None,
+            } if report else None,
+            "task": {
+                "status": task.status,
+                "retry_count": task.retry_count,
+                "error_message": task.error_message,
+                "sent_at": task.sent_at.isoformat() if task and task.sent_at else None,
+                "graded_at": task.graded_at.isoformat() if task and task.graded_at else None,
+            } if task else None,
+        })
+
+    return {"code": 0, "data": data}
+
+
 @router.get("/assignments/{section_id}/submissions-summary")
 async def list_submissions_summary(
     section_id: int,
@@ -1885,3 +1962,160 @@ async def list_course_assignment_details(
     )
     assignments = result.scalars().all()
     return {"code": 0, "data": [_assignment_to_dict(a, include_answer=True) for a in assignments]}
+
+
+@router.get("/grading-overview")
+async def grading_overview(
+    course_id: Optional[int] = Query(None, description="课程ID，不传则返回所有课程"),
+    current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    course_query = select(Course).order_by(Course.id)
+    if course_id:
+        course_query = course_query.where(Course.id == course_id)
+    courses = (await db.execute(course_query)).scalars().all()
+    if not courses:
+        return {"code": 0, "data": {"summary": {}, "courses": []}}
+
+    course_ids = [c.id for c in courses]
+    sections = (await db.execute(
+        select(Section).where(Section.course_id.in_(course_ids)).order_by(Section.id)
+    )).scalars().all()
+    section_ids = [s.id for s in sections]
+
+    assignments = (await db.execute(
+        select(Assignment).where(Assignment.section_id.in_(section_ids)) if section_ids else select(Assignment).where(False)
+    )).scalars().all() if section_ids else []
+    assignment_map = {a.section_id: a for a in assignments}
+    assignment_ids = [a.id for a in assignments]
+
+    course_sections = {}
+    for s in sections:
+        course_sections.setdefault(s.course_id, []).append(s)
+
+    sub_counts = {aid: {"pending": 0, "graded": 0} for aid in assignment_ids}
+    if assignment_ids:
+        rows = await db.execute(
+            select(Submission.assignment_id, Submission.status, func.count(Submission.id))
+            .where(and_(Submission.assignment_id.in_(assignment_ids), Submission.is_latest == True))
+            .group_by(Submission.assignment_id, Submission.status)
+        )
+        for assignment_id, status, cnt in rows:
+            sub_counts.setdefault(assignment_id, {"pending": 0, "graded": 0})[status] = cnt
+
+    task_counts = {}
+    failed_detail = {}
+    if assignment_ids:
+        aid_of_sub = {}
+        for aid in assignment_ids:
+            for (sid,) in await db.execute(
+                select(Submission.id).where(and_(Submission.assignment_id == aid, Submission.is_latest == True))
+            ):
+                aid_of_sub[sid] = aid
+
+        sub_id_list = list(aid_of_sub.keys())
+        if sub_id_list:
+            tasks = (await db.execute(
+                select(GradingTask).where(GradingTask.submission_id.in_(sub_id_list))
+            )).scalars().all()
+
+            failed_sids = []
+            for t in tasks:
+                aid = aid_of_sub.get(t.submission_id)
+                if not aid:
+                    continue
+                task_counts.setdefault(aid, {"pending": 0, "sent": 0, "graded": 0, "failed": 0})
+                if t.status in task_counts[aid]:
+                    task_counts[aid][t.status] += 1
+                if t.status == "failed":
+                    failed_sids.append(t.submission_id)
+                    failed_detail.setdefault(aid, []).append({
+                        "submission_id": t.submission_id,
+                        "error": t.error_message or "未知错误",
+                        "retry_count": t.retry_count,
+                    })
+
+            if failed_sids:
+                sub_user_rows = await db.execute(
+                    select(Submission.id, Submission.user_id).where(Submission.id.in_(failed_sids))
+                )
+                sub_to_user = {row[0]: row[1] for row in sub_user_rows}
+                uids = list(set(sub_to_user.values()))
+                user_rows = await db.execute(select(User.id, User.name).where(User.id.in_(uids)))
+                user_map = {row[0]: row[1] for row in user_rows}
+                for aid, flist in failed_detail.items():
+                    for ft in flist:
+                        ft["student_name"] = user_map.get(sub_to_user.get(ft["submission_id"]), "未知")
+
+    course_list = []
+    totals = {"total_assignments": 0, "total_submissions": 0, "graded": 0, "pending": 0, "failed": 0, "in_progress": 0}
+
+    for course in courses:
+        secs = course_sections.get(course.id, [])
+        sections_out = []
+        c_as = 0
+        c_subs = 0
+        c_graded = 0
+        c_pending = 0
+        c_failed = 0
+        c_in_progress = 0
+
+        for sec in secs:
+            assignment = assignment_map.get(sec.id)
+            if not assignment:
+                continue
+            c_as += 1
+            sc = sub_counts.get(assignment.id, {"pending": 0, "graded": 0})
+            tc = task_counts.get(assignment.id, {"pending": 0, "sent": 0, "graded": 0, "failed": 0})
+            total = sc["pending"] + sc["graded"]
+            graded = sc["graded"]
+            pending_subs = sc["pending"]
+            failed = tc.get("failed", 0)
+            in_progress = tc.get("sent", 0) + tc.get("pending", 0)
+
+            c_subs += total
+            c_graded += graded
+            c_pending += pending_subs
+            c_failed += failed
+            c_in_progress += in_progress
+
+            sections_out.append({
+                "section_id": sec.id,
+                "section_title": sec.title,
+                "assignment_id": assignment.id,
+                "title": assignment.title,
+                "status": assignment.status,
+                "grading_mode": assignment.grading_mode,
+                "grading_triggered": assignment.grading_triggered,
+                "grading_status": assignment.grading_status,
+                "total_submissions": total,
+                "graded": graded,
+                "pending": pending_subs,
+                "failed": failed,
+                "in_progress": in_progress,
+                "failed_tasks": failed_detail.get(assignment.id, []),
+            })
+
+        totals["total_assignments"] += c_as
+        totals["total_submissions"] += c_subs
+        totals["graded"] += c_graded
+        totals["pending"] += c_pending
+        totals["failed"] += c_failed
+        totals["in_progress"] += c_in_progress
+
+        course_list.append({
+            "id": course.id,
+            "title": course.title,
+            "summary": {
+                "total_assignments": c_as,
+                "total_submissions": c_subs,
+                "graded": c_graded,
+                "pending": c_pending,
+                "failed": c_failed,
+                "in_progress": c_in_progress,
+            },
+            "sections": sections_out if c_as > 0 else [],
+        })
+
+    totals["total_courses"] = len(course_list)
+    return {"code": 0, "data": {"summary": totals, "courses": course_list}}

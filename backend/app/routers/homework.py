@@ -935,7 +935,9 @@ async def download_answer_file(
     headers = {}
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{os.path.basename(file_path)}"'
-    return FileResponse(file_path, headers=headers)
+        headers["Content-Type"] = "application/octet-stream"
+    mt = "application/pdf" if isinstance(file_path, Path) and file_path.suffix.lower() == ".pdf" else None
+    return FileResponse(file_path, headers=headers, media_type=mt)
 
 
 @router.post("/answer/parse")

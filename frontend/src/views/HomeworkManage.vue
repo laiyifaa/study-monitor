@@ -362,8 +362,8 @@
             <div class="submission-header">
               <span class="student-name">{{ s.user?.name }}</span>
               <div class="status-group">
-                <span v-if="s.is_late" class="status-badge late">迟交</span>
-                <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
+                <span v-if="s.is_late" class="status-badge late">迟交<button class="unlate-btn" title="取消迟交标签" @click.stop="unlateSubmission(s)">✕</button></span>
+                <span class="status-badge" :class="s.status">{{ submissionStatusText(s) }}</span>
                 <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
               </div>
             </div>
@@ -378,6 +378,9 @@
               <div v-if="s.report.accuracy != null" class="report-meta">正确率：{{ formatAccuracy(s.report.accuracy) }} &nbsp; 对{{ s.report.correct_count ?? 0 }} / 错{{ s.report.wrong_count ?? 0 }}</div>
               <div class="feedback">{{ s.report.feedback }}</div>
             </div>
+            <div v-if="s.status === 'returned' && s.return_reason" class="return-reason">
+              <span class="return-label">打回原因：</span>{{ s.return_reason }}
+            </div>
             <div v-if="s.task && s.task.status === 'failed'" class="task-error">
               <span class="error-label">批改失败：</span>{{ s.task.error_message || '未知错误' }}
               <span v-if="s.task.retry_count > 0" class="retry-info">(已重试 {{ s.task.retry_count }} 次)</span>
@@ -390,6 +393,7 @@
                 {{ regradingSubmissionId === s.id ? '重批中...' : '重新智能批改' }}
               </button>
               <button v-if="s.status === 'pending'" class="btn-sm primary" @click="openGradeModal(s)">批改</button>
+              <button v-if="s.status !== 'returned'" class="btn-sm danger" @click="openReturnModal(s)">打回重交</button>
             </div>
             <div class="submission-time">{{ formatDate(s.submitted_at) }}</div>
           </div>
@@ -562,7 +566,7 @@
             <div class="submission-header">
               <span class="student-name">{{ s.user?.name }} <span v-if="studentSubmissions.length > 1" class="version-badge">v{{ s.version }}{{ s.is_latest ? ' (最新)' : '' }}</span></span>
               <div class="status-group">
-                <span v-if="s.is_late" class="status-badge late">迟交</span>
+                <span v-if="s.is_late" class="status-badge late">迟交<button class="unlate-btn" title="取消迟交标签" @click.stop="unlateSubmission(s)">✕</button></span>
                 <span class="status-badge" :class="s.status">{{ s.status === 'graded' ? '已批改' : '待批改' }}</span>
                 <span v-if="s.task" class="task-badge" :class="s.task.status">{{ taskStatusText(s.task.status) }}</span>
               </div>
@@ -615,6 +619,21 @@
         <div class="modal-actions">
           <button class="btn-secondary" @click="showGradeModal = false">取消</button>
           <button class="btn-primary" :disabled="gradeSubmitting" @click="submitGrade">确认批改</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showReturnModal" class="modal-overlay" @click.self="showReturnModal = false">
+      <div class="modal">
+        <h3>打回重交 - {{ returnSubmission?.user?.name }}</h3>
+        <div class="form-group">
+          <label>打回原因</label>
+          <textarea v-model="returnReason" placeholder="请说明打回原因，学生将看到此原因并重新提交" rows="4"></textarea>
+        </div>
+        <div v-if="returnSubmitting" class="loading">提交中...</div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showReturnModal = false">取消</button>
+          <button class="btn-primary danger" :disabled="returnSubmitting" @click="submitReturn">确认打回</button>
         </div>
       </div>
     </div>
@@ -687,6 +706,10 @@ const selectedStudent = ref(null)
 const studentLookupSectionId = ref(null)
 const studentSubmissions = ref([])
 const studentSubmissionsLoading = ref(false)
+const showReturnModal = ref(false)
+const returnSubmission = ref(null)
+const returnReason = ref('')
+const returnSubmitting = ref(false)
 let pollTimer = null
 let regradeTimer = null
 let studentSearchTimer = null
@@ -1267,6 +1290,16 @@ async function loadSectionSubmissions(sectionId) {
   submissions.value = res.data.data || []
 }
 
+async function unlateSubmission(submission) {
+  if (!confirm('确定取消该提交的「迟交」标签？')) return
+  try {
+    await api.patch(`/homework/submissions/${submission.id}/unlate`)
+    if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
+  } catch (e) {
+    alert('操作失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
 async function openUnsubmittedModal(sectionId) {
   try {
     currentViewSectionId.value = sectionId
@@ -1325,7 +1358,13 @@ async function selectStudent(user) {
 }
 
 function statusText(status) {
-  return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
+  return { draft: '草稿', published: '已发布', closed: '已关闭', returned: '已打回' }[status] || status
+}
+
+function submissionStatusText(s) {
+  if (s.status === 'returned') return '已打回'
+  if (s.status === 'graded') return '已批改'
+  return '待批改'
 }
 
 function gradingStatusText(status) {
@@ -1583,6 +1622,31 @@ async function submitGrade() {
     alert('批改失败：' + (e.response?.data?.detail || e.message))
   } finally {
     gradeSubmitting.value = false
+  }
+}
+
+function openReturnModal(submission) {
+  returnSubmission.value = submission
+  returnReason.value = ''
+  showReturnModal.value = true
+}
+
+async function submitReturn() {
+  if (!returnReason.value.trim()) {
+    alert('请输入打回原因')
+    return
+  }
+  returnSubmitting.value = true
+  try {
+    await api.post(`/homework/return/${returnSubmission.value.id}`, {
+      reason: returnReason.value,
+    })
+    showReturnModal.value = false
+    if (currentViewSectionId.value) await loadSectionSubmissions(currentViewSectionId.value)
+  } catch (e) {
+    alert('打回失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    returnSubmitting.value = false
   }
 }
 
@@ -2638,6 +2702,56 @@ async function pollGradingStatus(assignmentId) {
   background: #ffffff;
   border: 1px dashed #cfdce3;
   border-radius: 6px;
+}
+
+.status-badge.returned {
+  background: #fff7e6;
+  color: #d46b08;
+  border-color: #ffd591;
+}
+
+.btn-sm.danger {
+  color: #ff4d4f;
+  border-color: #ffccc7;
+}
+.btn-sm.danger:hover {
+  background: #fff2f0;
+}
+
+.btn-primary.danger {
+  background: #ff4d4f;
+  border-color: #ff4d4f;
+  color: #fff;
+}
+.btn-primary.danger:hover {
+  background: #ff7875;
+}
+
+.return-reason {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #d46b08;
+}
+.return-label {
+  font-weight: 600;
+}
+
+.unlate-btn {
+  background: none;
+  border: none;
+  color: #ff4d4f;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  margin-left: 2px;
+}
+.unlate-btn:hover {
+  color: #cf1322;
 }
 
 @media (max-width: 720px) {

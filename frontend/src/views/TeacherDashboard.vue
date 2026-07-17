@@ -177,7 +177,7 @@
 
       <!-- ==================== ECharts 图表区域 ==================== -->
       <div class="chart-section">
-        <h3>学习时长分布</h3>
+        <h3>完成进度分布</h3>
         <!-- 图表挂载容器，由 renderChart() 初始化 ECharts 实例 -->
         <div ref="chartRef" class="chart-container"></div>
       </div>
@@ -487,29 +487,41 @@ function renderChart() {
     chartInstance = echarts.init(chartRef.value)
   }
 
-  // 基于概览统计绘制完成 vs 未完成柱状图（不受分页影响）
-  const completed = overview.value.completed_students || 0
-  const total = overview.value.total_students || 0
-  const notCompleted = total - completed
+  // 基于后端返回的 completion_distribution 绘制完成进度分布图（0/N ~ N/N）
+  const dist = overview.value.completion_distribution || {}
+  const sectionCount = overview.value.section_count || 12
+
+  // 构建标签和数据：0/12, 1/12, ..., 12/12
+  const labels = []
+  const values = []
+  const colors = []
+  for (let i = 0; i <= sectionCount; i++) {
+    labels.push(`${i}/${sectionCount}`)
+    values.push(dist[String(i)] || 0)
+    // 颜色渐变：0档偏灰 → 中间偏黄 → 满档偏绿
+    if (i === 0) colors.push('#d9d9d9')
+    else if (i === sectionCount) colors.push('#52c41a')
+    else colors.push(i >= sectionCount * 0.5 ? '#73d13d' : '#faad14')
+  }
 
   chartInstance.setOption({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params) => `${params[0].name}：${params[0].value} 人`,
+    },
+    grid: { left: 50, right: 20, top: 20, bottom: 40 },
     xAxis: {
       type: 'category',
-      data: ['未完成', '已完成'],
-      axisLabel: { fontSize: 12 },
+      data: labels,
+      axisLabel: { fontSize: 11, interval: 0, rotate: labels.length > 13 ? 30 : 0 },
     },
-    yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 11 }, name: '人数' },
     series: [{
       type: 'bar',
-      data: [
-        { value: notCompleted, itemStyle: { color: '#faad14' } },
-        { value: completed, itemStyle: { color: '#52c41a' } },
-      ],
-      barWidth: '40%',
+      data: values.map((v, i) => ({ value: v, itemStyle: { color: colors[i] } })),
+      barMaxWidth: 30,
       itemStyle: { borderRadius: [4, 4, 0, 0] },
-      label: { show: true, position: 'top', fontSize: 13 },
+      label: { show: true, position: 'top', fontSize: 12 },
     }],
   })
 }

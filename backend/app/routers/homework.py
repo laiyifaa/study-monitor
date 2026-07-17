@@ -177,7 +177,7 @@ async def _execute_grading_for_submission(
 
             if not stitched_url:
                 output_filename = f"stitched_{submission.id}.jpg"
-                stitched_url = stitch_images(local_paths, output_filename)
+                stitched_url = stitch_images(local_paths, output_filename, use_ocr=settings.GRADING_USE_OCR)
 
             task.stitched_image_url = stitched_url
             await session.commit()

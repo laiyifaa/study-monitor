@@ -95,6 +95,14 @@
                 <span class="fail-label">失败任务 ({{ sec.failed_tasks.length }})</span>
                 <span class="chevron small">{{ expandedFailed[sec.section_id] ? '▾' : '▸' }}</span>
               </div>
+              <button
+                v-if="sec.failed_tasks.length > 1"
+                class="btn-sm danger"
+                :disabled="regradeAllLoading === sec.assignment_id"
+                @click.stop="regradeAllFailed(sec)"
+              >
+                {{ regradeAllLoading === sec.assignment_id ? '重批中...' : `全部重新批改 (${sec.failed_tasks.length})` }}
+              </button>
               <div v-if="expandedFailed[sec.section_id]" class="failed-tasks-body">
                 <div v-for="ft in sec.failed_tasks" :key="ft.submission_id" class="failed-task-item">
                   <span class="ft-student">{{ ft.student_name }}</span>
@@ -115,7 +123,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../utils/api.js'
 
@@ -129,9 +137,8 @@ const expandedCourses = ref({})
 const expandedFailed = ref({})
 const autoRefresh = ref(false)
 const retryingId = ref(null)
+const regradeAllLoading = ref(null)
 let refreshTimer = null
-
-const allCourseFilterList = computed(() => allCourses.value)
 
 function toggleCourse(id) {
   expandedCourses.value[id] = !expandedCourses.value[id]
@@ -204,6 +211,23 @@ async function retryTask(submissionId, sec) {
   }
 }
 
+async function regradeAllFailed(sec) {
+  regradeAllLoading.value = sec.assignment_id
+  try {
+    const res = await api.post(`/homework/regrade-failed/${sec.assignment_id}`)
+    if (res.data.code === 0) {
+      alert(res.data.data.message)
+    } else {
+      alert(res.data.msg || '操作失败')
+    }
+  } catch (e) {
+    alert('请求失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    regradeAllLoading.value = null
+    await loadOverview()
+  }
+}
+
 function toggleAutoRefresh() {
   if (autoRefresh.value) {
     refreshTimer = setInterval(loadOverview, 5000)
@@ -216,9 +240,6 @@ function toggleAutoRefresh() {
 onMounted(async () => {
   await loadCourses()
   await loadOverview()
-  if (allCourses.value.length > 0 && !selectedCourseId.value) {
-    const firstId = allCourses.value[0].id
-  }
 })
 
 onUnmounted(() => {
@@ -392,6 +413,13 @@ onUnmounted(() => {
   color: #fff;
 }
 .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
+.btn-sm.danger {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  margin-top: 4px;
+}
+.btn-sm.danger:disabled { opacity: .5; cursor: not-allowed; }
 .failed-tasks { margin-top: 8px; }
 .failed-tasks-header {
   display: flex;

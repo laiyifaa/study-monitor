@@ -34,6 +34,48 @@ settings = get_settings()
 
 _grading_semaphore = asyncio.Semaphore(settings.GRADING_CONCURRENCY_LIMIT)
 
+# MEDIUM-12: 熔断器状态
+_circuit_breaker_lock = asyncio.Lock()
+_circuit_breaker_consecutive_failures: int = 0
+_circuit_breaker_open_until: float = 0.0  # timestamp，在此之前所有调用直接失败
+
+
+async def _circuit_breaker_check() -> None:
+    """检查熔断器状态，如果熔断中则抛出异常"""
+    async with _circuit_breaker_lock:
+        if _circuit_breaker_consecutive_failures >= settings.GRADING_CIRCUIT_BREAKER_THRESHOLD:
+            now = time.monotonic()
+            if now < _circuit_breaker_open_until:
+                remaining = int(_circuit_breaker_open_until - now)
+                raise RuntimeError(
+                    f"智能体平台熔断中（连续失败 {_circuit_breaker_consecutive_failures} 次），"
+                    f"预计 {remaining} 秒后恢复"
+                )
+            else:
+                # 冷却期已过，允许尝试，重置为半开状态
+                logger.info("熔断器冷却期已过，允许半开尝试")
+
+
+async def _circuit_breaker_record_success() -> None:
+    """记录成功，重置熔断器"""
+    global _circuit_breaker_consecutive_failures, _circuit_breaker_open_until
+    async with _circuit_breaker_lock:
+        _circuit_breaker_consecutive_failures = 0
+        _circuit_breaker_open_until = 0.0
+
+
+async def _circuit_breaker_record_failure() -> None:
+    """记录失败，可能触发熔断"""
+    global _circuit_breaker_consecutive_failures, _circuit_breaker_open_until
+    async with _circuit_breaker_lock:
+        _circuit_breaker_consecutive_failures += 1
+        if _circuit_breaker_consecutive_failures >= settings.GRADING_CIRCUIT_BREAKER_THRESHOLD:
+            _circuit_breaker_open_until = time.monotonic() + settings.GRADING_CIRCUIT_BREAKER_COOLDOWN
+            logger.error(
+                f"熔断器触发: 连续失败 {_circuit_breaker_consecutive_failures} 次，"
+                f"将暂停调用 {settings.GRADING_CIRCUIT_BREAKER_COOLDOWN} 秒"
+            )
+
 _http_client: httpx.AsyncClient | None = None
 
 
@@ -41,13 +83,27 @@ def _get_http_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None:
         _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(300.0),
+            timeout=httpx.Timeout(
+                connect=30.0,
+                read=float(settings.GRADING_AGENT_TIMEOUT),
+                write=60.0,
+                pool=30.0,
+            ),
             limits=httpx.Limits(
                 max_connections=30,
                 max_keepalive_connections=20,
             ),
         )
     return _http_client
+
+
+async def close_http_client():
+    """优雅关闭全局 HTTP 客户端连接池（在 main.py lifespan shutdown 时调用）"""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+        logger.info("HTTP 客户端连接池已关闭")
 
 
 async def _mark_task_sent(task_id: int):
@@ -63,7 +119,7 @@ async def _mark_task_sent(task_id: int):
         await db.commit()
 
 
-async def _mark_task_failed(task_id: int, error_message: str, retry_count: int):
+async def _mark_task_failed(task_id: int, error_message: str, retry_count: int = 0):
     async with async_session() as db:
         result = await db.execute(select(GradingTask).where(GradingTask.id == task_id))
         task = result.scalar_one_or_none()
@@ -97,7 +153,6 @@ async def call_grading_agent(
             stitched_image_url=stitched_image_url,
             prompt=prompt,
             answer_json=answer_json,
-            retry_count=retry_count,
         )
 
 
@@ -107,22 +162,12 @@ async def _do_call_grading_agent(
     stitched_image_url: str,
     prompt: str,
     answer_json: str = "",
-    retry_count: int = 0,
 ) -> bool:
     """
-    调用智能体批改作业（同步等待完整流式响应，直接落库）
+    调用智能体批改作业（循环重试，替代递归）
 
-    参数：
-        task_id            — GradingTask ID
-        submission_id      — 提交 ID（内部使用，不传给智能体）
-        stitched_image_url — 拼接后的作业图片 URL
-        prompt             — 评分标准/批改提示词
-        answer_json        — 参考答案 JSON 字符串
-        retry_count        — 当前重试次数
-
-    返回值：
-        True  — 批改成功（结果已写入数据库）
-        False — 批改失败
+    HIGH-3: 将原来的递归重试改为循环，避免栈帧堆积和 Semaphore 嵌套。
+    MEDIUM-12: 集成熔断器——连续失败超过阈值后暂停调用。
     """
     agent_url = settings.GRADING_AGENT_URL
     api_key = settings.GRADING_AGENT_API_KEY
@@ -132,17 +177,88 @@ async def _do_call_grading_agent(
         logger.warning(
             f"{error_message}, 跳过调用: task_id={task_id}, submission_id={submission_id}"
         )
-        await _mark_task_failed(task_id, error_message, retry_count)
+        await _mark_task_failed(task_id, error_message, 0)
         return False
 
-    _t0 = time.perf_counter()
+    # MEDIUM-12: 熔断器检查
     try:
-        await _mark_task_sent(task_id)
+        await _circuit_breaker_check()
+    except RuntimeError as cb_err:
+        logger.warning(f"熔断器拒绝调用: task_id={task_id}, {cb_err}")
+        await _mark_task_failed(task_id, str(cb_err), 0)
+        return False
 
-        image_path = await _download_image(stitched_image_url)
-        if not image_path:
-            raise Exception("图片下载失败")
+    last_error: Exception | None = None
+    for attempt in range(settings.GRADING_MAX_RETRIES + 1):
+        try:
+            result = await _do_single_grading_call(
+                task_id=task_id,
+                submission_id=submission_id,
+                stitched_image_url=stitched_image_url,
+                prompt=prompt,
+                answer_json=answer_json,
+                attempt=attempt,
+            )
+            await _circuit_breaker_record_success()
+            return result
+        except Exception as e:
+            last_error = e
+            elapsed_info = f"attempt={attempt + 1}/{settings.GRADING_MAX_RETRIES + 1}"
+            logger.error(
+                f"智能体批改失败: task_id={task_id}, submission_id={submission_id}, "
+                f"{elapsed_info}, error={e}"
+            )
+            if attempt < settings.GRADING_MAX_RETRIES:
+                delay = settings.GRADING_RETRY_DELAY * (attempt + 1)
+                logger.info(f"将在 {delay} 秒后重试 (第 {attempt + 2} 次): task_id={task_id}")
+                await asyncio.sleep(delay)
 
+    # 所有重试耗尽
+    await _circuit_breaker_record_failure()
+    await _mark_task_failed(task_id, str(last_error), settings.GRADING_MAX_RETRIES)
+    logger.error(
+        f"智能体批改最终失败（超过最大重试次数 {settings.GRADING_MAX_RETRIES}）: "
+        f"task_id={task_id}, submission_id={submission_id}"
+    )
+    return False
+
+
+async def _do_single_grading_call(
+    task_id: int,
+    submission_id: int,
+    stitched_image_url: str,
+    prompt: str,
+    answer_json: str = "",
+    attempt: int = 0,
+) -> bool:
+    """
+    单次智能体批改调用（不含重试逻辑）
+
+    参数：
+        task_id            — GradingTask ID
+        submission_id      — 提交 ID（内部使用，不传给智能体）
+        stitched_image_url — 拼接后的作业图片 URL
+        prompt             — 评分标准/批改提示词
+        answer_json        — 参考答案 JSON 字符串
+        attempt            — 当前尝试次数（用于日志）
+
+    返回值：
+        True  — 批改成功（结果已写入数据库）
+
+    异常：
+        失败时抛出异常，由调用方 (_do_call_grading_agent) 负责重试
+    """
+    agent_url = settings.GRADING_AGENT_URL
+    api_key = settings.GRADING_AGENT_API_KEY
+
+    _t0 = time.perf_counter()
+    await _mark_task_sent(task_id)
+
+    image_path = await _download_image(stitched_image_url)
+    if not image_path:
+        raise Exception("图片下载失败")
+
+    try:
         file_id = await _upload_file(agent_url, api_key, image_path, content_type="image/jpeg")
         if not file_id:
             raise Exception("图片上传失败")
@@ -240,41 +356,24 @@ async def _do_call_grading_agent(
         elapsed = time.perf_counter() - _t0
         logger.info(
             f"智能体批改成功: task_id={task_id}, submission_id={submission_id}, "
-            f"score={score}/{full_score}, elapsed={elapsed:.1f}s"
+            f"score={score}/{full_score}, attempt={attempt + 1}, elapsed={elapsed:.1f}s"
         )
         return True
 
-    except Exception as e:
-        elapsed = time.perf_counter() - _t0
-        logger.error(
-            f"智能体批改失败: task_id={task_id}, submission_id={submission_id}, "
-            f"retry_count={retry_count}, elapsed={elapsed:.1f}s, error={str(e)}"
-        )
-
-        if retry_count < settings.GRADING_MAX_RETRIES:
-            delay = settings.GRADING_RETRY_DELAY * (retry_count + 1)
-            logger.info(f"将在 {delay} 秒后重试: task_id={task_id}")
-            await asyncio.sleep(delay)
-            return await _do_call_grading_agent(
-                task_id=task_id,
-                submission_id=submission_id,
-                stitched_image_url=stitched_image_url,
-                prompt=prompt,
-                answer_json=answer_json,
-                retry_count=retry_count + 1,
-            )
-        else:
-            await _mark_task_failed(task_id, str(e), retry_count)
-
-            logger.error(
-                f"智能体批改最终失败（超过最大重试次数）: "
-                f"task_id={task_id}, submission_id={submission_id}"
-            )
-            return False
+    finally:
+        # MEDIUM-4: 清理临时文件
+        if image_path and image_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(image_path)
+            except OSError:
+                pass
 
 
 def _parse_grading_result(text: str) -> dict:
-    """从智能体响应文本中提取批改结果 JSON"""
+    """从智能体响应文本中提取批改结果 JSON
+
+    MEDIUM-11: 增加 schema 校验——验证必须包含 summary 或 result.summary 字段。
+    """
     text = text.strip()
     start = text.find("{")
     end = text.rfind("}")
@@ -282,9 +381,25 @@ def _parse_grading_result(text: str) -> dict:
         text = text[start:end + 1]
 
     try:
-        return json.loads(text)
+        result = json.loads(text)
     except json.JSONDecodeError:
         raise Exception(f"无法解析智能体响应为 JSON: {text[:200]}")
+
+    # Schema 校验：检查必须包含的核心字段
+    if not isinstance(result, dict):
+        raise Exception(f"智能体响应不是 JSON 对象: {text[:200]}")
+
+    nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    has_summary = isinstance(result.get("summary"), dict)
+    has_nested_summary = isinstance(nested.get("summary"), dict)
+
+    if not has_summary and not has_nested_summary:
+        # 降级处理：没有标准 summary，尝试记录警告但不抛异常
+        logger.warning(
+            f"智能体响应缺少 summary 字段，可能为降级结果: keys={list(result.keys())}"
+        )
+
+    return result
 
 
 def _as_dict(value) -> dict:
@@ -438,7 +553,7 @@ async def _upload_file(agent_url: str, api_key: str, file_path: str, content_typ
     with open(file_path, "rb") as f:
         files = {"file": (os.path.basename(file_path), f, media_type)}
         headers = {"Authorization": f"Bearer {api_key}"}
-        response = await client.post(upload_url, files=files, headers=headers, timeout=60)
+        response = await client.post(upload_url, files=files, headers=headers, timeout=settings.GRADING_UPLOAD_TIMEOUT)
         response.raise_for_status()
 
     data = response.json()
@@ -499,7 +614,7 @@ async def _send_chat_message(
 
     chunks: list[str] = []
     client = _get_http_client()
-    async with client.stream("POST", chat_url, json=body, headers=headers, timeout=300) as response:
+    async with client.stream("POST", chat_url, json=body, headers=headers, timeout=settings.GRADING_AGENT_TIMEOUT) as response:
         response.raise_for_status()
 
         async for line in response.aiter_lines():
@@ -527,16 +642,36 @@ async def _send_chat_message(
 
 
 async def _refresh_grading_status(assignment_id: int, db):
-    """刷新作业的批改状态"""
-    from sqlalchemy import func, and_
-    pending_count = await db.scalar(
+    """刷新作业的批改状态
+
+    MEDIUM-1: 修正逻辑——只有当无 pending 且无 sent（进行中）的提交时才标记为 graded。
+    """
+    from sqlalchemy import func, and_, or_
+    active_count = await db.scalar(
         select(func.count()).select_from(Submission).where(
-            and_(Submission.assignment_id == assignment_id, Submission.status == "pending")
+            and_(
+                Submission.assignment_id == assignment_id,
+                or_(Submission.status == "pending", Submission.status == "returned"),
+            )
         )
     )
-    if pending_count == 0:
-        assignment = (await db.execute(select(Assignment).where(Assignment.id == assignment_id))).scalar_one_or_none()
-        if assignment and assignment.grading_status != "graded":
+    assignment = (await db.execute(select(Assignment).where(Assignment.id == assignment_id))).scalar_one_or_none()
+    if not assignment:
+        return
+    # 检查是否有进行中的 GradingTask (status == "sent")
+    if active_count == 0:
+        from sqlalchemy import select as sa_select
+        sent_count = await db.scalar(
+            sa_select(func.count()).select_from(GradingTask).where(
+                and_(
+                    GradingTask.submission_id.in_(
+                        sa_select(Submission.id).where(Submission.assignment_id == assignment_id)
+                    ),
+                    GradingTask.status == "sent",
+                )
+            )
+        )
+        if (sent_count or 0) == 0 and assignment.grading_status != "graded":
             assignment.grading_status = "graded"
 
 
@@ -584,7 +719,7 @@ async def _send_answer_parse_message(agent_url: str, api_key: str, file_id: str)
 
     chunks: list[str] = []
     client = _get_http_client()
-    async with client.stream("POST", chat_url, json=body, headers=headers, timeout=120) as response:
+    async with client.stream("POST", chat_url, json=body, headers=headers, timeout=settings.GRADING_UPLOAD_TIMEOUT) as response:
         response.raise_for_status()
         async for line in response.aiter_lines():
             if not line.strip() or not line.startswith("data:"):

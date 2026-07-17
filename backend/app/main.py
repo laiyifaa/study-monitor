@@ -22,6 +22,7 @@ from app.config import get_settings
 from app.database import init_db
 from app.database_redis import close_redis
 from app.routers import auth, heartbeat, course, stats, notify, admin, homework, ops, section, announcement, feedback, agent, login_log
+from app.services.agent_caller import close_http_client
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -61,6 +62,7 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     yield
     stop_scheduler()
+    await close_http_client()
     await close_redis()
 
 

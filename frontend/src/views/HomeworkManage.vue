@@ -72,6 +72,14 @@
             >
               {{ triggeringSection === section.id ? '批改中...' : '触发智能批改' }}
             </button>
+            <button
+              v-if="getAssignment(section.id).status === 'published' && getAssignment(section.id).grading_mode !== 'manual'"
+              class="btn-sm regrade-failed-btn"
+              :disabled="regradeAllSectionId === section.id"
+              @click="regradeAllFailed(section.id)"
+            >
+              {{ regradeAllSectionId === section.id ? '重批中...' : '重批失败任务' }}
+            </button>
           </div>
           <div v-if="triggeringSection === section.id && triggerStatus" class="trigger-progress">
             <span class="progress-text">
@@ -768,6 +776,7 @@ const currentViewSectionId = ref(null)
 const triggeringSection = ref(null)
 const triggerStatus = ref(null)
 const regradingSubmissionId = ref(null)
+const regradeAllSectionId = ref(null)
 const showAnswerPreview = ref(false)
 const quickAnswerFieldRef = ref(null)
 const quickAnswerBarRef = ref(null)
@@ -1892,6 +1901,31 @@ function canRegradeSubmission(submission) {
   return !generatedBy.includes('teacher')
 }
 
+async function regradeAllFailed(sectionId) {
+  const assignment = getAssignment(sectionId)
+  if (!assignment) return
+
+  regradeAllSectionId.value = sectionId
+  try {
+    const res = await api.post(`/homework/regrade-failed/${assignment.id}`)
+    const data = res.data.data
+    if (data.count === 0) {
+      alert('无失败任务需要重新批改')
+    } else {
+      alert(data.message)
+      // 启动轮询跟踪批改进度
+      stopPolling()
+      triggeringSection.value = sectionId
+      triggerStatus.value = { total: data.count, pending: data.count, processing: 0, graded: 0, failed: 0, done: 0 }
+      pollTimer = setInterval(() => pollGradingStatus(assignment.id), 3000)
+    }
+  } catch (e) {
+    alert('重批失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    regradeAllSectionId.value = null
+  }
+}
+
 async function triggerAiGrading(sectionId) {
   const assignment = getAssignment(sectionId)
   if (!assignment) return
@@ -2089,6 +2123,15 @@ async function pollGradingStatus(assignmentId) {
 }
 
 .btn-sm.ai-grade-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-sm.regrade-failed-btn {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+.btn-sm.regrade-failed-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

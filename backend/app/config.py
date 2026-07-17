@@ -67,10 +67,13 @@ class Settings(BaseSettings):
     # 为空时表示未配置，定时任务会跳过智能体调用
     GRADING_AGENT_URL: str = ""
     GRADING_AGENT_API_KEY: str = ""
-    GRADING_AGENT_TIMEOUT: int = 30
+    GRADING_AGENT_TIMEOUT: int = 300
+    GRADING_UPLOAD_TIMEOUT: int = 60
     GRADING_MAX_RETRIES: int = 3
     GRADING_RETRY_DELAY: int = 5
     GRADING_CONCURRENCY_LIMIT: int = 10
+    GRADING_CIRCUIT_BREAKER_THRESHOLD: int = 5   # 连续失败次数后触发熔断
+    GRADING_CIRCUIT_BREAKER_COOLDOWN: int = 300  # 熔断冷却时间（秒）
     API_BASE_URL: str = "http://localhost:8000"
 
     # ── 服务运行参数 ──

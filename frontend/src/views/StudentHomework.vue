@@ -96,6 +96,13 @@
               </div>
               <div class="returned-hint">请修改后重新提交</div>
             </div>
+            <div v-else-if="mySubmissionMap[section.id].task?.status === 'failed'" class="failed-notice">
+              <div class="failed-header">批改失败</div>
+              <div v-if="mySubmissionMap[section.id].task?.error_message" class="failed-reason">
+                原因：{{ mySubmissionMap[section.id].task.error_message }}
+              </div>
+              <div class="failed-hint">可先查看答案附件</div>
+            </div>
             <div v-else class="pending">等待批改中...</div>
           </div>
           <div v-else class="pending">暂未提交作业</div>
@@ -1124,6 +1131,26 @@ function openStudentAnswerFile(sectionId, file) {
 .returned-hint {
   color: #999;
   font-size: 12px;
+}
+.failed-notice {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #fff4f4;
+  border: 1px solid #f3c7c7;
+  border-radius: 8px;
+}
+.failed-header {
+  font-weight: 700;
+  color: #c41d1d;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.failed-reason,
+.failed-hint {
+  color: #c41d1d;
+  font-size: 13px;
+  margin-bottom: 4px;
+  word-break: break-word;
 }
 .returned-warning {
   margin-bottom: 16px;

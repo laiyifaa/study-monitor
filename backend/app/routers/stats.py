@@ -268,6 +268,17 @@ async def class_overview(
         # 统计完成人数（所有小节都完成的）
         all_completed = sum(1 for cnt in student_section_complete.values() if cnt >= section_count)
 
+        # 构建完成进度分布：0/N ~ N/N 各档人数
+        completion_distribution = {}
+        for i in range(section_count + 1):
+            completion_distribution[str(i)] = 0
+        for cnt in student_section_complete.values():
+            key = str(min(cnt, section_count))
+            completion_distribution[key] += 1
+        # 未开始的学生（不在 student_section_complete 中）归入 0 档
+        no_record_count = all_total_students - len(student_section_complete)
+        completion_distribution["0"] += no_record_count
+
     return {
         "code": 0,
         "data": {
@@ -277,6 +288,7 @@ async def class_overview(
             "total_students": all_total_students,
             "completed_students": all_completed,
             "completion_rate": round(all_completed / max(all_total_students, 1), 3),
+            "completion_distribution": completion_distribution if section_count > 0 else {},
             "students": students,
             "pagination": {
                 "page": page,

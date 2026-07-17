@@ -146,7 +146,7 @@
         </div>
         <div class="card">
           <!-- 完成率：蓝色主题色，保留1位小数 -->
-          <div class="card-num primary">{{ (overview.completion_rate * 100).toFixed(1) }}%</div>
+          <div class="card-num primary">{{ overview.completed_students }}/{{ overview.total_students }}</div>
           <div class="card-label">完成率</div>
         </div>
         <div class="card">
@@ -187,8 +187,13 @@
         <div class="section-header">
           <h3>学生详情</h3>
           <div class="table-controls">
-            <input v-model="studentSearch" placeholder="搜索姓名..." class="search-input" />
-            <select v-model="sortBy" class="sort-select">
+            <select v-model="selectedClass" class="class-select" @change="onFilterChange">
+              <option value="">全部班级</option>
+              <option v-for="cls in classList" :key="cls" :value="cls">{{ cls }}</option>
+            </select>
+            <input v-model="studentSearch" placeholder="搜索姓名..." class="search-input" @keyup.enter="onFilterChange" />
+            <button class="btn-sm primary" @click="onFilterChange">搜索</button>
+            <select v-model="sortBy" class="sort-select" @change="onFilterChange">
               <option value="name">按姓名</option>
               <option value="completion_desc">完成率 高→低</option>
               <option value="completion_asc">完成率 低→高</option>
@@ -200,43 +205,70 @@
           <table>
             <thead>
               <tr>
+                <th style="width:32px"></th>
                 <th>姓名</th>
                 <th>班级</th>
                 <th>有效时长(分)</th>
                 <th>总时长(分)</th>
-                <th>完成率</th>
+                <th>完成进度</th>
                 <th>状态</th>
               </tr>
             </thead>
             <tbody>
-              <!-- 已有学习记录的学生（搜索+排序后） -->
-              <tr v-for="s in filteredStudents" :key="s.user_id" :class="{ incomplete: !s.is_completed }">
-                <td>{{ s.name }}</td>
-                <td>{{ s.class_name || '-' }}</td>
-                <td>{{ s.effective_minutes }}</td>
-                <td>{{ s.require_minutes }}</td>
-                <td>{{ (s.completion_rate * 100).toFixed(1) }}%</td>
-                <td>
-                  <span class="tag" :class="s.is_completed ? 'done' : 'warn'">
-                    {{ s.is_completed ? '已完成' : '未完成' }}
-                  </span>
-                </td>
-              </tr>
-              <!-- 完全没开始的学生（不在 study_session 中） -->
-              <tr v-for="s in notStartedStudents" :key="'ns-'+s.id" class="not-started">
-                <td>{{ s.name }}</td>
-                <td>{{ s.class_name || '-' }}</td>
-                <td>0</td>
-                <td>{{ overview.require_minutes || '-' }}</td>
-                <td>0.0%</td>
-                <td><span class="tag not-started-tag">未开始</span></td>
-              </tr>
+              <template v-for="s in students" :key="s.user_id">
+                <tr :class="{ incomplete: !s.is_completed, clickable: true }" @click="toggleExpand(s)">
+                  <td class="expand-cell">{{ expandedRow === s.user_id ? '▾' : '▸' }}</td>
+                  <td>{{ s.name }}</td>
+                  <td>{{ s.class_name || '-' }}</td>
+                  <td>{{ s.effective_minutes }}</td>
+                  <td>{{ s.require_minutes || '-' }}</td>
+                  <td>{{ s.completed_sections }}/{{ s.total_sections }}</td>
+                  <td>
+                    <span class="tag" :class="s.is_completed ? 'done' : 'warn'">
+                      {{ s.is_completed ? '已完成' : (s.completed_sections > 0 ? '未完成' : '未开始') }}
+                    </span>
+                  </td>
+                </tr>
+                <!-- 展开行：小节级进度 -->
+                <tr v-if="expandedRow === s.user_id" class="expand-row">
+                  <td :colspan="7">
+                    <div v-if="loadingSections" class="loading-cell">加载中...</div>
+                    <div v-else-if="sectionData.length > 0" class="section-detail-list">
+                      <div v-for="sec in sectionData" :key="sec.section_id" class="section-detail-item">
+                        <span class="sec-title">{{ sec.title }}</span>
+                        <div class="sec-progress-bar">
+                          <div class="sec-progress-fill" :class="{ completed: sec.is_completed }" :style="{ width: secPct(sec) + '%' }"></div>
+                        </div>
+                        <span class="sec-status-text">
+                          {{ sec.is_completed ? '✓' : Math.round(secPct(sec)) + '%' }}
+                        </span>
+                      </div>
+                    </div>
+                    <div v-else class="loading-cell">暂无小节数据</div>
+                  </td>
+                </tr>
+              </template>
               <!-- 无数据提示 -->
-              <tr v-if="filteredStudents.length === 0 && notStartedStudents.length === 0">
-                <td colspan="6" class="empty-cell">暂无学生数据</td>
+              <tr v-if="students.length === 0">
+                <td colspan="7" class="empty-cell">暂无学生数据</td>
               </tr>
             </tbody>
           </table>
+        </div>
+        <!-- 分页控件 -->
+        <div class="pagination" v-if="pagination.total > 0">
+          <div class="page-info">第 {{ pagination.page }}/{{ pagination.total_pages }} 页，共 {{ pagination.total }} 人</div>
+          <div class="page-controls">
+            <button class="btn-sm" :disabled="pagination.page <= 1" @click="goPage(1)">首页</button>
+            <button class="btn-sm" :disabled="pagination.page <= 1" @click="goPage(pagination.page - 1)">上一页</button>
+            <button class="btn-sm" :disabled="pagination.page >= pagination.total_pages" @click="goPage(pagination.page + 1)">下一页</button>
+            <button class="btn-sm" :disabled="pagination.page >= pagination.total_pages" @click="goPage(pagination.total_pages)">末页</button>
+            <select v-model.number="pageSize" class="page-size-select" @change="onFilterChange">
+              <option :value="10">10条/页</option>
+              <option :value="20">20条/页</option>
+              <option :value="50">50条/页</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -304,45 +336,27 @@ const sending = ref(false)
 /** 今日学习数据 */
 const todayData = ref(null)
 
-/** 完全没开始的学生（不在 study_session 中，但属于该课程关联班级） */
-const notStartedStudents = ref([])
-
-/** 学生表格搜索和排序 */
+/** 学生表格搜索、排序、班级筛选 */
 const studentSearch = ref('')
 const sortBy = ref('name')
+const selectedClass = ref('')
+const classList = ref([])
+
+/** 分页 */
+const currentPage = ref(1)
+const pageSize = ref(20)
+const pagination = ref({ page: 1, page_size: 20, total: 0, total_pages: 0 })
+
+/** 展开行：学生小节级进度 */
+const expandedRow = ref(null)
+const sectionData = ref([])
+const loadingSections = ref(false)
 
 /** ECharts */
 const chartRef = ref(null)
 let chartInstance = null
 
-/**
- * 过滤+排序后的学生列表
- */
-const filteredStudents = computed(() => {
-  let list = [...students.value]
-
-  // 搜索过滤
-  if (studentSearch.value.trim()) {
-    const kw = studentSearch.value.trim().toLowerCase()
-    list = list.filter(s => s.name.toLowerCase().includes(kw))
-  }
-
-  // 排序
-  switch (sortBy.value) {
-    case 'completion_desc':
-      list.sort((a, b) => b.completion_rate - a.completion_rate)
-      break
-    case 'completion_asc':
-      list.sort((a, b) => a.completion_rate - b.completion_rate)
-      break
-    case 'minutes_desc':
-      list.sort((a, b) => b.effective_minutes - a.effective_minutes)
-      break
-    default:
-      list.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-  }
-  return list
-})
+/** 学生列表直接使用后端返回的当前页数据（不再前端过滤排序） */
 
 onMounted(async () => {
   const res = await api.get('/courses?status=active')
@@ -354,6 +368,9 @@ onMounted(async () => {
       await loadData()
     }
   }
+  // 加载班级列表（班级筛选下拉框）
+  await loadClassList()
+
   // 加载 API Key 状态
   if (isTeacherOrAdmin.value) {
     await loadApiKeyStatus()
@@ -361,31 +378,45 @@ onMounted(async () => {
   }
 })
 
-watch(selectedCourseId, () => loadData())
+watch(selectedCourseId, () => {
+  currentPage.value = 1
+  selectedClass.value = ''
+  studentSearch.value = ''
+  expandedRow.value = null
+  loadData()
+})
 
 async function loadData() {
   if (!selectedCourseId.value) return
   try {
-    // 并行请求：班级概览 + 今日统计
+    const params = {
+      course_id: selectedCourseId.value,
+      page: currentPage.value,
+      page_size: pageSize.value,
+      sort_by: sortBy.value,
+    }
+    if (selectedClass.value) params.class_name = selectedClass.value
+    if (studentSearch.value.trim()) params.search = studentSearch.value.trim()
+
     const [overviewRes, todayRes] = await Promise.all([
-      api.get('/stats/class-overview', { params: { course_id: selectedCourseId.value } }),
+      api.get('/stats/class-overview', { params }),
       api.get('/stats/daily-summary', { params: { course_id: selectedCourseId.value } }).catch(() => null),
     ])
 
     if (overviewRes.data.code === 0) {
       overview.value = overviewRes.data.data
-      students.value = overviewRes.data.data.students
-
-      // 查找未开始的学生：获取所有学生，减去已有记录的
-      await loadNotStartedStudents()
+      students.value = overviewRes.data.data.students || []
+      pagination.value = overviewRes.data.data.pagination || {}
     }
 
-    // 今日数据
     if (todayRes && todayRes.data?.code === 0) {
       todayData.value = todayRes.data.data
     } else {
       todayData.value = null
     }
+
+    // 切换条件后收起展开行
+    expandedRow.value = null
 
     await nextTick()
     renderChart()
@@ -394,20 +425,60 @@ async function loadData() {
   }
 }
 
-/**
- * 获取完全没开始学习的学生
- * 从管理接口拿所有学生，减去已有学习记录的
- */
-async function loadNotStartedStudents() {
+/** 筛选条件变化时：重置到第1页并重新加载 */
+function onFilterChange() {
+  currentPage.value = 1
+  loadData()
+}
+
+/** 跳转到指定页码 */
+function goPage(p) {
+  currentPage.value = p
+  loadData()
+}
+
+/** 加载班级列表 */
+async function loadClassList() {
   try {
-    const res = await api.get('/admin/users', { params: { role: 'student' } })
+    const res = await api.get('/stats/class-list')
     if (res.data.code === 0) {
-      const startedIds = new Set(students.value.map(s => s.user_id))
-      notStartedStudents.value = res.data.data.filter(u => !startedIds.has(u.id))
+      classList.value = res.data.data || []
     }
   } catch {
-    notStartedStudents.value = []
+    classList.value = []
   }
+}
+
+/** 展开/收起学生行，懒加载小节级进度 */
+async function toggleExpand(student) {
+  if (expandedRow.value === student.user_id) {
+    expandedRow.value = null
+    return
+  }
+  expandedRow.value = student.user_id
+  loadingSections.value = true
+  sectionData.value = []
+  try {
+    const res = await api.get('/stats/student-sections', {
+      params: { course_id: selectedCourseId.value, user_id: student.user_id },
+    })
+    if (res.data.code === 0) {
+      sectionData.value = res.data.data.sections || []
+    }
+  } catch (e) {
+    console.error('加载小节进度失败:', e)
+    sectionData.value = []
+  } finally {
+    loadingSections.value = false
+  }
+}
+
+/** 计算小节完成百分比 */
+function secPct(sec) {
+  if (!sec.duration_seconds || sec.duration_seconds <= 0) {
+    return sec.is_completed ? 100 : (sec.video_progress > 0 ? 100 : 0)
+  }
+  return Math.min((sec.video_progress / sec.duration_seconds) * 100, 100)
 }
 
 function renderChart() {
@@ -416,37 +487,29 @@ function renderChart() {
     chartInstance = echarts.init(chartRef.value)
   }
 
-  const allStudents = [...students.value, ...notStartedStudents.value.map(s => ({ completion_rate: 0 }))]
-  const buckets = [0, 0, 0, 0, 0]
-  allStudents.forEach(s => {
-    const r = s.completion_rate
-    if (r < 0.25) buckets[0]++
-    else if (r < 0.5) buckets[1]++
-    else if (r < 0.75) buckets[2]++
-    else if (r < 1) buckets[3]++
-    else buckets[4]++
-  })
+  // 基于概览统计绘制完成 vs 未完成柱状图（不受分页影响）
+  const completed = overview.value.completed_students || 0
+  const total = overview.value.total_students || 0
+  const notCompleted = total - completed
 
   chartInstance.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: 40, right: 20, top: 20, bottom: 30 },
     xAxis: {
       type: 'category',
-      data: ['未开始(<25%)', '25-50%', '50-75%', '75-100%', '已完成'],
-      axisLabel: { fontSize: 11 },
+      data: ['未完成', '已完成'],
+      axisLabel: { fontSize: 12 },
     },
     yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
     series: [{
       type: 'bar',
-      data: buckets,
-      itemStyle: {
-        color: (params) => {
-          const colors = ['#ff4d4f', '#faad14', '#1890ff', '#52c41a', '#52c41a']
-          return colors[params.dataIndex]
-        },
-        borderRadius: [4, 4, 0, 0],
-      },
-      barWidth: '50%',
+      data: [
+        { value: notCompleted, itemStyle: { color: '#faad14' } },
+        { value: completed, itemStyle: { color: '#52c41a' } },
+      ],
+      barWidth: '40%',
+      itemStyle: { borderRadius: [4, 4, 0, 0] },
+      label: { show: true, position: 'top', fontSize: 13 },
     }],
   })
 }
@@ -927,4 +990,39 @@ tr.not-started { background: #fafafa; }
 }
 .btn-sm.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 展开行样式 */
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: #f0f7ff; }
+.expand-cell { color: #999; text-align: center; font-size: 12px; user-select: none; }
+.expand-row td { background: #fafbfc !important; padding: 12px 16px; }
+.loading-cell { text-align: center; color: #999; padding: 16px; }
+.section-detail-list { display: flex; flex-direction: column; gap: 8px; }
+.section-detail-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; background: #fff; border-radius: 4px; border: 1px solid #f0f0f0;
+}
+.sec-title { font-size: 13px; color: #333; flex-shrink: 0; width: 200px; }
+.sec-progress-bar { flex: 1; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+.sec-progress-fill { height: 100%; background: #1890ff; border-radius: 4px; transition: width 0.3s; }
+.sec-progress-fill.completed { background: #52c41a; }
+.sec-status-text { font-size: 12px; color: #999; width: 40px; text-align: right; flex-shrink: 0; }
+
+/* 分页控件 */
+.pagination {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 12px; flex-wrap: wrap; gap: 8px;
+}
+.page-info { font-size: 12px; color: #999; }
+.page-controls { display: flex; gap: 6px; align-items: center; }
+.page-size-select {
+  padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 4px;
+  font-size: 12px; cursor: pointer;
+}
+
+/* 班级筛选 */
+.class-select {
+  padding: 6px 10px; border: 1px solid #d9d9d9; border-radius: 4px;
+  font-size: 13px; cursor: pointer;
+}
 </style>

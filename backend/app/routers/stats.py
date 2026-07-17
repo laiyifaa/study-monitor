@@ -32,11 +32,11 @@ API 列表：
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, and_, case, extract
+from sqlalchemy import select, func, and_, case, extract, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.models import StudySession, Course, Section, User
+from app.models.models import StudySession, Course, Section, User, ClassDef
 from app.utils.datetime_helper import now_cn_naive
 from app.utils.jwt_helper import get_current_user, require_role
 
@@ -47,11 +47,21 @@ router = APIRouter(prefix="/api/stats", tags=["统计"])
 async def class_overview(
     course_id: int = Query(...),
     class_name: str | None = Query(None),
+    page: int = Query(1, ge=1, description="页码，从1开始"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    search: str | None = Query(None, description="按姓名搜索"),
+    sort_by: str = Query("name", description="排序：name/completion_desc/completion_asc/minutes_desc"),
     user: User = Depends(require_role("teacher", "admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    班级学习概览 — 每个学生的有效学习时长和完成情况（按课程维度聚合）
+    班级学习概览 — 每个学生的有效学习时长和完成情况（按小节数量维度聚合）
+
+    v5.1 改动：
+      - 完成率从时间维度改为小节数量维度（completed_sections / total_sections）
+      - 新增分页（page / page_size）
+      - 新增搜索（search）和排序（sort_by），改为后端处理
+      - "未开始"学生通过 LEFT JOIN 一并返回，不再需要前端差集
 
     权限要求：【teacher / admin】
     """
@@ -61,62 +71,219 @@ async def class_overview(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    # 查询小节数量
-    section_count = await db.scalar(
-        select(func.count(Section.id)).where(Section.course_id == course_id)
-    ) or 0
+    # 查询该课程下所有小节（用于完成判定）
+    sec_result = await db.execute(
+        select(Section).where(Section.course_id == course_id).order_by(Section.sort_order, Section.id)
+    )
+    sections = sec_result.scalars().all()
+    section_count = len(sections)
+    # 构建 section_id → duration_seconds 映射（小节完成判定用）
+    section_duration_map = {s.id: s.duration_seconds or 0 for s in sections}
 
-    # 聚合查询：按学生维度汇总有效时长和视频进度
-    query = (
+    # 子查询：按 (user_id, section_id) 取每小节最大 video_progress
+    subq = (
         select(
             StudySession.user_id,
+            StudySession.section_id,
+            func.max(StudySession.video_progress).label("max_progress"),
+            func.sum(StudySession.effective_seconds).label("sec_effective"),
+        )
+        .where(StudySession.course_id == course_id)
+        .group_by(StudySession.user_id, StudySession.section_id)
+        .subquery()
+    )
+
+    # 子查询2：按 user_id 聚合——统计完成小节数 + 总有效时长 + 最大视频进度
+    user_stats = (
+        select(
+            subq.c.user_id,
+            func.sum(subq.c.sec_effective).label("total_effective"),
+            func.max(subq.c.max_progress).label("max_progress"),
+        )
+        .group_by(subq.c.user_id)
+        .subquery()
+    )
+
+    # 完成 JSON 标量：标记每个 section 是否完成（用于统计 completed_sections）
+    # 用 case when 在 SQL 层面判定，避免 N+1
+    # 但 MySQL 不支持在子查询外用窗口函数累积计数，这里改为在应用层计算
+
+    # 主查询：LEFT JOIN users 表，确保"未开始"学生也出现在列表中
+    # 注意：LEFT JOIN 需要 users.role='student' 作为基础，study_session 为可选
+    base_query = (
+        select(
+            User.id.label("user_id"),
             User.name,
             User.class_name,
-            func.sum(StudySession.effective_seconds).label("total_effective"),
-            func.max(StudySession.video_progress).label("max_progress"),
+            func.coalesce(user_stats.c.total_effective, 0).label("total_effective"),
+            func.coalesce(user_stats.c.max_progress, 0).label("max_progress"),
         )
-        .join(User, StudySession.user_id == User.id)
-        .where(StudySession.course_id == course_id)
+        .outerjoin(user_stats, user_stats.c.user_id == User.id)
         .where(User.role == "student")
-        .group_by(StudySession.user_id, User.name, User.class_name)
+    )
+
+    # 班级筛选
+    if class_name:
+        base_query = base_query.where(User.class_name == class_name)
+
+    # 姓名搜索
+    if search:
+        base_query = base_query.where(User.name.like(f"%{search}%"))
+
+    # 先查总数（不分页）
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = await db.scalar(count_query) or 0
+
+    # ---- 排序 + 分页 ----
+    # 由于完成小节数需要在应用层计算（依赖 section_duration_map），
+    # 对于 completion 相关排序，需要先取全量再排序再分页。
+    # 但学生数最多781，全量取出后内存排序完全可行。
+    if sort_by in ("completion_desc", "completion_asc", "minutes_desc"):
+        # 需要全量取出来在应用层排序
+        result = await db.execute(base_query)
+        rows = result.all()
+
+        # 计算每个学生的小节完成数
+        student_list = []
+        for r in rows:
+            effective_min = round(float(r.total_effective) / 60, 1) if r.total_effective else 0
+            # 查询该学生各小节完成情况
+            sec_progress_result = await db.execute(
+                select(subq.c.section_id, subq.c.max_progress)
+                .where(subq.c.user_id == r.user_id)
+            )
+            completed_sections = 0
+            for sr in sec_progress_result.all():
+                dur = section_duration_map.get(sr.section_id, 0)
+                if dur and dur > 0:
+                    if float(sr.max_progress or 0) >= dur * 0.9:
+                        completed_sections += 1
+                else:
+                    # 无视频时长的小节，有学习记录就算完成
+                    if float(sr.max_progress or 0) > 0:
+                        completed_sections += 1
+
+            student_list.append({
+                "user_id": r.user_id,
+                "name": r.name,
+                "class_name": r.class_name,
+                "effective_minutes": effective_min,
+                "require_minutes": course.require_minutes,
+                "completed_sections": completed_sections,
+                "total_sections": section_count,
+                "completion_rate": round(completed_sections / section_count, 3) if section_count else 0,
+                "video_progress": round(float(r.max_progress), 1) if r.max_progress else 0,
+                "is_completed": completed_sections >= section_count if section_count else False,
+            })
+
+        # 排序
+        if sort_by == "completion_desc":
+            student_list.sort(key=lambda x: x["completion_rate"], reverse=True)
+        elif sort_by == "completion_asc":
+            student_list.sort(key=lambda x: x["completion_rate"])
+        elif sort_by == "minutes_desc":
+            student_list.sort(key=lambda x: x["effective_minutes"], reverse=True)
+
+        # 分页切片
+        offset = (page - 1) * page_size
+        students = student_list[offset:offset + page_size]
+
+    else:
+        # 默认按姓名排序，可以直接在SQL层分页
+        base_query = base_query.order_by(User.name)
+        offset = (page - 1) * page_size
+        base_query = base_query.offset(offset).limit(page_size)
+
+        result = await db.execute(base_query)
+        rows = result.all()
+
+        students = []
+        for r in rows:
+            effective_min = round(float(r.total_effective) / 60, 1) if r.total_effective else 0
+            # 查询该学生各小节完成情况
+            sec_progress_result = await db.execute(
+                select(subq.c.section_id, subq.c.max_progress)
+                .where(subq.c.user_id == r.user_id)
+            )
+            completed_sections = 0
+            for sr in sec_progress_result.all():
+                dur = section_duration_map.get(sr.section_id, 0)
+                if dur and dur > 0:
+                    if float(sr.max_progress or 0) >= dur * 0.9:
+                        completed_sections += 1
+                else:
+                    if float(sr.max_progress or 0) > 0:
+                        completed_sections += 1
+
+            students.append({
+                "user_id": r.user_id,
+                "name": r.name,
+                "class_name": r.class_name,
+                "effective_minutes": effective_min,
+                "require_minutes": course.require_minutes,
+                "completed_sections": completed_sections,
+                "total_sections": section_count,
+                "completion_rate": round(completed_sections / section_count, 3) if section_count else 0,
+                "video_progress": round(float(r.max_progress), 1) if r.max_progress else 0,
+                "is_completed": completed_sections >= section_count if section_count else False,
+            })
+
+    # 概览统计（基于全量数据，不受分页影响）
+    # 需要单独计算全量的完成人数
+    all_completed = 0
+    all_total_students = 0
+    # 查询全量学生数（不分页不搜索）
+    all_count_query = (
+        select(func.count(User.id))
+        .where(User.role == "student")
     )
     if class_name:
-        query = query.where(User.class_name == class_name)
+        all_count_query = all_count_query.where(User.class_name == class_name)
+    all_total_students = await db.scalar(all_count_query) or 0
 
-    result = await db.execute(query)
-    rows = result.all()
+    # 全量完成人数：用一个聚合查询统计 completed_sections == section_count 的学生数
+    # 由于完成判定依赖应用层逻辑，这里用一个简化的近似：
+    # 查询每个学生的 max(video_progress) 按 section 分组，再统计完成数
+    if section_count > 0 and all_total_students > 0:
+        # 获取所有学生的 section 完成情况（一次性查全量）
+        all_sec_result = await db.execute(
+            select(subq.c.user_id, subq.c.section_id, subq.c.max_progress)
+        )
+        all_sec_rows = all_sec_result.all()
 
-    require_minutes = course.require_minutes  # 可能是 None
-    require_seconds = (require_minutes or 0) * 60
-    students = []
-    for r in rows:
-        effective_min = round(r.total_effective / 60, 1) if r.total_effective else 0
-        progress_sec = float(r.max_progress) if r.max_progress else 0.0
-        students.append({
-            "user_id": r.user_id,
-            "name": r.name,
-            "class_name": r.class_name,
-            "effective_minutes": effective_min,
-            "require_minutes": require_minutes,
-            # 完成率基于 video_progress（已观看秒数/要求秒数），与前端进度条一致
-            "completion_rate": round(min(progress_sec / require_seconds, 1), 3) if require_seconds else None,
-            "video_progress": round(progress_sec, 1),
-            # 完成判定：video_progress >= 要求时长的90%（与/my-progress端点一致）
-            "is_completed": progress_sec >= require_seconds * 0.90 if require_seconds else None,
-        })
+        # 按学生分组统计完成数
+        student_section_complete = {}  # user_id → completed_count
+        for sr in all_sec_rows:
+            uid = sr.user_id
+            if uid not in student_section_complete:
+                student_section_complete[uid] = 0
+            dur = section_duration_map.get(sr.section_id, 0)
+            if dur and dur > 0:
+                if float(sr.max_progress or 0) >= dur * 0.9:
+                    student_section_complete[uid] += 1
+            else:
+                if float(sr.max_progress or 0) > 0:
+                    student_section_complete[uid] += 1
 
-    total = len(students)
-    completed = sum(1 for s in students if s["is_completed"])
+        # 统计完成人数（所有小节都完成的）
+        all_completed = sum(1 for cnt in student_section_complete.values() if cnt >= section_count)
+
     return {
         "code": 0,
         "data": {
             "course_title": course.title,
-            "require_minutes": require_minutes,
+            "require_minutes": course.require_minutes,
             "section_count": section_count,
-            "total_students": total,
-            "completed_students": completed,
-            "completion_rate": round(completed / total, 3) if total else 0,
+            "total_students": all_total_students,
+            "completed_students": all_completed,
+            "completion_rate": round(all_completed / max(all_total_students, 1), 3),
             "students": students,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            },
         },
     }
 
@@ -315,42 +482,38 @@ async def incomplete_students(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    未完成学生列表 — 获取有效学习时长未达到要求的学生
+    未完成学生列表 — 获取未完成所有小节的学生（v5.1 改为小节数量维度判定）
 
-    请求参数：
-        query.course_id (int): 课程ID（必填）
+    完成判定口径（与 class-overview、my-progress 统一）：
+        每小节完成标准 video_progress >= duration_seconds × 90%，
+        completed_sections < total_sections 即视为未完成。
 
     返回格式：
-        code=0, data: { course_title, incomplete: [{ user_id, name, class_name, effective_minutes }] }
-    错误：404 课程不存在
+        code=0, data: { course_title, total_sections, incomplete: [{ user_id, name, class_name,
+                                                                     completed_sections, total_sections }] }
 
     权限要求：【teacher / admin】
 
-    核心业务逻辑：
-        1. 获取课程的要求时长
-        2. 聚合每个学生的总有效时长
-        3. 用 HAVING 子句过滤出未达标的学生
-        4. 用于教师针对性催促未完成的学生
-
-    注意事项：
-        此接口只返回"有学习记录但未完成"的学生，完全未开始学习的学生不会出现在结果中。
-        这是设计选择——零记录学生通常需要另外的处理方式（如单独通知）。
+    注意：此接口只返回"有学习记录但未完成"的学生，完全未开始学习的学生不会出现在结果中。
     """
     result = await db.execute(select(Course).where(Course.id == course_id))
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    require_minutes = course.require_minutes  # 可能是 None
-    require_seconds = (require_minutes or 0) * 60
+    # 查询课程所有小节
+    sec_result = await db.execute(
+        select(Section).where(Section.course_id == course_id).order_by(Section.sort_order, Section.id)
+    )
+    sections = sec_result.scalars().all()
+    section_count = len(sections)
+    section_duration_map = {s.id: s.duration_seconds or 0 for s in sections}
 
-    # 改用 video_progress 判定完成（与前端进度条、教师看板一致）
-    # 子查询：每个学生每小节取 MAX(video_progress)，再按 user_id 求和得到总观看秒数
-    # HAVING 过滤出未达标的学生（总观看秒数 < require_seconds * 0.90）
-    from sqlalchemy import literal_column
+    if section_count == 0:
+        return {"code": 0, "data": {"course_title": course.title, "total_sections": 0, "incomplete": []}}
 
     # 子查询：按 (user_id, section_id) 取每小节最大 video_progress
-    subq = (
+    subq_result = await db.execute(
         select(
             StudySession.user_id,
             StudySession.section_id,
@@ -358,36 +521,60 @@ async def incomplete_students(
         )
         .where(StudySession.course_id == course_id)
         .group_by(StudySession.user_id, StudySession.section_id)
-        .subquery()
     )
+    sub_rows = subq_result.all()
 
-    # 主查询：按 user_id 求和，JOIN 用户信息
-    watched_sum = func.sum(subq.c.max_progress).label("total_watched")
-    base_query = (
-        select(
-            subq.c.user_id,
-            User.name,
-            User.class_name,
-            watched_sum,
-        )
-        .join(User, subq.c.user_id == User.id)
-        .where(User.role == "student")
-        .group_by(subq.c.user_id, User.name, User.class_name)
+    # 按学生分组，计算每人的完成小节数
+    user_sections = {}  # user_id → [(section_id, max_progress), ...]
+    for r in sub_rows:
+        user_sections.setdefault(r.user_id, []).append((r.section_id, r.max_progress))
+
+    if not user_sections:
+        return {"code": 0, "data": {"course_title": course.title, "total_sections": section_count, "incomplete": []}}
+
+    # 批量查用户信息
+    user_ids = list(user_sections.keys())
+    user_result = await db.execute(
+        select(User.id, User.name, User.class_name)
+        .where(and_(User.id.in_(user_ids), User.role == "student"))
     )
+    user_map = {r.id: r for r in user_result.all()}
 
-    if require_seconds:
-        query = base_query.having(watched_sum < require_seconds * 0.90)
-    else:
-        query = base_query
+    # 筛选未完成的学生
+    incomplete = []
+    for uid, sec_list in user_sections.items():
+        if uid not in user_map:
+            continue
+        u = user_map[uid]
+        completed_sections = 0
+        for section_id, max_progress in sec_list:
+            dur = section_duration_map.get(section_id, 0)
+            if dur and dur > 0:
+                if float(max_progress or 0) >= dur * 0.9:
+                    completed_sections += 1
+            else:
+                if float(max_progress or 0) > 0:
+                    completed_sections += 1
+        if completed_sections < section_count:
+            incomplete.append({
+                "user_id": uid,
+                "name": u.name,
+                "class_name": u.class_name,
+                "completed_sections": completed_sections,
+                "total_sections": section_count,
+            })
 
-    result = await db.execute(query)
-    incomplete = [
-        {"user_id": r.user_id, "name": r.name, "class_name": r.class_name,
-         "watched_minutes": round(float(r.total_watched) / 60, 1) if r.total_watched else 0}
-        for r in result.all()
-    ]
+    # 按完成数升序排（完成数越少越优先提醒）
+    incomplete.sort(key=lambda x: x["completed_sections"])
 
-    return {"code": 0, "data": {"course_title": course.title, "incomplete": incomplete}}
+    return {
+        "code": 0,
+        "data": {
+            "course_title": course.title,
+            "total_sections": section_count,
+            "incomplete": incomplete,
+        },
+    }
 
 
 # ============================================================
@@ -404,26 +591,12 @@ async def leaderboard(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    学习排行榜 — 按课程维度展示有效学习时长排名（v4.0 新增）
+    学习排行榜 — 按课程维度展示有效学习时长排名（v5.1 增加完成小节数维度）
 
-    请求参数：
-        query.course_id (int):    课程ID（必填）
-        query.class_name (str):   班级名称筛选（可选）
-        query.limit (int):        返回人数上限（默认50）
-
-    返回格式：
-        code=0, data: {
-            course_title: str,
-            ranking: [
-                { rank, user_id, name, real_name, class_name, effective_minutes }
-            ]
-        }
+    排名主键：总观看时长（每小节取 MAX(video_progress) 后求和）
+    新增字段：completed_sections / total_sections（完成小节维度，口径与教师看板统一）
 
     权限要求：【已登录】
-
-    业务逻辑：
-        按 StudySession.effective_seconds 汇总排序，
-        相同时长并列排名（如 1,2,2,4 而非 1,2,3,4）。
     """
     # 验证课程存在
     result = await db.execute(select(Course).where(Course.id == course_id))
@@ -431,9 +604,16 @@ async def leaderboard(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    # 改用 video_progress 排名（与前端进度条、教师看板一致）
-    # 子查询：每个学生每小节取 MAX(video_progress)
-    subq = (
+    # 查询课程所有小节（用于完成判定）
+    sec_result = await db.execute(
+        select(Section).where(Section.course_id == course_id).order_by(Section.sort_order, Section.id)
+    )
+    sections = sec_result.scalars().all()
+    section_count = len(sections)
+    section_duration_map = {s.id: s.duration_seconds or 0 for s in sections}
+
+    # 子查询：按 (user_id, section_id) 取每小节最大 video_progress
+    subq_result = await db.execute(
         select(
             StudySession.user_id,
             StudySession.section_id,
@@ -441,67 +621,79 @@ async def leaderboard(
         )
         .where(StudySession.course_id == course_id)
         .group_by(StudySession.user_id, StudySession.section_id)
-        .subquery()
     )
+    sub_rows = subq_result.all()
 
-    # 主查询：按 user_id 求和得到总观看秒数，JOIN 用户信息
-    watched_sum = func.sum(subq.c.max_progress).label("total_watched")
-    query = (
-        select(
-            subq.c.user_id,
-            User.name,
-            User.real_name,
-            User.class_name,
-            watched_sum,
-        )
-        .join(User, subq.c.user_id == User.id)
-        .where(User.role == "student")
-        .group_by(subq.c.user_id, User.name, User.real_name, User.class_name)
-        .order_by(watched_sum.desc())
-        .limit(limit)
+    # 按学生分组，同时计算总观看时长和完成小节数
+    user_data = {}  # user_id → {total_watched: float, completed_sections: int}
+    for r in sub_rows:
+        uid = r.user_id
+        if uid not in user_data:
+            user_data[uid] = {"total_watched": 0.0, "completed_sections": 0}
+        progress = float(r.max_progress or 0)
+        user_data[uid]["total_watched"] += progress
+        dur = section_duration_map.get(r.section_id, 0)
+        if dur and dur > 0:
+            if progress >= dur * 0.9:
+                user_data[uid]["completed_sections"] += 1
+        else:
+            if progress > 0:
+                user_data[uid]["completed_sections"] += 1
+
+    if not user_data:
+        return {
+            "code": 0,
+            "data": {"course_title": course.title, "total_sections": section_count, "ranking": []},
+        }
+
+    # 批量查用户信息（支持班级筛选）
+    user_ids = list(user_data.keys())
+    user_query = (
+        select(User.id, User.name, User.real_name, User.class_name)
+        .where(and_(User.id.in_(user_ids), User.role == "student"))
     )
     if class_name:
-        query = (
-            select(
-                subq.c.user_id,
-                User.name,
-                User.real_name,
-                User.class_name,
-                watched_sum,
-            )
-            .join(User, subq.c.user_id == User.id)
-            .where(User.role == "student")
-            .where(User.class_name == class_name)
-            .group_by(subq.c.user_id, User.name, User.real_name, User.class_name)
-            .order_by(watched_sum.desc())
-            .limit(limit)
-        )
+        user_query = user_query.where(User.class_name == class_name)
+    user_result = await db.execute(user_query)
+    user_info = {r.id: r for r in user_result.all()}
 
-    result = await db.execute(query)
-    rows = result.all()
+    # 构建排名列表
+    ranking_entries = []
+    for uid, data in user_data.items():
+        if uid not in user_info:
+            continue
+        u = user_info[uid]
+        watched_min = round(data["total_watched"] / 60, 1)
+        ranking_entries.append({
+            "user_id": uid,
+            "name": u.name,
+            "real_name": u.real_name or "",
+            "class_name": u.class_name or "",
+            "watched_minutes": watched_min,
+            "completed_sections": data["completed_sections"],
+            "total_sections": section_count,
+        })
 
-    # 构建排名（并列排名逻辑）
+    # 按总观看时长降序排名
+    ranking_entries.sort(key=lambda x: x["watched_minutes"], reverse=True)
+    ranking_entries = ranking_entries[:limit]
+
+    # 构建并列排名（如 1,2,2,4 而非 1,2,3,4）
     ranking = []
     prev_watched = None
     rank = 0
-    for i, r in enumerate(rows):
-        watched_min = round(float(r.total_watched) / 60, 1) if r.total_watched else 0
-        if watched_min != prev_watched:
+    for i, entry in enumerate(ranking_entries):
+        if entry["watched_minutes"] != prev_watched:
             rank = i + 1
-        prev_watched = watched_min
-        ranking.append({
-            "rank": rank,
-            "user_id": r.user_id,
-            "name": r.name,
-            "real_name": r.real_name or "",
-            "class_name": r.class_name or "",
-            "watched_minutes": watched_min,
-        })
+        prev_watched = entry["watched_minutes"]
+        entry["rank"] = rank
+        ranking.append(entry)
 
     return {
         "code": 0,
         "data": {
             "course_title": course.title,
+            "total_sections": section_count,
             "ranking": ranking,
         },
     }
@@ -888,3 +1080,123 @@ async def study_report(
 
     else:
         raise HTTPException(status_code=400, detail="report_type 只能是 personal/class/platform")
+
+
+# ============================================================
+# v5.1 新增：班级列表、学生小节级进度
+# ============================================================
+
+
+@router.get("/class-list")
+async def class_list(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取班级列表（供前端班级筛选下拉框使用）
+
+    数据来源：class_defs 表 + users 表中 distinct class_name 取并集
+
+    权限要求：【已登录】
+    """
+    # 从 class_defs 表获取已定义的班级
+    cd_result = await db.execute(select(ClassDef.class_name).order_by(ClassDef.class_name))
+    class_names_set = {r[0] for r in cd_result.all() if r[0]}
+
+    # 从 users 表补充有学生但未在 class_defs 中的班级
+    u_result = await db.execute(
+        select(User.class_name)
+        .where(and_(User.role == "student", User.class_name != ""))
+        .distinct()
+        .order_by(User.class_name)
+    )
+    for r in u_result.all():
+        if r[0]:
+            class_names_set.add(r[0])
+
+    classes = sorted(class_names_set)
+    return {"code": 0, "data": classes}
+
+
+@router.get("/student-sections")
+async def student_sections(
+    course_id: int = Query(..., description="课程ID"),
+    user_id: int = Query(..., description="学生用户ID"),
+    user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    查看指定学生在指定课程下各小节的学习进度（教师懒加载用）
+
+    返回格式：
+        code=0, data: {
+            sections: [
+                { section_id, title, sort_order, video_progress, duration_seconds,
+                  effective_minutes, is_completed, open_time }
+            ],
+            total_effective_minutes
+        }
+
+    权限要求：【teacher / admin】
+    """
+    # 查询该课程所有小节
+    sec_result = await db.execute(
+        select(Section)
+        .where(Section.course_id == course_id)
+        .order_by(Section.sort_order, Section.id)
+    )
+    sections = sec_result.scalars().all()
+
+    # 查询该学生各小节的学习数据
+    stats_result = await db.execute(
+        select(
+            StudySession.section_id,
+            func.sum(StudySession.effective_seconds).label("sec_effective"),
+            func.max(StudySession.video_progress).label("sec_progress"),
+        )
+        .where(
+            and_(
+                StudySession.user_id == user_id,
+                StudySession.course_id == course_id,
+            )
+        )
+        .group_by(StudySession.section_id)
+    )
+    sec_stats_map = {}
+    total_effective = 0
+    for r in stats_result.all():
+        sec_stats_map[r.section_id] = {
+            "effective": r.sec_effective or 0,
+            "progress": float(r.sec_progress) if r.sec_progress else 0.0,
+        }
+        total_effective += r.sec_effective or 0
+
+    sections_data = []
+    for sec in sections:
+        stats = sec_stats_map.get(sec.id, {"effective": 0, "progress": 0.0})
+        sec_effective_min = round(stats["effective"] / 60, 1) if stats["effective"] else 0
+        sec_progress = round(stats["progress"], 1)
+        dur = sec.duration_seconds or 0
+        # 完成判定：video_progress >= duration * 90%
+        if dur and dur > 0:
+            is_completed = stats["progress"] >= dur * 0.9
+        else:
+            is_completed = stats["progress"] > 0
+        sections_data.append({
+            "section_id": sec.id,
+            "title": sec.title,
+            "sort_order": sec.sort_order,
+            "video_progress": sec_progress,
+            "duration_seconds": dur,
+            "effective_minutes": sec_effective_min,
+            "is_completed": is_completed,
+            "open_time": sec.open_time.isoformat() if sec.open_time else None,
+        })
+
+    return {
+        "code": 0,
+        "data": {
+            "sections": sections_data,
+            "total_effective_minutes": round(total_effective / 60, 1) if total_effective else 0,
+        },
+    }

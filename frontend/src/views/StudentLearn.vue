@@ -35,11 +35,6 @@
         <span class="dot" :class="isEffective ? 'active' : 'inactive'"></span>
         <span>{{ isEffective ? '学习中' : '已暂停' }}</span>
       </div>
-      <!-- 已累计的有效学习时长（仅实际观看视频时计入） -->
-      <div class="status-item">
-        <span class="label">有效时长</span>
-        <span class="value">{{ effectiveMinutes }} 分钟</span>
-      </div>
       <!-- 视频播放进度（秒数转为 分:秒 格式） -->
       <div class="status-item">
         <span class="label">播放进度</span>
@@ -115,12 +110,7 @@
       </div>
     </div>
 
-    <!-- ==================== 播放控制提示 ==================== -->
-    <div class="controls-hint">
-      <p>1. 视频播放时自动计时</p>
-      <p>2. 切换到其他应用将暂停计时</p>
-      <p>3. 暂停视频时立即停止计时</p>
-    </div>
+
 
     <!-- ==================== 评价本课入口 ==================== -->
     <div class="feedback-entry">

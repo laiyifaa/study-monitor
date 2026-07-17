@@ -80,6 +80,16 @@
               <div class="report-summary-row">
                 <div class="report-summary-text">
                   <span class="report-pill">已批改</span>
+                  <span v-if="mySubmissionMap[section.id].report.score != null" class="report-score">
+                    {{ mySubmissionMap[section.id].report.score }}/{{ mySubmissionMap[section.id].report.full_score }}
+                  </span>
+                  <span v-if="mySubmissionMap[section.id].report.accuracy != null" class="report-accuracy">
+                    正确率 {{ (mySubmissionMap[section.id].report.accuracy * 100).toFixed(0) }}%
+                  </span>
+                  <span v-if="mySubmissionMap[section.id].report.correct_count != null || mySubmissionMap[section.id].report.wrong_count != null" class="report-counts">
+                    <span v-if="mySubmissionMap[section.id].report.correct_count != null" class="count-correct">✓{{ mySubmissionMap[section.id].report.correct_count }}</span>
+                    <span v-if="mySubmissionMap[section.id].report.wrong_count != null" class="count-wrong">✗{{ mySubmissionMap[section.id].report.wrong_count }}</span>
+                  </span>
                 </div>
               </div>
               <div class="report-note">
@@ -840,6 +850,34 @@ function openStudentAnswerFile(sectionId, file) {
   color: #15803d;
   font-size: 12px;
   font-weight: 700;
+}
+
+.report-score {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e40af;
+}
+
+.report-accuracy {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.report-counts {
+  margin-left: 8px;
+  font-size: 12px;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.count-correct {
+  color: #15803d;
+}
+
+.count-wrong {
+  color: #dc2626;
 }
 
 .report-body {

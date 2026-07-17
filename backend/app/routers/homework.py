@@ -48,7 +48,12 @@ from typing import Any, Optional, List
 from app.config import get_settings
 from app.database import get_db, async_session
 from app.models.models import Assignment, Submission, GradingReport, GradingTask, Course, Section, User
-from app.services.agent_caller import parse_answer_file_with_agent, call_grading_agent
+from app.services.agent_caller import (
+    parse_answer_file_with_agent,
+    call_grading_agent,
+    _refresh_grading_status,
+    _mark_task_failed,
+)
 from app.services.image_stitcher import stitch_images, image_url_to_local_path
 from app.utils.datetime_helper import now_cn_naive, parse_cn_datetime_input
 
@@ -82,16 +87,7 @@ ANSWER_DEFAULT_SCORES = {
 }
 
 
-async def _refresh_grading_status(assignment_id: int, db: AsyncSession):
-    pending_count = await db.scalar(
-        select(func.count()).select_from(Submission).where(
-            and_(Submission.assignment_id == assignment_id, Submission.status == "pending")
-        )
-    )
-    if pending_count == 0:
-        assignment = (await db.execute(select(Assignment).where(Assignment.id == assignment_id))).scalar_one_or_none()
-        if assignment and assignment.grading_status != "graded":
-            assignment.grading_status = "graded"
+# MEDIUM-1: _refresh_grading_status 已从 agent_caller 导入，不再重复定义
 
 
 async def _prepare_grading_task(
@@ -119,7 +115,7 @@ async def _prepare_grading_task(
     else:
         previous_status = task.status
         previous_sent_at = task.sent_at
-        task.stitched_image_url = ""
+        # LOW-1: 保留 stitched_image_url，允许重批时复用已有拼接图片
         task.agent_task_id = ""
         task.status = "pending"
         task.retry_count = 0
@@ -166,8 +162,22 @@ async def _execute_grading_for_submission(
                 return False
 
             task_id = task.id
-            output_filename = f"stitched_{submission.id}.jpg"
-            stitched_url = stitch_images(local_paths, output_filename)
+
+            # LOW-1: 复用已有拼接图片，避免重复拼接
+            existing_url = task.stitched_image_url
+            if existing_url:
+                existing_local = image_url_to_local_path(existing_url)
+                if os.path.exists(existing_local):
+                    stitched_url = existing_url
+                    logger.info(f"复用已有拼接图片: submission_id={submission_id}, url={existing_url}")
+                else:
+                    stitched_url = None
+            else:
+                stitched_url = None
+
+            if not stitched_url:
+                output_filename = f"stitched_{submission.id}.jpg"
+                stitched_url = stitch_images(local_paths, output_filename)
 
             task.stitched_image_url = stitched_url
             await session.commit()
@@ -185,18 +195,7 @@ async def _execute_grading_for_submission(
         raise
 
 
-async def _mark_task_failed(task_id: int, error_message: str):
-    async with async_session() as session:
-        task_result = await session.execute(
-            select(GradingTask).where(GradingTask.id == task_id)
-        )
-        task = task_result.scalar_one_or_none()
-        if not task:
-            return
-
-        task.status = "failed"
-        task.error_message = error_message
-        await session.commit()
+# MEDIUM-2: _mark_task_failed 已从 agent_caller 导入，不再重复定义
 
 
 class CreateAssignmentRequest(BaseModel):
@@ -420,6 +419,11 @@ def _report_to_staff_summary(report: GradingReport) -> dict:
 def _report_to_student_summary(report: GradingReport) -> dict:
     return {
         "status": report.status,
+        "score": report.score,
+        "full_score": report.full_score,
+        "accuracy": report.accuracy,
+        "correct_count": report.correct_count,
+        "wrong_count": report.wrong_count,
         "feedback": report.feedback,
     }
 
@@ -1659,6 +1663,101 @@ async def regrade_submission(
     }
 
 
+@router.post("/regrade-failed/{assignment_id}")
+async def regrade_all_failed(
+    assignment_id: int,
+    background_tasks: BackgroundTasks,
+    _current_user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    批量重新批改某作业下所有失败的提交
+
+    查找该作业下所有 GradingTask.status == "failed" 且 is_latest 的提交，
+    排除已被人工修改的（review_status == "modified" 或 generated_by 含 "teacher"），
+    异步串行执行 _execute_grading_for_submission(force=True)。
+    """
+    assignment = await db.get(Assignment, assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="作业不存在")
+    if assignment.status != "published":
+        raise HTTPException(status_code=400, detail="作业未发布")
+
+    # 查找该作业下所有 is_latest 的提交
+    sub_result = await db.execute(
+        select(Submission.id).where(
+            and_(
+                Submission.assignment_id == assignment_id,
+                Submission.is_latest == True,
+            )
+        )
+    )
+    all_sub_ids = [row[0] for row in sub_result]
+
+    if not all_sub_ids:
+        return {"code": 0, "data": {"message": "无失败的任务需要重新批改", "count": 0}}
+
+    # LOW-2: 批量查询 GradingTask（按 submission 去重，取最新一条）
+    all_tasks_result = await db.execute(
+        select(GradingTask).where(
+            GradingTask.submission_id.in_(all_sub_ids)
+        ).order_by(GradingTask.id.desc())
+    )
+    task_map: dict[int, GradingTask] = {}
+    for t in all_tasks_result.scalars().all():
+        if t.submission_id not in task_map:
+            task_map[t.submission_id] = t
+
+    failed_sub_ids = [sid for sid, t in task_map.items() if t.status == "failed"]
+
+    if not failed_sub_ids:
+        return {"code": 0, "data": {"message": "无失败的任务需要重新批改", "count": 0}}
+
+    # LOW-2: 批量查询 GradingReport，排除已被人工修改的
+    reports_result = await db.execute(
+        select(GradingReport).where(GradingReport.submission_id.in_(failed_sub_ids))
+    )
+    report_map: dict[int, GradingReport] = {r.submission_id: r for r in reports_result.scalars().all()}
+
+    failed_submission_ids: list[int] = []
+    for sid in failed_sub_ids:
+        report = report_map.get(sid)
+        if report and (
+            report.review_status == "modified"
+            or "teacher" in str(report.generated_by or "").lower()
+        ):
+            continue
+        failed_submission_ids.append(sid)
+
+    if not failed_submission_ids:
+        return {"code": 0, "data": {"message": "无失败任务需要重新批改", "count": 0}}
+
+    prompt = assignment.grading_prompt
+    answer_json = assignment.reference_answer or ""
+
+    async def _run_batch_regrade():
+        for sid in failed_submission_ids:
+            try:
+                await _execute_grading_for_submission(
+                    submission_id=sid,
+                    prompt=prompt,
+                    answer_json=answer_json,
+                    force=True,
+                )
+            except Exception as e:
+                logger.error(f"批量重批失败: submission_id={sid}, error={e}")
+
+    background_tasks.add_task(_run_batch_regrade)
+
+    return {
+        "code": 0,
+        "data": {
+            "message": f"已启动 {len(failed_submission_ids)} 个失败任务的重新批改",
+            "count": len(failed_submission_ids),
+        },
+    }
+
+
 @router.get("/tasks/{submission_id}")
 async def get_grading_task_status(
     submission_id: int,
@@ -2032,18 +2131,27 @@ async def grading_overview(
     task_counts = {}
     failed_detail = {}
     if assignment_ids:
-        aid_of_sub = {}
-        for aid in assignment_ids:
-            for (sid,) in await db.execute(
-                select(Submission.id).where(and_(Submission.assignment_id == aid, Submission.is_latest == True))
-            ):
-                aid_of_sub[sid] = aid
+        # HIGH-1: 单次批量查询替代 N+1 循环
+        sub_rows = await db.execute(
+            select(Submission.id, Submission.assignment_id).where(
+                and_(Submission.assignment_id.in_(assignment_ids), Submission.is_latest == True)
+            )
+        )
+        aid_of_sub = {sid: aid for sid, aid in sub_rows}
 
         sub_id_list = list(aid_of_sub.keys())
         if sub_id_list:
-            tasks = (await db.execute(
-                select(GradingTask).where(GradingTask.submission_id.in_(sub_id_list))
+            # HIGH-2: 按 submission 去重，每个 submission 只取最新一条 task
+            all_tasks = (await db.execute(
+                select(GradingTask)
+                .where(GradingTask.submission_id.in_(sub_id_list))
+                .order_by(GradingTask.id.desc())
             )).scalars().all()
+            task_map: dict[int, GradingTask] = {}
+            for t in all_tasks:
+                if t.submission_id not in task_map:
+                    task_map[t.submission_id] = t
+            tasks = list(task_map.values())
 
             failed_sids = []
             for t in tasks:

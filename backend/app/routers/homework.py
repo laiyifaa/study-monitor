@@ -487,7 +487,10 @@ def _submission_can_view_answer_files(
 ) -> bool:
     if not submission or not submission.is_latest or submission.status == "returned":
         return False
-    return has_report or task_status == "failed"
+    return has_report or task_status == "failed" or (
+        submission.submitted_at
+        and (datetime.utcnow() - submission.submitted_at).total_seconds() >= 8 * 3600
+    )
 
 
 async def _student_can_view_answer_files(assignment_id: int, student_id: int, db: AsyncSession) -> bool:

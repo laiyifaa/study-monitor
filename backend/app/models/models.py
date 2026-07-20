@@ -396,6 +396,8 @@ class Announcement(Base):
         course_id    — 关联课程 ID，null 表示全平台公告
         title        — 公告标题
         content      — 公告正文（纯文本）
+        image_urls   — 公告图片 URL 列表（JSON 数组）
+        popup        — 是否为强制弹窗公告（登录时自动弹出，需确认关闭）
         priority     — 优先级：normal=普通/important=重要/urgent=紧急
         created_by   — 发布者用户 ID，外键关联 users 表
         created_at   — 发布时间
@@ -408,6 +410,8 @@ class Announcement(Base):
     course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=True, index=True, comment="关联课程ID(null=全平台公告)")
     title = Column(String(200), nullable=False, comment="公告标题")
     content = Column(Text, default="", comment="公告正文")
+    image_urls = Column(Text, default="[]", comment="公告图片URL数组(JSON)")
+    popup = Column(Boolean, default=False, comment="是否为强制弹窗公告(登录时自动弹出)")
     priority = Column(Enum("normal", "important", "urgent"), default="normal", nullable=False, comment="优先级")
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())

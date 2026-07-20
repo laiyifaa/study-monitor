@@ -126,6 +126,33 @@
       </div>
     </div>
   </div>
+
+  <!-- ====== 强制弹窗公告（登录后自动弹出，必须确认才关闭） ====== -->
+  <div v-if="showPopupModal && currentPopup" class="modal-overlay popup-modal-overlay">
+    <div class="modal-card popup-card">
+      <div class="modal-header">
+        <span v-if="currentPopup.priority === 'urgent'" class="priority-tag urgent">紧急</span>
+        <span v-else-if="currentPopup.priority === 'important'" class="priority-tag important">重要</span>
+        <h3>{{ currentPopup.title }}</h3>
+      </div>
+      <div class="popup-meta">
+        <span>{{ currentPopup.created_by_name }}</span>
+        <span>{{ formatPopupTime(currentPopup.created_at) }}</span>
+      </div>
+      <div class="popup-body">
+        <p v-if="currentPopup.content" class="popup-text">{{ currentPopup.content }}</p>
+        <div v-if="currentPopup.image_urls && currentPopup.image_urls.length > 0" class="popup-images">
+          <img v-for="(url, idx) in currentPopup.image_urls" :key="idx" :src="getPopupImageUrl(url)" class="popup-image" />
+        </div>
+      </div>
+      <div class="modal-actions" style="justify-content: center;">
+        <button class="btn-sm primary" @click="confirmPopup">已确认</button>
+      </div>
+      <div v-if="popupAnnouncements.length > 1" class="popup-progress">
+        {{ currentPopupIndex + 1 }} / {{ popupAnnouncements.length }}
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -134,6 +161,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from './utils/auth'  // 【交互】引用 auth.js 的认证状态管理
 import * as dd from 'dingtalk-jsapi'  // 钉钉环境检测：判断是否在钉钉客户端内
 import api from './utils/api'
+import { getMediaUrl } from './utils/homeworkFiles'
 
 const router = useRouter()
 // 获取认证 store 的单例实例
@@ -151,6 +179,58 @@ async function fetchUnreadCount() {
     }
   } catch (e) {
     // 静默失败，不影响使用
+  }
+}
+
+/** ============ 强制弹窗公告 ============ */
+const popupAnnouncements = ref([])
+const currentPopupIndex = ref(0)
+const showPopupModal = ref(false)
+
+const currentPopup = computed(() => {
+  if (currentPopupIndex.value < popupAnnouncements.value.length) {
+    return popupAnnouncements.value[currentPopupIndex.value]
+  }
+  return null
+})
+
+function getPopupImageUrl(url) {
+  return getMediaUrl(url)
+}
+
+function formatPopupTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+async function fetchUnreadPopups() {
+  if (!auth.isLoggedIn.value) return
+  try {
+    const res = await api.get('/announcements/unread-popups')
+    if (res.data.code === 0 && res.data.data.length > 0) {
+      popupAnnouncements.value = res.data.data
+      currentPopupIndex.value = 0
+      showPopupModal.value = true
+    }
+  } catch (e) {
+    // 静默失败
+  }
+}
+
+async function confirmPopup() {
+  const popup = currentPopup.value
+  if (!popup) return
+  try {
+    await api.post(`/announcements/${popup.id}/read`)
+  } catch (e) {
+    // 静默失败
+  }
+  currentPopupIndex.value++
+  if (currentPopupIndex.value >= popupAnnouncements.value.length) {
+    showPopupModal.value = false
+    popupAnnouncements.value = []
+    fetchUnreadCount()
   }
 }
 
@@ -344,9 +424,10 @@ onMounted(async () => {
     }
   }
 
-  // 登录后：获取未读公告数
+  // 登录后：获取未读公告数 + 检查强制弹窗公告
   if (auth.isLoggedIn.value) {
     fetchUnreadCount()
+    fetchUnreadPopups()
     // 每60秒轮询一次未读数
     setInterval(fetchUnreadCount, 60000)
   }
@@ -366,6 +447,21 @@ watch(() => auth.pendingChangePw.value, (val) => {
   if (val) {
     showChangePw.value = true
     auth.pendingChangePw.value = false  // 消费掉标志，避免重复触发
+  }
+})
+
+/**
+ * 监听登录状态变化 → 登录成功后获取强制弹窗公告
+ * 
+ * 为什么需要这个 watch：
+ *   onMounted 在应用首次加载时执行，此时用户可能尚未登录（在 /login 页面）
+ *   用户通过 Login.vue 登录后，auth.isLoggedIn 变为 true，但 onMounted 不会再次触发
+ *   所以需要 watch 监听登录状态变化，登录成功后重新获取弹窗公告
+ */
+watch(() => auth.isLoggedIn.value, (loggedIn) => {
+  if (loggedIn) {
+    fetchUnreadCount()
+    fetchUnreadPopups()
   }
 })
 
@@ -636,6 +732,62 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft
 .btn-close:hover {
   background: #f0f0f0;
   color: #333;
+}
+
+/* ====== 强制弹窗公告样式 ====== */
+.popup-modal-overlay {
+  z-index: 1000;
+  background: rgba(0,0,0,0.6);
+}
+.popup-card {
+  max-width: 500px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.popup-meta {
+  font-size: 12px;
+  color: #999;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.popup-body {
+  margin-bottom: 16px;
+}
+.popup-text {
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  margin-bottom: 12px;
+}
+.popup-images {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.popup-image {
+  width: 100%;
+  border-radius: 6px;
+}
+.popup-progress {
+  text-align: center;
+  font-size: 12px;
+  color: #999;
+  margin-top: 10px;
+}
+.priority-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.priority-tag.urgent {
+  background: #fff1f0;
+  color: #ff4d4f;
+}
+.priority-tag.important {
+  background: #fff7e6;
+  color: #fa8c16;
 }
 
 /* ====== 全局响应式：顶栏适配 ====== */

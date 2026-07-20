@@ -228,7 +228,7 @@ async def _process_submission(submission: Submission, assignment: Assignment) ->
 
             local_paths = [image_url_to_local_path(url) for url in images]
             output_filename = f"stitched_{submission.id}.jpg"
-            stitched_url = stitch_images(local_paths, output_filename)
+            stitched_url = stitch_images(local_paths, output_filename, use_ocr=settings.GRADING_USE_OCR)
 
             task = GradingTask(
                 submission_id=submission.id,

@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     GRADING_CONCURRENCY_LIMIT: int = 10
     GRADING_CIRCUIT_BREAKER_THRESHOLD: int = 5   # 连续失败次数后触发熔断
     GRADING_CIRCUIT_BREAKER_COOLDOWN: int = 300  # 熔断冷却时间（秒）
+    GRADING_USE_OCR: bool = True                 # 图片拼接时启用 OCR 方向检测（需 tesseract）
     API_BASE_URL: str = "http://localhost:8000"
 
     # ── 服务运行参数 ──

@@ -24,10 +24,15 @@
         <div class="ac-meta">
           <span v-if="a.course_id" class="ac-course">课程公告</span>
           <span v-else class="ac-global">全平台公告</span>
+          <span v-if="a.popup" class="popup-tag">强制弹窗</span>
           <span>{{ a.created_by_name }}</span>
           <span>{{ formatTime(a.created_at) }}</span>
         </div>
         <div class="ac-content">{{ a.content.slice(0, 100) }}{{ a.content.length > 100 ? '...' : '' }}</div>
+        <div v-if="a.image_urls && a.image_urls.length > 0" class="ac-images">
+          <img v-for="(url, idx) in a.image_urls.slice(0, 3)" :key="idx" :src="getImageUrl(url)" class="ac-thumb" />
+          <span v-if="a.image_urls.length > 3" class="ac-more-images">+{{ a.image_urls.length - 3 }}</span>
+        </div>
       </div>
     </div>
 
@@ -43,7 +48,12 @@
           <span>{{ detailData.created_by_name }}</span>
           <span>{{ formatTime(detailData.created_at) }}</span>
         </div>
-        <div class="modal-body">{{ detailData.content }}</div>
+        <div class="modal-body">
+          <div v-if="detailData.content" class="modal-text">{{ detailData.content }}</div>
+          <div v-if="detailData.image_urls && detailData.image_urls.length > 0" class="modal-images">
+            <img v-for="(url, idx) in detailData.image_urls" :key="idx" :src="getImageUrl(url)" class="modal-image" />
+          </div>
+        </div>
         <div class="modal-actions">
           <button class="btn-sm" @click="detailVisible = false">关闭</button>
           <button v-if="isTeacherOrAdmin" class="btn-sm danger" @click="deleteAnnouncement(detailData.id)">删除</button>
@@ -78,9 +88,14 @@
 import { ref, computed, onMounted } from 'vue'
 import api from '../utils/api'
 import { useAuthStore } from '../utils/auth'
+import { getMediaUrl } from '../utils/homeworkFiles'
 
 const auth = useAuthStore()
 const isTeacherOrAdmin = computed(() => ['teacher', 'admin'].includes(auth.user.value?.role))
+
+function getImageUrl(url) {
+  return getMediaUrl(url)
+}
 
 const list = ref([])
 const loading = ref(true)
@@ -190,10 +205,14 @@ onMounted(async () => {
 .priority-tag.urgent { background: #fff1f0; color: #ff4d4f; }
 .priority-tag.important { background: #fff7e6; color: #fa8c16; }
 
-.ac-meta { font-size: 12px; color: #999; display: flex; gap: 10px; margin-bottom: 6px; }
+.ac-meta { font-size: 12px; color: #999; display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .ac-course { color: #1890ff; }
 .ac-global { color: #52c41a; }
+.popup-tag { color: #fa8c16; background: #fff7e6; padding: 0 4px; border-radius: 3px; font-size: 11px; }
 .ac-content { font-size: 13px; color: #666; line-height: 1.5; }
+.ac-images { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.ac-thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; border: 1px solid #e8e8e8; }
+.ac-more-images { font-size: 12px; color: #999; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 200; }
 .confirm-overlay { z-index: 300; }
@@ -201,7 +220,10 @@ onMounted(async () => {
 .modal-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .modal-header h3 { font-size: 17px; }
 .modal-meta { font-size: 12px; color: #999; display: flex; gap: 10px; margin-bottom: 14px; }
-.modal-body { font-size: 14px; line-height: 1.8; white-space: pre-wrap; }
+.modal-body { font-size: 14px; line-height: 1.8; }
+.modal-text { white-space: pre-wrap; margin-bottom: 12px; }
+.modal-images { display: flex; flex-direction: column; gap: 10px; }
+.modal-image { width: 100%; border-radius: 6px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 
 .btn-sm { padding: 6px 16px; border: 1px solid #d9d9d9; border-radius: 4px; background: #fff; font-size: 13px; cursor: pointer; }

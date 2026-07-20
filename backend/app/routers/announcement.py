@@ -30,7 +30,11 @@ API 列表：
     已读标记：需登录
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import json
+import os
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,12 +45,18 @@ from app.utils.jwt_helper import get_current_user, require_role
 
 router = APIRouter(prefix="/api/announcements", tags=["公告管理"])
 
+ANNOUNCEMENT_UPLOAD_DIR = "uploads/announcements"
+ALLOWED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+
 
 class AnnouncementCreate(BaseModel):
     """创建公告请求体"""
     course_id: int | None = None        # 关联课程ID，null=全平台公告
     title: str                          # 公告标题（必填）
     content: str = ""                   # 公告正文
+    image_urls: list[str] = []          # 公告图片URL列表
+    popup: bool = False                 # 是否为强制弹窗公告
     priority: str = "normal"            # 优先级：normal/important/urgent
 
 
@@ -55,7 +65,22 @@ class AnnouncementUpdate(BaseModel):
     course_id: int | None = None
     title: str | None = None
     content: str | None = None
+    image_urls: list[str] | None = None
+    popup: bool | None = None
     priority: str | None = None
+
+
+def _parse_image_urls(raw) -> list[str]:
+    """安全解析 image_urls 字段（数据库存 JSON 字符串，返回 list）"""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 def _announcement_to_dict(a: Announcement, created_by_name: str = ""):
@@ -65,6 +90,8 @@ def _announcement_to_dict(a: Announcement, created_by_name: str = ""):
         "course_id": a.course_id,
         "title": a.title,
         "content": a.content,
+        "image_urls": _parse_image_urls(a.image_urls),
+        "popup": a.popup or False,
         "priority": a.priority,
         "created_by": a.created_by,
         "created_by_name": created_by_name,
@@ -111,6 +138,8 @@ async def create_announcement(
         course_id=req.course_id,
         title=req.title,
         content=req.content,
+        image_urls=json.dumps(req.image_urls),
+        popup=req.popup,
         priority=req.priority,
         created_by=user.id,
     )
@@ -160,19 +189,98 @@ async def list_announcements(
 # 固定路径路由（必须在 /{announcement_id} 之前注册，否则会被参数路由抢先匹配）
 # ============================================================
 
+@router.post("/upload-image")
+async def upload_announcement_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("teacher", "admin")),
+):
+    """
+    上传公告图片
+
+    权限要求：【teacher / admin】
+    限制：仅 jpg/jpeg/png/gif/webp，单文件最大 10MB
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="仅支持 jpg/jpeg/png/gif/webp 格式")
+
+    content = await file.read()
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=400, detail="图片大小不能超过 10MB")
+
+    filename = f"{uuid.uuid4().hex}{ext}"
+    os.makedirs(ANNOUNCEMENT_UPLOAD_DIR, exist_ok=True)
+    filepath = os.path.join(ANNOUNCEMENT_UPLOAD_DIR, filename)
+
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    return {"code": 0, "data": {"url": f"/uploads/announcements/{filename}"}}
+
+
+@router.get("/unread-popups")
+async def get_unread_popups(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取当前用户未读的强制弹窗公告
+
+    权限要求：需登录
+    返回：popup=true 且当前用户未读的公告列表，按创建时间升序（先发的先弹）
+    """
+    # 查询所有 popup=true 的公告ID
+    stmt = select(Announcement.id).where(Announcement.popup == True).order_by(Announcement.created_at.asc())
+    result = await db.execute(stmt)
+    popup_ids = [row[0] for row in result.all()]
+
+    if not popup_ids:
+        return {"code": 0, "data": []}
+
+    # 查询该用户已读的公告ID
+    read_stmt = select(AnnouncementRead.announcement_id).where(
+        AnnouncementRead.user_id == user.id
+    )
+    read_result = await db.execute(read_stmt)
+    read_ids = set(row[0] for row in read_result.all())
+
+    # 过滤出未读的 popup 公告ID
+    unread_popup_ids = [pid for pid in popup_ids if pid not in read_ids]
+
+    if not unread_popup_ids:
+        return {"code": 0, "data": []}
+
+    # 查询完整公告对象（保持升序）
+    stmt = select(Announcement).where(Announcement.id.in_(unread_popup_ids)).order_by(Announcement.created_at.asc())
+    result = await db.execute(stmt)
+    announcements = result.scalars().all()
+
+    data = []
+    for a in announcements:
+        creator_name = await _get_creator_name(db, a.created_by)
+        data.append(_announcement_to_dict(a, creator_name))
+
+    return {"code": 0, "data": data}
+
+
 @router.get("/unread-count")
 async def get_unread_count(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    获取当前用户的未读公告数量
+    获取当前用户的未读公告数量（排除 popup 公告，popup 有独立的弹窗追踪机制）
 
     权限要求：需登录
-    逻辑：查询所有对该用户可见的公告，减去已读记录数
+    逻辑：查询所有对该用户可见的非 popup 公告，减去已读记录数
     """
-    # 查询所有可见公告的ID（与列表接口同样的过滤规则）
-    stmt = select(Announcement.id).order_by(Announcement.created_at.desc())
+    # 查询所有可见公告的ID（排除 popup=true 的公告）
+    stmt = select(Announcement.id).where(
+        (Announcement.popup == False) | (Announcement.popup.is_(None))
+    ).order_by(Announcement.created_at.desc())
     result = await db.execute(stmt)
     all_ids = [row[0] for row in result.all()]
 
@@ -196,12 +304,14 @@ async def mark_all_announcements_read(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    一键标记所有公告为已读
+    一键标记所有公告为已读（排除强制弹窗公告，popup 公告只能通过用户确认来标记已读）
 
     权限要求：需登录
     """
-    # 查询所有可见公告ID
-    stmt = select(Announcement.id)
+    # 查询所有可见公告ID（排除 popup=true 的公告）
+    stmt = select(Announcement.id).where(
+        (Announcement.popup == False) | (Announcement.popup.is_(None))
+    )
     result = await db.execute(stmt)
     all_ids = [row[0] for row in result.all()]
 
@@ -274,6 +384,10 @@ async def update_announcement(
         cr = await db.execute(select(Course).where(Course.id == update_data["course_id"]))
         if not cr.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="课程不存在")
+
+    # image_urls 需要序列化为 JSON 字符串存入数据库
+    if "image_urls" in update_data:
+        update_data["image_urls"] = json.dumps(update_data["image_urls"])
 
     for key, value in update_data.items():
         setattr(announcement, key, value)

@@ -60,7 +60,7 @@
             <button class="btn-sm" @click="openEditForSection(section)">编辑</button>
             <button class="btn-sm answer-action" @click="openAnswerForSection(section)">答案管理</button>
             <button v-if="getAssignment(section.id).status === 'draft'" class="btn-sm primary" @click="publishAssignment(section.id)">发布</button>
-            <button class="btn-sm" @click="loadSubmissions(section.id, { reset: true, openModal: true })">查看提交</button>
+            <button class="btn-sm" @click="loadSubmissions(section.id, { reset: true, openModal: true, bucket: 'all' })">查看提交</button>
             <button class="btn-sm" @click="openStudentLookup(section.id)">查询学生</button>
             <button class="btn-sm" @click="openUnsubmittedModal(section.id)">未交名单</button>
             <button class="btn-sm" @click="openLateModal(section.id)">迟交名单</button>
@@ -361,9 +361,9 @@
       </div>
     </div>
 
-    <div v-if="showSubmissionsModal" class="modal-overlay" @click.self="showSubmissionsModal = false">
+    <div v-if="showSubmissionsModal" class="modal-overlay" @click.self="closeSubmissionsModal">
       <div class="modal modal-lg">
-        <h3>提交列表</h3>
+        <h3>提交列表{{ currentViewSectionId ? ` - ${getSectionTitle(currentViewSectionId)}` : '' }}</h3>
         <div class="list-toolbar">
           <div class="list-search">
             <div class="search-input-wrap">
@@ -375,8 +375,20 @@
           </div>
           <div class="list-summary">共 {{ submissionsTotal }} 条</div>
         </div>
+        <div class="list-filters">
+          <button
+            v-for="option in submissionBucketOptions"
+            :key="option.value"
+            class="filter-chip"
+            :class="{ active: submissionsBucket === option.value }"
+            :disabled="submissionsLoading && submissionsBucket === option.value"
+            @click="changeSubmissionsBucket(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
         <div v-if="submissionsLoading" class="loading">加载中...</div>
-        <div v-else-if="submissions.length === 0" class="empty">暂无提交</div>
+        <div v-else-if="submissions.length === 0" class="empty">{{ submissionsEmptyText }}</div>
         <div v-else class="submissions-list">
           <div v-for="s in submissions" :key="s.id" class="submission-item">
             <div class="submission-header">
@@ -427,7 +439,7 @@
               <button class="btn-sm" :disabled="submissionsPage >= totalPages(submissionsTotal) || submissionsLoading" @click="changeSubmissionsPage(submissionsPage + 1)">下一页</button>
             </div>
           </div>
-          <button class="btn-secondary" @click="showSubmissionsModal = false">关闭</button>
+          <button class="btn-secondary" @click="closeSubmissionsModal">关闭</button>
         </div>
       </div>
     </div>
@@ -710,7 +722,7 @@
 
 <script setup>
 import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useDingTalk } from '../composables/useDingTalk.js'
 import api from '../utils/api.js'
 import {
@@ -726,9 +738,18 @@ import {
 } from '../utils/homeworkFiles.js'
 
 const route = useRoute()
+const router = useRouter()
 const courseId = route.params.courseId
 const { isDingTalk, previewFile } = useDingTalk()
 const LIST_PAGE_SIZE = 20
+const SUBMISSION_BUCKET_OPTIONS = [
+  { value: 'all', label: '全部' },
+  { value: 'pending', label: '待批改' },
+  { value: 'processing', label: '批改中' },
+  { value: 'graded', label: '已批改' },
+  { value: 'failed', label: '失败' },
+]
+const SUBMISSION_BUCKET_SET = new Set(SUBMISSION_BUCKET_OPTIONS.map(option => option.value))
 
 const loading = ref(false)
 const sections = ref([])
@@ -736,6 +757,7 @@ const assignmentMap = ref({})
 const submissions = ref([])
 const submissionsTotal = ref(0)
 const submissionsPage = ref(1)
+const submissionsBucket = ref('all')
 const submissionsSearch = ref('')
 const submissionsLoading = ref(false)
 const unsubmittedStudents = ref([])
@@ -796,6 +818,61 @@ let pollTimer = null
 let regradeTimer = null
 let studentSearchTimer = null
 
+const submissionBucketOptions = SUBMISSION_BUCKET_OPTIONS
+const submissionsEmptyText = computed(() => {
+  if (submissionsBucket.value === 'all') return '暂无提交'
+  const current = SUBMISSION_BUCKET_OPTIONS.find(option => option.value === submissionsBucket.value)
+  return `暂无${current?.label || '提交'}`
+})
+
+function normalizeSubmissionBucket(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return SUBMISSION_BUCKET_SET.has(normalized) ? normalized : 'all'
+}
+
+function parsePositiveInt(value, fallback = 1) {
+  const parsed = Number.parseInt(String(value ?? ''), 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function buildSubmissionRouteQuery({
+  sectionId = currentViewSectionId.value,
+  bucket = submissionsBucket.value,
+  page = submissionsPage.value,
+} = {}) {
+  const query = { ...route.query }
+  query.view = 'submissions'
+  query.section_id = String(sectionId)
+  query.bucket = normalizeSubmissionBucket(bucket)
+  query.page = String(parsePositiveInt(page, 1))
+  return query
+}
+
+async function syncSubmissionRouteQuery(options = {}) {
+  const sectionId = Number(options.sectionId ?? currentViewSectionId.value)
+  if (!Number.isInteger(sectionId) || sectionId <= 0) return
+
+  const nextQuery = buildSubmissionRouteQuery({ ...options, sectionId })
+  const sameQuery = [
+    ['view', nextQuery.view],
+    ['section_id', nextQuery.section_id],
+    ['bucket', nextQuery.bucket],
+    ['page', nextQuery.page],
+  ].every(([key, value]) => String(route.query[key] || '') === String(value || ''))
+  if (sameQuery) return
+
+  await router.replace({ query: nextQuery })
+}
+
+async function clearSubmissionRouteQuery() {
+  const query = { ...route.query }
+  delete query.view
+  delete query.section_id
+  delete query.bucket
+  delete query.page
+  await router.replace({ query })
+}
+
 function getNextAnswerNo(rows = form.value?.answer_items || []) {
   const numericNos = rows
     .map(item => String(item?.no ?? '').trim())
@@ -828,14 +905,32 @@ const quickAnswerItem = ref(createAnswerItem({ no: '1' }))
 
 const answerJsonPreview = computed(() => JSON.stringify(serializeAnswerItems(collectAnswerItems(form.value.answer_items).items), null, 2))
 
-onMounted(() => {
-  loadData()
+onMounted(async () => {
+  await loadData()
+  await openRouteSubmissionList()
 })
 
 onUnmounted(() => {
   stopPolling()
   stopRegradePolling()
 })
+
+async function openRouteSubmissionList() {
+  if (String(route.query.view || '').trim().toLowerCase() !== 'submissions') return
+
+  const sectionId = Number(route.query.section_id)
+  if (!Number.isInteger(sectionId) || sectionId <= 0) return
+  if (!sections.value.some(section => section.id === sectionId)) return
+  if (!getAssignment(sectionId)) return
+
+  await loadSubmissions(sectionId, {
+    reset: true,
+    openModal: true,
+    bucket: normalizeSubmissionBucket(route.query.bucket),
+    page: parsePositiveInt(route.query.page, 1),
+    syncRoute: true,
+  })
+}
 
 function getAssignment(sectionId) {
   return assignmentMap.value[sectionId]
@@ -1364,22 +1459,33 @@ function pageRangeText(total, page) {
   return `${start}-${end} / ${total}`
 }
 
-async function loadSectionSubmissions(sectionId, page = submissionsPage.value) {
+async function loadSectionSubmissions(sectionId, page = submissionsPage.value, options = {}) {
+  const { bucket = submissionsBucket.value, syncRoute = showSubmissionsModal.value } = options
+  const normalizedBucket = normalizeSubmissionBucket(bucket)
   currentViewSectionId.value = sectionId
+  submissionsBucket.value = normalizedBucket
   submissionsLoading.value = true
   try {
     const res = await api.get(`/homework/assignments/${sectionId}/submissions`, {
-      params: buildPagedParams(page, submissionsSearch.value),
+      params: buildPagedParams(page, submissionsSearch.value, normalizedBucket === 'all' ? {} : { bucket: normalizedBucket }),
     })
     const data = res.data.data || {}
     const items = data.items || []
     const total = data.total || 0
     if (!items.length && total > 0 && page > 1) {
-      return await loadSectionSubmissions(sectionId, page - 1)
+      return await loadSectionSubmissions(sectionId, page - 1, { bucket: normalizedBucket, syncRoute })
     }
     submissions.value = items
     submissionsTotal.value = total
     submissionsPage.value = data.page || page
+    submissionsBucket.value = normalizeSubmissionBucket(data.bucket || normalizedBucket)
+    if (syncRoute && showSubmissionsModal.value) {
+      await syncSubmissionRouteQuery({
+        sectionId,
+        bucket: submissionsBucket.value,
+        page: submissionsPage.value,
+      })
+    }
   } finally {
     submissionsLoading.value = false
   }
@@ -1430,18 +1536,50 @@ async function loadUnsubmittedStudentsPage(sectionId, page = unsubmittedPage.val
   }
 }
 
+function closeSubmissionsModal() {
+  showSubmissionsModal.value = false
+  void clearSubmissionRouteQuery()
+}
+
 async function loadSubmissions(sectionId, options = {}) {
-  const { reset = false, openModal = true } = options
+  const {
+    reset = false,
+    openModal = true,
+    bucket = submissionsBucket.value,
+    page = submissionsPage.value,
+    syncRoute = true,
+  } = options
+  const normalizedBucket = normalizeSubmissionBucket(bucket)
   if (reset) {
     submissionsSearch.value = ''
     submissionsPage.value = 1
   }
   try {
-    await loadSectionSubmissions(sectionId, submissionsPage.value)
+    await loadSectionSubmissions(sectionId, reset ? 1 : page, { bucket: normalizedBucket, syncRoute: false })
     if (openModal) {
       showSubmissionsModal.value = true
       showLateModal.value = false
+      if (syncRoute) {
+        await syncSubmissionRouteQuery({
+          sectionId,
+          bucket: submissionsBucket.value,
+          page: submissionsPage.value,
+        })
+      }
     }
+  } catch (e) {
+    alert('加载失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function changeSubmissionsBucket(bucket) {
+  if (!currentViewSectionId.value) return
+  submissionsPage.value = 1
+  try {
+    await loadSectionSubmissions(currentViewSectionId.value, 1, {
+      bucket,
+      syncRoute: true,
+    })
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   }
@@ -1451,7 +1589,10 @@ async function searchSubmissionsByName() {
   if (!currentViewSectionId.value) return
   submissionsPage.value = 1
   try {
-    await loadSectionSubmissions(currentViewSectionId.value, 1)
+    await loadSectionSubmissions(currentViewSectionId.value, 1, {
+      bucket: submissionsBucket.value,
+      syncRoute: true,
+    })
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   }
@@ -1465,13 +1606,18 @@ async function resetSubmissionsSearch() {
 async function changeSubmissionsPage(page) {
   if (!currentViewSectionId.value || page < 1 || page > totalPages(submissionsTotal.value)) return
   try {
-    await loadSectionSubmissions(currentViewSectionId.value, page)
+    await loadSectionSubmissions(currentViewSectionId.value, page, {
+      bucket: submissionsBucket.value,
+      syncRoute: true,
+    })
   } catch (e) {
     alert('加载失败：' + (e.response?.data?.detail || e.message))
   }
 }
 
 async function openLateModal(sectionId) {
+  showSubmissionsModal.value = false
+  void clearSubmissionRouteQuery()
   lateSearch.value = ''
   latePage.value = 1
   try {
@@ -1529,6 +1675,8 @@ async function unlateSubmission(submission) {
 }
 
 async function openUnsubmittedModal(sectionId) {
+  showSubmissionsModal.value = false
+  void clearSubmissionRouteQuery()
   unsubmittedSearch.value = ''
   unsubmittedPage.value = 1
   await loadUnsubmittedStudentsPage(sectionId, 1)
@@ -2749,6 +2897,40 @@ async function pollGradingStatus(assignmentId) {
 .list-summary {
   font-size: 12px;
   color: #607080;
+}
+
+.list-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.filter-chip {
+  border: 1px solid #d7e2ea;
+  background: #fff;
+  color: #4a5b68;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.filter-chip:hover:not(:disabled) {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.filter-chip.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.filter-chip:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 
 .list-pagination {

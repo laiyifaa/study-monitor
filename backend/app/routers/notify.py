@@ -332,6 +332,7 @@ async def _dws_send_user_msg(user_id: str, student_name: str, class_name: str, e
 class SendSlowReminderRequest(BaseModel):
     """发送私信进度提醒请求体"""
     course_id: int
+    class_name: str | None = None  # 可选：班级筛选
 
 
 @router.post("/send-slow-reminder")
@@ -418,6 +419,8 @@ async def send_slow_reminder(
 
     # ── 3. 筛选进度慢的学生 ──
     all_query = select(User.id, User.name, User.class_name).where(User.role == "student")
+    if req.class_name:
+        all_query = all_query.where(User.class_name == req.class_name)
     all_result = await db.execute(all_query)
     all_students = all_result.all()
 

@@ -727,9 +727,9 @@ async function showSlowStudents() {
   if (!selectedCourseId.value) return
   slowLoading.value = true
   try {
-    const res = await api.get('/stats/slow-students', {
-      params: { course_id: selectedCourseId.value },
-    })
+    const params = { course_id: selectedCourseId.value }
+    if (selectedClass.value) params.class_name = selectedClass.value
+    const res = await api.get('/stats/slow-students', { params })
     if (res.data.code === 0) {
       slowData.value = res.data.data
       slowStudents.value = res.data.data.students || []
@@ -746,7 +746,9 @@ async function sendSlowReminder() {
   if (!selectedCourseId.value || slowStudents.value.length === 0) return
   sendingSlowReminder.value = true
   try {
-    const res = await api.post('/notify/send-slow-reminder', { course_id: selectedCourseId.value })
+    const body = { course_id: selectedCourseId.value }
+    if (selectedClass.value) body.class_name = selectedClass.value
+    const res = await api.post('/notify/send-slow-reminder', body)
     if (res.data.code === 0) {
       sendResults.value = res.data.data
       showSendResultModal.value = true

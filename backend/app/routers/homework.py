@@ -32,6 +32,7 @@ API 列表：
         POST   /api/homework/upload                    — 上传作业图片
 """
 
+import asyncio
 import os
 import re
 import json
@@ -41,8 +42,9 @@ from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Request, Query
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from typing import Any, Optional, List
 
 from app.config import get_settings
@@ -85,6 +87,7 @@ ANSWER_DEFAULT_SCORES = {
     "true_false": 1,
     "fill_blank": 2,
 }
+SUBMISSION_BUCKETS = {"all", "pending", "processing", "graded", "failed", "returned"}
 
 
 # MEDIUM-1: _refresh_grading_status 已从 agent_caller 导入，不再重复定义
@@ -138,6 +141,7 @@ async def _execute_grading_for_submission(
     prompt: str,
     answer_json: str = "",
     force: bool = False,
+    batch_started_at: datetime | None = None,
 ) -> bool:
     task_id = None
 
@@ -157,7 +161,12 @@ async def _execute_grading_for_submission(
             if missing_paths:
                 raise FileNotFoundError("原始作业图片缺失，无法重新批改")
 
-            task = await _prepare_grading_task(session, submission_id, force=force)
+            task = await _prepare_grading_task(
+                session,
+                submission_id,
+                force=force,
+                batch_started_at=batch_started_at,
+            )
             if not task:
                 return False
 
@@ -193,6 +202,93 @@ async def _execute_grading_for_submission(
         if task_id is not None:
             await _mark_task_failed(task_id, str(e))
         raise
+
+
+async def _run_grading_batch(
+    submission_ids: list[int],
+    prompt: str,
+    answer_json: str = "",
+    force: bool = False,
+    batch_started_at: datetime | None = None,
+    log_prefix: str = "批改任务",
+):
+    if not submission_ids:
+        return
+
+    batch_size = max(1, int(settings.GRADING_CONCURRENCY_LIMIT or 1))
+    for index in range(0, len(submission_ids), batch_size):
+        batch_ids = submission_ids[index:index + batch_size]
+        results = await asyncio.gather(
+            *[
+                _execute_grading_for_submission(
+                    submission_id=submission_id,
+                    prompt=prompt,
+                    answer_json=answer_json,
+                    force=force,
+                    batch_started_at=batch_started_at,
+                )
+                for submission_id in batch_ids
+            ],
+            return_exceptions=True,
+        )
+
+        for submission_id, result in zip(batch_ids, results):
+            if isinstance(result, Exception):
+                logger.error(f"{log_prefix}失败: submission_id={submission_id}, error={result}")
+
+
+def _normalize_submission_bucket(value: Optional[str]) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return "all"
+    if normalized not in SUBMISSION_BUCKETS:
+        raise HTTPException(status_code=400, detail="无效的提交筛选条件")
+    return normalized
+
+
+def _latest_task_subquery():
+    return (
+        select(
+            GradingTask.submission_id.label("submission_id"),
+            func.max(GradingTask.id).label("latest_task_id"),
+        )
+        .group_by(GradingTask.submission_id)
+        .subquery()
+    )
+
+
+def _apply_submission_bucket_filter(query, bucket: str, latest_task_alias):
+    if bucket == "all":
+        return query
+    if bucket == "graded":
+        return query.where(Submission.status == "graded")
+    if bucket == "returned":
+        return query.where(Submission.status == "returned")
+    if bucket == "processing":
+        return query.where(
+            and_(
+                Submission.status == "pending",
+                latest_task_alias.status.in_(("pending", "sent")),
+            )
+        )
+    if bucket == "failed":
+        return query.where(
+            and_(
+                Submission.status == "pending",
+                latest_task_alias.status == "failed",
+            )
+        )
+    if bucket == "pending":
+        return query.where(
+            and_(
+                Submission.status == "pending",
+                or_(
+                    latest_task_alias.id.is_(None),
+                    latest_task_alias.status.notin_(("pending", "sent", "failed")),
+                ),
+            )
+        )
+    return query
 
 
 # MEDIUM-2: _mark_task_failed 已从 agent_caller 导入，不再重复定义
@@ -961,6 +1057,7 @@ async def parse_assignment_answer_file(
 async def list_submissions(
     section_id: int,
     search: Optional[str] = Query(None, description="按学生姓名搜索"),
+    bucket: Optional[str] = Query("all", description="提交筛选：all/pending/processing/graded/failed/returned"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     late_only: bool = Query(False, description="仅返回迟交提交"),
@@ -976,9 +1073,14 @@ async def list_submissions(
         return {"code": 0, "data": {"items": [], "total": 0, "page": page, "page_size": page_size}}
 
     search_text = (search or "").strip()
+    bucket = _normalize_submission_bucket(bucket)
+    latest_task_ids = _latest_task_subquery()
+    latest_task = aliased(GradingTask)
     submission_query = (
         select(Submission)
         .join(User, Submission.user_id == User.id)
+        .outerjoin(latest_task_ids, latest_task_ids.c.submission_id == Submission.id)
+        .outerjoin(latest_task, latest_task.id == latest_task_ids.c.latest_task_id)
         .where(Submission.assignment_id == assignment.id)
         .where(Submission.is_latest == True)
     )
@@ -986,6 +1088,8 @@ async def list_submissions(
         select(func.count())
         .select_from(Submission)
         .join(User, Submission.user_id == User.id)
+        .outerjoin(latest_task_ids, latest_task_ids.c.submission_id == Submission.id)
+        .outerjoin(latest_task, latest_task.id == latest_task_ids.c.latest_task_id)
         .where(Submission.assignment_id == assignment.id)
         .where(Submission.is_latest == True)
     )
@@ -997,6 +1101,9 @@ async def list_submissions(
         name_filter = User.name.like(f"%{search_text}%")
         submission_query = submission_query.where(name_filter)
         count_query = count_query.where(name_filter)
+
+    submission_query = _apply_submission_bucket_filter(submission_query, bucket, latest_task)
+    count_query = _apply_submission_bucket_filter(count_query, bucket, latest_task)
 
     total = int((await db.scalar(count_query)) or 0)
     result = await db.execute(
@@ -1020,9 +1127,15 @@ async def list_submissions(
     reports = {r.submission_id: r for r in report_rows.scalars().all()} if submission_ids else {}
 
     task_rows = await db.execute(
-        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids))
+        select(GradingTask)
+        .where(GradingTask.submission_id.in_(submission_ids))
+        .order_by(GradingTask.id.desc())
     ) if submission_ids else []
-    tasks = {t.submission_id: t for t in task_rows.scalars().all()} if submission_ids else {}
+    tasks = {}
+    if submission_ids:
+        for task in task_rows.scalars().all():
+            if task.submission_id not in tasks:
+                tasks[task.submission_id] = task
 
     data = []
     for s in submissions:
@@ -1056,7 +1169,16 @@ async def list_submissions(
             } if task else None,
         })
 
-    return {"code": 0, "data": {"items": data, "total": total, "page": page, "page_size": page_size}}
+    return {
+        "code": 0,
+        "data": {
+            "items": data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "bucket": bucket,
+        },
+    }
 
 
 @router.get("/assignments/{section_id}/student-submissions")
@@ -1096,9 +1218,14 @@ async def list_student_submissions(
     reports = {r.submission_id: r for r in report_rows.scalars().all()}
 
     task_rows = await db.execute(
-        select(GradingTask).where(GradingTask.submission_id.in_(submission_ids))
+        select(GradingTask)
+        .where(GradingTask.submission_id.in_(submission_ids))
+        .order_by(GradingTask.id.desc())
     )
-    tasks = {t.submission_id: t for t in task_rows.scalars().all()}
+    tasks = {}
+    for task in task_rows.scalars().all():
+        if task.submission_id not in tasks:
+            tasks[task.submission_id] = task
 
     data = []
     for s in submissions:
@@ -1675,7 +1802,7 @@ async def regrade_all_failed(
 
     查找该作业下所有 GradingTask.status == "failed" 且 is_latest 的提交，
     排除已被人工修改的（review_status == "modified" 或 generated_by 含 "teacher"），
-    异步串行执行 _execute_grading_for_submission(force=True)。
+    按配置并发度分批执行智能批改。
     """
     assignment = await db.get(Assignment, assignment_id)
     if not assignment:
@@ -1732,28 +1859,43 @@ async def regrade_all_failed(
     if not failed_submission_ids:
         return {"code": 0, "data": {"message": "无失败任务需要重新批改", "count": 0}}
 
+    batch_started_at = now_cn_naive()
+    queued_submission_ids: list[int] = []
+    for sid in failed_submission_ids:
+        task = await _prepare_grading_task(
+            db,
+            sid,
+            force=True,
+            batch_started_at=batch_started_at,
+        )
+        if task:
+            queued_submission_ids.append(sid)
+
+    if not queued_submission_ids:
+        return {"code": 0, "data": {"message": "无失败任务需要重新批改", "count": 0}}
+
+    await db.commit()
+
     prompt = assignment.grading_prompt
     answer_json = assignment.reference_answer or ""
 
     async def _run_batch_regrade():
-        for sid in failed_submission_ids:
-            try:
-                await _execute_grading_for_submission(
-                    submission_id=sid,
-                    prompt=prompt,
-                    answer_json=answer_json,
-                    force=True,
-                )
-            except Exception as e:
-                logger.error(f"批量重批失败: submission_id={sid}, error={e}")
+        await _run_grading_batch(
+            submission_ids=queued_submission_ids,
+            prompt=prompt,
+            answer_json=answer_json,
+            force=False,
+            batch_started_at=batch_started_at,
+            log_prefix="批量重批",
+        )
 
     background_tasks.add_task(_run_batch_regrade)
 
     return {
         "code": 0,
         "data": {
-            "message": f"已启动 {len(failed_submission_ids)} 个失败任务的重新批改",
-            "count": len(failed_submission_ids),
+            "message": f"已启动 {len(queued_submission_ids)} 个失败任务的重新批改",
+            "count": len(queued_submission_ids),
         },
     }
 
@@ -1859,15 +2001,14 @@ async def trigger_grading(
     await db.commit()
 
     async def _run_grading():
-        for submission_id in queued_submission_ids:
-            try:
-                await _execute_grading_for_submission(
-                    submission_id=submission_id,
-                    prompt=grading_prompt,
-                    answer_json=answer_json,
-                )
-            except Exception as e:
-                logger.error(f"手动触发批改失败: submission_id={submission_id}, error={e}")
+        await _run_grading_batch(
+            submission_ids=queued_submission_ids,
+            prompt=grading_prompt,
+            answer_json=answer_json,
+            force=False,
+            batch_started_at=batch_started_at,
+            log_prefix="手动触发批改",
+        )
 
     background_tasks.add_task(_run_grading)
 
@@ -2118,26 +2259,25 @@ async def grading_overview(
     for s in sections:
         course_sections.setdefault(s.course_id, []).append(s)
 
-    sub_counts = {aid: {"pending": 0, "graded": 0} for aid in assignment_ids}
-    if assignment_ids:
-        rows = await db.execute(
-            select(Submission.assignment_id, Submission.status, func.count(Submission.id))
-            .where(and_(Submission.assignment_id.in_(assignment_ids), Submission.is_latest == True))
-            .group_by(Submission.assignment_id, Submission.status)
-        )
-        for assignment_id, status, cnt in rows:
-            sub_counts.setdefault(assignment_id, {"pending": 0, "graded": 0})[status] = cnt
-
-    task_counts = {}
+    assignment_summaries = {
+        aid: {"pending": 0, "graded": 0, "failed": 0, "in_progress": 0, "total_submissions": 0}
+        for aid in assignment_ids
+    }
     failed_detail = {}
     if assignment_ids:
         # HIGH-1: 单次批量查询替代 N+1 循环
         sub_rows = await db.execute(
-            select(Submission.id, Submission.assignment_id).where(
+            select(Submission.id, Submission.assignment_id, Submission.user_id, Submission.status).where(
                 and_(Submission.assignment_id.in_(assignment_ids), Submission.is_latest == True)
             )
         )
-        aid_of_sub = {sid: aid for sid, aid in sub_rows}
+        aid_of_sub = {}
+        sub_status = {}
+        sub_to_user = {}
+        for sid, aid, uid, status in sub_rows:
+            aid_of_sub[sid] = aid
+            sub_status[sid] = status
+            sub_to_user[sid] = uid
 
         sub_id_list = list(aid_of_sub.keys())
         if sub_id_list:
@@ -2151,30 +2291,45 @@ async def grading_overview(
             for t in all_tasks:
                 if t.submission_id not in task_map:
                     task_map[t.submission_id] = t
-            tasks = list(task_map.values())
 
             failed_sids = []
-            for t in tasks:
-                aid = aid_of_sub.get(t.submission_id)
+            for sid, aid in aid_of_sub.items():
                 if not aid:
                     continue
-                task_counts.setdefault(aid, {"pending": 0, "sent": 0, "graded": 0, "failed": 0})
-                if t.status in task_counts[aid]:
-                    task_counts[aid][t.status] += 1
-                if t.status == "failed":
-                    failed_sids.append(t.submission_id)
+                summary = assignment_summaries.setdefault(
+                    aid,
+                    {"pending": 0, "graded": 0, "failed": 0, "in_progress": 0, "total_submissions": 0},
+                )
+                task = task_map.get(sid)
+                status = sub_status.get(sid)
+
+                if status == "graded":
+                    summary["graded"] += 1
+                    summary["total_submissions"] += 1
+                    continue
+
+                if task and task.status in {"pending", "sent"}:
+                    summary["in_progress"] += 1
+                    summary["total_submissions"] += 1
+                    continue
+
+                if task and task.status == "failed":
+                    summary["failed"] += 1
+                    summary["total_submissions"] += 1
+                    failed_sids.append(sid)
                     failed_detail.setdefault(aid, []).append({
-                        "submission_id": t.submission_id,
-                        "error": t.error_message or "未知错误",
-                        "retry_count": t.retry_count,
+                        "submission_id": sid,
+                        "error": task.error_message or "未知错误",
+                        "retry_count": task.retry_count,
                     })
+                    continue
+
+                if status == "pending":
+                    summary["pending"] += 1
+                    summary["total_submissions"] += 1
 
             if failed_sids:
-                sub_user_rows = await db.execute(
-                    select(Submission.id, Submission.user_id).where(Submission.id.in_(failed_sids))
-                )
-                sub_to_user = {row[0]: row[1] for row in sub_user_rows}
-                uids = list(set(sub_to_user.values()))
+                uids = list({sub_to_user.get(sid) for sid in failed_sids if sub_to_user.get(sid)})
                 user_rows = await db.execute(select(User.id, User.name).where(User.id.in_(uids)))
                 user_map = {row[0]: row[1] for row in user_rows}
                 for aid, flist in failed_detail.items():
@@ -2199,13 +2354,15 @@ async def grading_overview(
             if not assignment:
                 continue
             c_as += 1
-            sc = sub_counts.get(assignment.id, {"pending": 0, "graded": 0})
-            tc = task_counts.get(assignment.id, {"pending": 0, "sent": 0, "graded": 0, "failed": 0})
-            total = sc["pending"] + sc["graded"]
-            graded = sc["graded"]
-            pending_subs = sc["pending"]
-            failed = tc.get("failed", 0)
-            in_progress = tc.get("sent", 0) + tc.get("pending", 0)
+            summary = assignment_summaries.get(
+                assignment.id,
+                {"pending": 0, "graded": 0, "failed": 0, "in_progress": 0, "total_submissions": 0},
+            )
+            total = summary["total_submissions"]
+            graded = summary["graded"]
+            pending_subs = summary["pending"]
+            failed = summary["failed"]
+            in_progress = summary["in_progress"]
 
             c_subs += total
             c_graded += graded

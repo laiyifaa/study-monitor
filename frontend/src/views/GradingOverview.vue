@@ -88,6 +88,10 @@
             </div>
             <div class="section-actions">
               <router-link :to="`/homework/${course.id}`" class="btn-sm">作业管理</router-link>
+              <button class="btn-sm status-link" :disabled="sec.pending === 0" @click.stop="openSubmissionBucket(course.id, sec.section_id, 'pending')">待批改 {{ sec.pending }}</button>
+              <button class="btn-sm status-link" :disabled="sec.in_progress === 0" @click.stop="openSubmissionBucket(course.id, sec.section_id, 'processing')">批改中 {{ sec.in_progress }}</button>
+              <button class="btn-sm status-link" :disabled="sec.graded === 0" @click.stop="openSubmissionBucket(course.id, sec.section_id, 'graded')">已批改 {{ sec.graded }}</button>
+              <button class="btn-sm status-link danger" :disabled="sec.failed === 0" @click.stop="openSubmissionBucket(course.id, sec.section_id, 'failed')">失败 {{ sec.failed }}</button>
               <button v-if="!sec.grading_triggered && sec.total_submissions > 0" class="btn-sm primary" @click.stop="triggerGrading(sec)">触发批改</button>
             </div>
             <div v-if="sec.failed_tasks && sec.failed_tasks.length > 0" class="failed-tasks">
@@ -124,10 +128,11 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../utils/api.js'
 
 const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const allCourses = ref([])
 const courses = ref([])
@@ -158,6 +163,20 @@ function sectionPercent(sec, key) {
   const total = sec.total_submissions
   if (!total) return 0
   return Math.round((sec[key] || 0) / total * 100)
+}
+
+function openSubmissionBucket(courseId, sectionId, bucket) {
+  if (!courseId || !sectionId) return
+  router.push({
+    name: 'HomeworkManage',
+    params: { courseId },
+    query: {
+      view: 'submissions',
+      section_id: String(sectionId),
+      bucket,
+      page: '1',
+    },
+  })
 }
 
 async function loadCourses() {
@@ -397,6 +416,7 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 .btn-sm {
   padding: 4px 12px;
@@ -411,6 +431,11 @@ onUnmounted(() => {
   background: #1890ff;
   border-color: #1890ff;
   color: #fff;
+}
+.btn-sm.status-link {
+  background: #f8fafc;
+  border-color: #dbe5ee;
+  color: #475569;
 }
 .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
 .btn-sm.danger {

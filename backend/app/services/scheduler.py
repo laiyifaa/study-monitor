@@ -27,7 +27,6 @@ from sqlalchemy import func, select, text, and_, or_
 from app.config import get_settings
 from app.database import async_session
 from app.models.models import HeartbeatLog, Assignment, Submission, GradingTask
-from app.services.image_stitcher import stitch_images, image_url_to_local_path
 from app.services.agent_caller import call_grading_agent
 from app.utils.datetime_helper import now_cn_naive
 
@@ -109,9 +108,8 @@ async def trigger_auto_grading():
         3. 并发处理每个提交：
            a. 检查是否已有 GradingTask，跳过已处理的
            b. 创建 GradingTask (status=pending)
-           c. 取出图片 URL 列表，转换为本地路径
-           d. 调用 image_stitcher 拼接为长图，保存 URL 到 GradingTask
-           e. 调用 agent_caller 发给智能体（带重试）
+           c. 取出图片 URL 列表
+           d. 调用 agent_caller 逐张预处理并上传原图（带重试）
         4. 标记作业 grading_triggered=True，防止重复触发
     """
     try:
@@ -135,69 +133,98 @@ async def trigger_auto_grading():
             if not assignments:
                 return
 
-            _total_t0 = time.perf_counter()
+            total_t0 = time.perf_counter()
 
-            for assignment in assignments:
-                _a_t0 = time.perf_counter()
-                if assignment.grading_mode == "manual":
-                    assignment.grading_triggered = True
-                    await db.commit()
-                    logger.info(f"作业 {assignment.id} 批改模式为人工，跳过智能体")
-                    continue
+            results = await asyncio.gather(
+                *[_process_one_assignment(a.id, a.grading_mode) for a in assignments],
+                return_exceptions=True,
+            )
 
-                sub_result = await db.execute(
-                    select(Submission).where(
-                        and_(
-                            Submission.assignment_id == assignment.id,
-                            Submission.status == "pending",
-                            Submission.is_latest == True,
-                        )
-                    )
-                )
-                submissions = sub_result.scalars().all()
-
-                if not submissions:
-                    assignment.grading_triggered = True
-                    await db.commit()
-                    logger.info(f"作业 {assignment.id} 无待批改提交，标记已触发")
-                    continue
-
-                tasks = [
-                    _process_submission(submission, assignment)
-                    for submission in submissions
-                ]
-                batch_size = settings.GRADING_CONCURRENCY_LIMIT
-                all_results = []
-                for i in range(0, len(tasks), batch_size):
-                    batch = tasks[i:i + batch_size]
-                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                    all_results.extend(batch_results)
-                    if i + batch_size < len(tasks):
-                        logger.info(
-                            f"作业 {assignment.id} 批改进度: "
-                            f"{min(i + batch_size, len(tasks))}/{len(tasks)}"
-                        )
-
-                success_count = sum(1 for r in all_results if r is True)
-                fail_count = sum(1 for r in all_results if r is False or isinstance(r, Exception))
-
-                assignment.grading_triggered = True
-                await db.commit()
-                _a_elapsed = time.perf_counter() - _a_t0
-                logger.info(
-                    f"作业 {assignment.id} 批改完成: "
-                    f"共 {len(submissions)} 个提交, 成功 {success_count}, 失败 {fail_count}, "
-                    f"耗时 {_a_elapsed:.0f}s"
-                )
-
-            _total_elapsed = time.perf_counter() - _total_t0
+            total_elapsed = time.perf_counter() - total_t0
+            success_total = sum(
+                r.get("success", 0) for r in results if isinstance(r, dict)
+            )
+            fail_total = sum(
+                r.get("fail", 0) for r in results if isinstance(r, dict)
+            )
             logger.info(
                 f"本轮自动批改全部完成: 共 {len(assignments)} 份作业, "
-                f"总耗时 {_total_elapsed:.0f}s"
+                f"成功 {success_total} 个提交, 失败 {fail_total} 个提交, "
+                f"总耗时 {total_elapsed:.0f}s"
             )
 
     except Exception as e:
         logger.error(f"自动批改任务执行失败: {e}")
+
+
+async def _process_one_assignment(assignment_id: int, grading_mode: str) -> dict:
+    """
+    处理单个作业的全部待批改提交（独立 DB 会话，可并行调用）。
+
+    每个提交的图片拼接和智能体调用由 _process_submission + call_grading_agent
+    完成，其中的信号量全局共享，作业间不固定并发配额。
+
+    返回值：
+        {"assignment_id": int, "success": int, "fail": int, "skipped": bool}
+    """
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(Assignment).where(Assignment.id == assignment_id)
+            )
+            assignment = result.scalar_one_or_none()
+            if not assignment:
+                logger.warning(f"作业 {assignment_id} 不存在，跳过")
+                return {"assignment_id": assignment_id, "success": 0, "fail": 0, "skipped": True}
+
+            if grading_mode == "manual":
+                assignment.grading_triggered = True
+                await db.commit()
+                logger.info(f"作业 {assignment_id} 批改模式为人工，跳过智能体")
+                return {"assignment_id": assignment_id, "success": 0, "fail": 0, "skipped": True}
+
+            sub_result = await db.execute(
+                select(Submission).where(
+                    and_(
+                        Submission.assignment_id == assignment.id,
+                        Submission.status == "pending",
+                        Submission.is_latest == True,
+                    )
+                )
+            )
+            submissions = sub_result.scalars().all()
+
+            if not submissions:
+                assignment.grading_triggered = True
+                await db.commit()
+                logger.info(f"作业 {assignment_id} 无待批改提交，标记已触发")
+                return {"assignment_id": assignment_id, "success": 0, "fail": 0, "skipped": True}
+
+        # 提交处理在网络 I/O 边界由 call_grading_agent 的信号量限流，
+        # 此处一次性 gather 全部，不设批次屏障
+        tasks = [_process_submission(submission, assignment) for submission in submissions]
+        logger.info(f"作业 {assignment_id} 批改开始: 共 {len(tasks)} 个提交")
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        success_count = sum(1 for r in all_results if r is True)
+        fail_count = sum(1 for r in all_results if r is False or isinstance(r, Exception))
+
+        async with async_session() as db:
+            a = await db.execute(select(Assignment).where(Assignment.id == assignment_id))
+            assignment = a.scalar_one_or_none()
+            if assignment:
+                assignment.grading_triggered = True
+                await db.commit()
+
+        logger.info(
+            f"作业 {assignment_id} 批改完成: "
+            f"共 {len(submissions)} 个提交, 成功 {success_count}, 失败 {fail_count}"
+        )
+        return {"assignment_id": assignment_id, "success": success_count, "fail": fail_count}
+
+    except Exception as e:
+        logger.error(f"作业 {assignment_id} 批改处理异常: {e}")
+        return {"assignment_id": assignment_id, "success": 0, "fail": 0, "error": str(e)}
 
 
 async def _process_submission(submission: Submission, assignment: Assignment) -> bool:
@@ -221,18 +248,15 @@ async def _process_submission(submission: Submission, assignment: Assignment) ->
                 logger.info(f"提交 {submission.id} 已有 GradingTask，跳过")
                 return True
 
-            images = json.loads(submission.images)
+            images_raw = json.loads(submission.images)
+            images = [item for item in images_raw if isinstance(item, str) and item.strip()] if isinstance(images_raw, list) else []
             if not images:
                 logger.warning(f"提交 {submission.id} 无图片，跳过")
                 return False
 
-            local_paths = [image_url_to_local_path(url) for url in images]
-            output_filename = f"stitched_{submission.id}.jpg"
-            stitched_url = stitch_images(local_paths, output_filename, use_ocr=settings.GRADING_USE_OCR)
-
             task = GradingTask(
                 submission_id=submission.id,
-                stitched_image_url=stitched_url,
+                stitched_image_url="",
                 status="pending",
             )
             db.add(task)
@@ -242,7 +266,7 @@ async def _process_submission(submission: Submission, assignment: Assignment) ->
         success = await call_grading_agent(
             task_id=task.id,
             submission_id=submission.id,
-            stitched_image_url=stitched_url,
+            image_urls=images,
             prompt=assignment.grading_prompt,
             answer_json=assignment.reference_answer or "",
         )

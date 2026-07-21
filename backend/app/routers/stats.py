@@ -1212,3 +1212,131 @@ async def student_sections(
             "total_effective_minutes": round(total_effective / 60, 1) if total_effective else 0,
         },
     }
+
+
+# ============================================================
+# v5.1 新增：进度慢的学生列表
+# ============================================================
+
+
+@router.get("/slow-students")
+async def slow_students(
+    course_id: int = Query(..., description="课程ID"),
+    class_name: str | None = Query(None, description="班级筛选（可选）"),
+    user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取进度慢的学生列表 — 已完成小节数 <= 当前已开播小节数 - 2
+
+    判定逻辑：
+        1. 统计课程下已开播的小节数（open_time <= now 或 open_time 为 null）
+        2. 慢的阈值 = 已开播小节数 - 2（至少为 0）
+        3. 遍历所有学生（含 0 进度），筛选 completed_sections <= 阈值
+        4. 按完成数升序排列（最慢的排最前）
+
+    与 class_overview 一致：通过遍历所有学生确保 0 进度的学生也能被识别。
+
+    权限要求：【teacher / admin】
+    """
+    result = await db.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+
+    now = now_cn_naive()
+
+    # 查询课程所有小节
+    sec_result = await db.execute(
+        select(Section).where(Section.course_id == course_id).order_by(Section.sort_order, Section.id)
+    )
+    sections = sec_result.scalars().all()
+    section_count = len(sections)
+    section_duration_map = {s.id: s.duration_seconds or 0 for s in sections}
+
+    # 统计已开播的小节数（open_time 为空或已过）
+    open_count = sum(
+        1 for s in sections
+        if s.open_time is None or s.open_time <= now
+    )
+
+    # 慢的阈值 = 已开播数 - 2，至少为 0
+    slow_threshold = max(open_count - 2, 0)
+
+    if section_count == 0 or open_count == 0:
+        return {
+            "code": 0,
+            "data": {
+                "course_title": course.title,
+                "total_sections": section_count,
+                "open_sections": open_count,
+                "slow_threshold": slow_threshold,
+                "students": [],
+            },
+        }
+
+    # 子查询：按 (user_id, section_id) 取每小节最大 video_progress + 有效时长
+    # 注意：section_id 可为 NULL（v2.x 遗留数据），统一按 dur=0 处理
+    subq_result = await db.execute(
+        select(
+            StudySession.user_id,
+            StudySession.section_id,
+            func.max(StudySession.video_progress).label("max_progress"),
+            func.sum(StudySession.effective_seconds).label("sec_effective"),
+        )
+        .where(StudySession.course_id == course_id)
+        .group_by(StudySession.user_id, StudySession.section_id)
+    )
+    sub_rows = subq_result.all()
+
+    # 按学生分组，计算每人的完成小节数
+    user_data = {}  # user_id → {completed_sections, total_effective_seconds}
+    for r in sub_rows:
+        uid = r.user_id
+        if uid not in user_data:
+            user_data[uid] = {"completed_sections": 0, "total_effective": 0}
+        progress = float(r.max_progress or 0)
+        dur = section_duration_map.get(r.section_id, 0)
+        if dur and dur > 0:
+            if progress >= dur * 0.9:
+                user_data[uid]["completed_sections"] += 1
+        else:
+            if progress > 0:
+                user_data[uid]["completed_sections"] += 1
+        user_data[uid]["total_effective"] += r.sec_effective or 0
+
+    # 查询所有学生（与 class_overview 一致，确保 0 进度学生也能被识别）
+    all_students_query = select(User.id, User.name, User.class_name).where(User.role == "student")
+    if class_name:
+        all_students_query = all_students_query.where(User.class_name == class_name)
+    all_students_result = await db.execute(all_students_query)
+    all_students = all_students_result.all()
+
+    # 构建结果列表：遍历所有学生，筛选进度慢的
+    students = []
+    for s in all_students:
+        data = user_data.get(s.id, {"completed_sections": 0, "total_effective": 0})
+        if data["completed_sections"] <= slow_threshold:
+            students.append({
+                "user_id": s.id,
+                "name": s.name,
+                "class_name": s.class_name or "",
+                "completed_sections": data["completed_sections"],
+                "total_sections": section_count,
+                "open_sections": open_count,
+                "effective_minutes": round(data["total_effective"] / 60, 1),
+            })
+
+    # 按完成数升序（最慢的排最前面）
+    students.sort(key=lambda x: x["completed_sections"])
+
+    return {
+        "code": 0,
+        "data": {
+            "course_title": course.title,
+            "total_sections": section_count,
+            "open_sections": open_count,
+            "slow_threshold": slow_threshold,
+            "students": students,
+        },
+    }

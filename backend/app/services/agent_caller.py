@@ -4,11 +4,12 @@
 功能：调用外部智能体 API 进行作业批改。
 
 流程：
-    1. 下载拼接后的长图到本地临时文件
-    2. POST /files/upload 上传图片 → 获取 file_id
-    3. POST /chat-messages (streaming) → 接收完整 SSE 流
-    4. 解析最终批改结果 JSON（新格式）
-    5. 写入 GradingReport + 更新 Submission / GradingTask 状态
+    1. 解析提交中的原始作业图片列表
+    2. 逐张做方向修正与格式归一化
+    3. POST /files/upload 逐张上传 → 获取 file_id 列表
+    4. POST /chat-messages (streaming) → 接收完整 SSE 流
+    5. 解析最终批改结果 JSON（新格式）
+    6. 写入 GradingReport + 更新 Submission / GradingTask 状态
 
 智能体平台：TeleAI Agent
 """
@@ -23,11 +24,13 @@ import time
 from datetime import datetime
 
 import httpx
+from PIL import Image, ImageOps
 from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import async_session
 from app.models.models import GradingTask, Submission, GradingReport, Assignment
+from app.services.image_stitcher import detect_orientation
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -135,52 +138,26 @@ async def _mark_task_failed(task_id: int, error_message: str, retry_count: int =
 async def call_grading_agent(
     task_id: int,
     submission_id: int,
-    stitched_image_url: str,
+    image_urls: list[str],
     prompt: str,
     answer_json: str = "",
     retry_count: int = 0,
 ) -> bool:
     """
-    调用智能体批改作业（受 Semaphore 并发控制）
+    调用智能体批改作业（循环重试 + 单次信号量）
 
-    信号量 _grading_semaphore 限制同时进行的智能体调用数，
-    避免打爆 AI 平台和数据库连接池。
-    """
-    async with _grading_semaphore:
-        return await _do_call_grading_agent(
-            task_id=task_id,
-            submission_id=submission_id,
-            stitched_image_url=stitched_image_url,
-            prompt=prompt,
-            answer_json=answer_json,
-        )
-
-
-async def _do_call_grading_agent(
-    task_id: int,
-    submission_id: int,
-    stitched_image_url: str,
-    prompt: str,
-    answer_json: str = "",
-) -> bool:
-    """
-    调用智能体批改作业（循环重试，替代递归）
-
-    HIGH-3: 将原来的递归重试改为循环，避免栈帧堆积和 Semaphore 嵌套。
-    MEDIUM-12: 集成熔断器——连续失败超过阈值后暂停调用。
+    每次尝试独立获取/释放信号量，重试等待在信号量外进行，
+    避免重试 sleep 占用并发槽位。
     """
     agent_url = settings.GRADING_AGENT_URL
     api_key = settings.GRADING_AGENT_API_KEY
 
     if not agent_url or not api_key:
         error_message = "智能体批改未配置 (GRADING_AGENT_URL 或 GRADING_AGENT_API_KEY 为空)"
-        logger.warning(
-            f"{error_message}, 跳过调用: task_id={task_id}, submission_id={submission_id}"
-        )
+        logger.warning(f"{error_message}, 跳过调用: task_id={task_id}, submission_id={submission_id}")
         await _mark_task_failed(task_id, error_message, 0)
         return False
 
-    # MEDIUM-12: 熔断器检查
     try:
         await _circuit_breaker_check()
     except RuntimeError as cb_err:
@@ -190,28 +167,31 @@ async def _do_call_grading_agent(
 
     last_error: Exception | None = None
     for attempt in range(settings.GRADING_MAX_RETRIES + 1):
-        try:
-            result = await _do_single_grading_call(
-                task_id=task_id,
-                submission_id=submission_id,
-                stitched_image_url=stitched_image_url,
-                prompt=prompt,
-                answer_json=answer_json,
-                attempt=attempt,
-            )
-            await _circuit_breaker_record_success()
-            return result
-        except Exception as e:
-            last_error = e
-            elapsed_info = f"attempt={attempt + 1}/{settings.GRADING_MAX_RETRIES + 1}"
-            logger.error(
-                f"智能体批改失败: task_id={task_id}, submission_id={submission_id}, "
-                f"{elapsed_info}, error={e}"
-            )
-            if attempt < settings.GRADING_MAX_RETRIES:
-                delay = settings.GRADING_RETRY_DELAY * (attempt + 1)
-                logger.info(f"将在 {delay} 秒后重试 (第 {attempt + 2} 次): task_id={task_id}")
-                await asyncio.sleep(delay)
+        async with _grading_semaphore:
+            try:
+                result = await _do_single_grading_call(
+                    task_id=task_id,
+                    submission_id=submission_id,
+                    image_urls=image_urls,
+                    prompt=prompt,
+                    answer_json=answer_json,
+                    attempt=attempt,
+                )
+                await _circuit_breaker_record_success()
+                return result
+            except Exception as e:
+                last_error = e
+                elapsed_info = f"attempt={attempt + 1}/{settings.GRADING_MAX_RETRIES + 1}"
+                logger.error(
+                    f"智能体批改失败: task_id={task_id}, submission_id={submission_id}, "
+                    f"{elapsed_info}, error={e}"
+                )
+
+        # 重试等待在信号量外进行，不占用并发槽
+        if attempt < settings.GRADING_MAX_RETRIES:
+            delay = settings.GRADING_RETRY_DELAY * (attempt + 1)
+            logger.info(f"将在 {delay} 秒后重试 (第 {attempt + 2} 次): task_id={task_id}")
+            await asyncio.sleep(delay)
 
     # 所有重试耗尽
     await _circuit_breaker_record_failure()
@@ -226,7 +206,7 @@ async def _do_call_grading_agent(
 async def _do_single_grading_call(
     task_id: int,
     submission_id: int,
-    stitched_image_url: str,
+    image_urls: list[str],
     prompt: str,
     answer_json: str = "",
     attempt: int = 0,
@@ -237,7 +217,7 @@ async def _do_single_grading_call(
     参数：
         task_id            — GradingTask ID
         submission_id      — 提交 ID（内部使用，不传给智能体）
-        stitched_image_url — 拼接后的作业图片 URL
+        image_urls         — 原始作业图片 URL 列表
         prompt             — 评分标准/批改提示词
         answer_json        — 参考答案 JSON 字符串
         attempt            — 当前尝试次数（用于日志）
@@ -246,7 +226,7 @@ async def _do_single_grading_call(
         True  — 批改成功（结果已写入数据库）
 
     异常：
-        失败时抛出异常，由调用方 (_do_call_grading_agent) 负责重试
+        失败时抛出异常，由调用方 (call_grading_agent) 负责重试
     """
     agent_url = settings.GRADING_AGENT_URL
     api_key = settings.GRADING_AGENT_API_KEY
@@ -254,16 +234,21 @@ async def _do_single_grading_call(
     _t0 = time.perf_counter()
     await _mark_task_sent(task_id)
 
-    image_path = await _download_image(stitched_image_url)
-    if not image_path:
-        raise Exception("图片下载失败")
+    prepared_image_paths: list[str] = []
 
     try:
-        file_id = await _upload_file(agent_url, api_key, image_path, content_type="image/jpeg")
-        if not file_id:
-            raise Exception("图片上传失败")
+        prepared_image_paths = await _prepare_images_for_agent(image_urls)
+        if not prepared_image_paths:
+            raise Exception("未找到可上传的作业图片")
 
-        response_text = await _send_chat_message(agent_url, api_key, file_id, prompt, answer_json)
+        file_ids = []
+        for image_path in prepared_image_paths:
+            file_id = await _upload_file(agent_url, api_key, image_path, content_type="image/jpeg")
+            if not file_id:
+                raise Exception("图片上传失败")
+            file_ids.append(file_id)
+
+        response_text = await _send_chat_message(agent_url, api_key, file_ids, prompt, answer_json)
         if not response_text:
             raise Exception("智能体未返回有效响应")
 
@@ -361,10 +346,10 @@ async def _do_single_grading_call(
         return True
 
     finally:
-        # MEDIUM-4: 清理临时文件
-        if image_path and image_path.startswith(tempfile.gettempdir()):
+        for image_path in prepared_image_paths:
             try:
-                os.unlink(image_path)
+                if image_path.startswith(tempfile.gettempdir()) and os.path.exists(image_path):
+                    os.unlink(image_path)
             except OSError:
                 pass
 
@@ -506,29 +491,110 @@ def _to_float(value):
         return None
 
 
-async def _download_image(image_url: str) -> str:
-    """
-    下载图片到本地临时文件
+async def _prepare_images_for_agent(image_urls: list[str]) -> list[str]:
+    """将提交中的原始图片逐张预处理为可上传的临时 JPEG 文件。"""
+    if not image_urls:
+        raise ValueError("图片列表不能为空")
 
-    参数：
-        image_url — 图片 URL（如 /uploads/homework/stitched/xxx.jpg）
+    prepared_paths: list[str] = []
+    try:
+        for image_url in image_urls:
+            resolved_path, should_cleanup = await _resolve_image_path(image_url)
+            try:
+                prepared_paths.append(_normalize_image_for_agent(resolved_path))
+            finally:
+                if should_cleanup and os.path.exists(resolved_path):
+                    try:
+                        os.unlink(resolved_path)
+                    except OSError:
+                        pass
+        return prepared_paths
+    except Exception:
+        for path in prepared_paths:
+            try:
+                if path.startswith(tempfile.gettempdir()) and os.path.exists(path):
+                    os.unlink(path)
+            except OSError:
+                pass
+        raise
 
-    返回值：
-        本地文件路径
-    """
-    if image_url.startswith("/"):
-        local_path = image_url[1:]
+
+async def _resolve_image_path(image_url: str) -> tuple[str, bool]:
+    """解析图片 URL 为本地路径；若本地不存在则回退为 HTTP 下载。"""
+    normalized_url = str(image_url or "").strip()
+    if not normalized_url:
+        raise ValueError("图片 URL 不能为空")
+
+    if normalized_url.startswith("/"):
+        local_path = normalized_url[1:]
         if os.path.exists(local_path):
-            return local_path
+            return local_path, False
 
-    base_url = settings.API_BASE_URL
-    full_url = f"{base_url}{image_url}" if image_url.startswith("/") else image_url
+    if os.path.exists(normalized_url):
+        return normalized_url, False
+
+    return await _download_remote_image(normalized_url), True
+
+
+def _normalize_image_for_agent(source_path: str) -> str:
+    """对单张图片做方向修正和格式归一化，输出临时 JPEG 文件。"""
+    with Image.open(source_path) as source_img:
+        working = ImageOps.exif_transpose(source_img).copy()
+
+    try:
+        if settings.GRADING_USE_OCR:
+            try:
+                angle = detect_orientation(working)
+                if angle != 0:
+                    rotated = working.rotate(angle, expand=True)
+                    working.close()
+                    working = rotated
+            except Exception as exc:
+                logger.debug(f"OCR 方向修正失败，降级为仅 EXIF 修正: path={source_path}, error={exc}")
+
+        normalized = _flatten_image_to_rgb(working)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+            normalized.save(temp_file.name, "JPEG", quality=90)
+            return temp_file.name
+    finally:
+        try:
+            working.close()
+        except Exception:
+            pass
+        if "normalized" in locals() and normalized is not working:
+            try:
+                normalized.close()
+            except Exception:
+                pass
+
+
+def _flatten_image_to_rgb(image: Image.Image) -> Image.Image:
+    """将单张图片统一为 RGB，透明区域铺白底。"""
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        rgba.close()
+        return background
+    if image.mode == "RGB":
+        return image.copy()
+    return image.convert("RGB")
+
+
+async def _download_remote_image(image_url: str) -> str:
+    """下载远程图片到本地临时文件。"""
+    if image_url.startswith("/"):
+        full_url = f"{settings.API_BASE_URL}{image_url}"
+    elif image_url.startswith("http://") or image_url.startswith("https://"):
+        full_url = image_url
+    else:
+        full_url = f"{settings.API_BASE_URL}/{image_url.lstrip('/')}"
 
     client = _get_http_client()
     response = await client.get(full_url, timeout=30)
     response.raise_for_status()
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as f:
         f.write(response.content)
         return f.name
 
@@ -565,7 +631,7 @@ async def _upload_file(agent_url: str, api_key: str, file_path: str, content_typ
 async def _send_chat_message(
     agent_url: str,
     api_key: str,
-    file_id: str,
+    file_ids: list[str],
     prompt: str,
     answer_json: str = "",
 ) -> str:
@@ -575,7 +641,7 @@ async def _send_chat_message(
     参数：
         agent_url   — 智能体基础 URL
         api_key     — API Key
-        file_id     — 上传的文件 ID
+        file_ids    — 上传后的文件 ID 列表
         prompt      — 评分标准
         answer_json — 参考答案 JSON
 
@@ -595,11 +661,15 @@ async def _send_chat_message(
     body = {
         "inputs": {
             "sys_da": answer_json or "",
-            "sys_zy": {
-                "type": "image",
-                "transfer_method": "local_file",
-                "upload_file_id": file_id,
-            }
+            "sys_zy": [
+                {
+                    "type": "image",
+                    "transfer_method": "local_file",
+                    "url": "",
+                    "upload_file_id": file_id,
+                }
+                for file_id in file_ids
+            ],
         },
         "query": query,
         "response_mode": "streaming",

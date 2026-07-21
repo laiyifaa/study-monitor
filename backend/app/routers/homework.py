@@ -56,7 +56,7 @@ from app.services.agent_caller import (
     _refresh_grading_status,
     _mark_task_failed,
 )
-from app.services.image_stitcher import stitch_images, image_url_to_local_path
+from app.services.image_stitcher import image_url_to_local_path
 from app.utils.datetime_helper import now_cn_naive, parse_cn_datetime_input
 
 from app.utils.jwt_helper import get_current_user, require_role
@@ -118,7 +118,6 @@ async def _prepare_grading_task(
     else:
         previous_status = task.status
         previous_sent_at = task.sent_at
-        # LOW-1: 保留 stitched_image_url，允许重批时复用已有拼接图片
         task.agent_task_id = ""
         task.status = "pending"
         task.retry_count = 0
@@ -156,11 +155,6 @@ async def _execute_grading_for_submission(
             if not images:
                 raise ValueError("提交未包含可批改图片")
 
-            local_paths = [image_url_to_local_path(url) for url in images]
-            missing_paths = [path for path in local_paths if not os.path.exists(path)]
-            if missing_paths:
-                raise FileNotFoundError("原始作业图片缺失，无法重新批改")
-
             task = await _prepare_grading_task(
                 session,
                 submission_id,
@@ -171,30 +165,13 @@ async def _execute_grading_for_submission(
                 return False
 
             task_id = task.id
-
-            # LOW-1: 复用已有拼接图片，避免重复拼接
-            existing_url = task.stitched_image_url
-            if existing_url:
-                existing_local = image_url_to_local_path(existing_url)
-                if os.path.exists(existing_local):
-                    stitched_url = existing_url
-                    logger.info(f"复用已有拼接图片: submission_id={submission_id}, url={existing_url}")
-                else:
-                    stitched_url = None
-            else:
-                stitched_url = None
-
-            if not stitched_url:
-                output_filename = f"stitched_{submission.id}.jpg"
-                stitched_url = stitch_images(local_paths, output_filename, use_ocr=settings.GRADING_USE_OCR)
-
-            task.stitched_image_url = stitched_url
+            task.stitched_image_url = ""
             await session.commit()
 
         return await call_grading_agent(
             task_id=task_id,
             submission_id=submission_id,
-            stitched_image_url=stitched_url,
+            image_urls=images,
             prompt=prompt,
             answer_json=answer_json,
         )

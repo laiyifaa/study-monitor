@@ -43,6 +43,7 @@ from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Request, Query
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from typing import Any, Optional, List
@@ -130,9 +131,14 @@ async def _prepare_grading_task(
             task.sent_at = None
         task.graded_at = None
 
-    await session.commit()
-    await session.refresh(task)
-    return task
+    try:
+        await session.commit()
+        await session.refresh(task)
+        return task
+    except IntegrityError:
+        await session.rollback()
+        logger.info(f"提交 {submission_id} 的 GradingTask 已被并发创建，跳过本次创建")
+        return None
 
 
 async def _execute_grading_for_submission(

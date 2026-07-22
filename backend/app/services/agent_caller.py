@@ -15,8 +15,10 @@
 """
 
 import asyncio
+import io
 import json
 import logging
+import math
 import mimetypes
 import os
 import tempfile
@@ -30,7 +32,6 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.database import async_session
 from app.models.models import GradingTask, Submission, GradingReport, Assignment
-from app.services.image_stitcher import detect_orientation
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -87,14 +88,14 @@ def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(
-                connect=30.0,
+                connect=10.0,
                 read=float(settings.GRADING_AGENT_TIMEOUT),
-                write=60.0,
-                pool=30.0,
+                write=30.0,
+                pool=10.0,
             ),
             limits=httpx.Limits(
-                max_connections=30,
-                max_keepalive_connections=20,
+                max_connections=20,
+                max_keepalive_connections=10,
             ),
         )
     return _http_client
@@ -235,14 +236,19 @@ async def _do_single_grading_call(
     await _mark_task_sent(task_id)
 
     prepared_image_paths: list[str] = []
+    packaged_cleanup_paths: list[str] = []
 
     try:
         prepared_image_paths = await _prepare_images_for_agent(image_urls)
         if not prepared_image_paths:
             raise Exception("未找到可上传的作业图片")
 
+        packaged_paths, packaged_cleanup_paths = _pack_images_for_agent(prepared_image_paths)
+        if not packaged_paths:
+            raise Exception("图片分包失败")
+
         file_ids = []
-        for image_path in prepared_image_paths:
+        for image_path in packaged_paths:
             file_id = await _upload_file(agent_url, api_key, image_path, content_type="image/jpeg")
             if not file_id:
                 raise Exception("图片上传失败")
@@ -349,6 +355,12 @@ async def _do_single_grading_call(
         for image_path in prepared_image_paths:
             try:
                 if image_path.startswith(tempfile.gettempdir()) and os.path.exists(image_path):
+                    os.unlink(image_path)
+            except OSError:
+                pass
+        for image_path in packaged_cleanup_paths:
+            try:
+                if os.path.exists(image_path):
                     os.unlink(image_path)
             except OSError:
                 pass
@@ -537,24 +549,15 @@ async def _resolve_image_path(image_url: str) -> tuple[str, bool]:
 
 
 def _normalize_image_for_agent(source_path: str) -> str:
-    """对单张图片做方向修正和格式归一化，输出临时 JPEG 文件。"""
+    """对单张图片做 EXIF 修正、缩放和格式归一化，输出临时 JPEG 文件。"""
     with Image.open(source_path) as source_img:
         working = ImageOps.exif_transpose(source_img).copy()
 
     try:
-        if settings.GRADING_USE_OCR:
-            try:
-                angle = detect_orientation(working)
-                if angle != 0:
-                    rotated = working.rotate(angle, expand=True)
-                    working.close()
-                    working = rotated
-            except Exception as exc:
-                logger.debug(f"OCR 方向修正失败，降级为仅 EXIF 修正: path={source_path}, error={exc}")
-
+        working = _downscale_image_if_needed(working, max_side=2048)
         normalized = _flatten_image_to_rgb(working)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-            normalized.save(temp_file.name, "JPEG", quality=90)
+            normalized.save(temp_file.name, "JPEG", quality=85, optimize=True)
             return temp_file.name
     finally:
         try:
@@ -568,6 +571,14 @@ def _normalize_image_for_agent(source_path: str) -> str:
                 pass
 
 
+def _downscale_image_if_needed(image: Image.Image, max_side: int) -> Image.Image:
+    if max(image.width, image.height) <= max_side:
+        return image.copy()
+    scale = max_side / max(image.width, image.height)
+    new_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+    return image.resize(new_size, Image.LANCZOS)
+
+
 def _flatten_image_to_rgb(image: Image.Image) -> Image.Image:
     """将单张图片统一为 RGB，透明区域铺白底。"""
     if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
@@ -579,6 +590,106 @@ def _flatten_image_to_rgb(image: Image.Image) -> Image.Image:
     if image.mode == "RGB":
         return image.copy()
     return image.convert("RGB")
+
+
+def _pack_images_for_agent(image_paths: list[str]) -> tuple[list[str], list[str]]:
+    """按智能体限制自适应分包，必要时才合包。"""
+    if not image_paths:
+        return [], []
+
+    max_files = 10
+    max_total_bytes = 5 * 1024 * 1024
+
+    total_bytes = sum(os.path.getsize(path) for path in image_paths)
+    if len(image_paths) <= max_files and total_bytes <= max_total_bytes:
+        return list(image_paths), []
+
+    package_count = max(
+        1,
+        math.ceil(len(image_paths) / max_files),
+        math.ceil(total_bytes / max_total_bytes),
+    )
+    package_count = min(max_files, len(image_paths), package_count)
+    group_size = max(1, math.ceil(len(image_paths) / package_count))
+    target_bytes = min(max_total_bytes, max(256 * 1024, math.ceil(total_bytes / package_count)))
+
+    packaged_paths: list[str] = []
+    cleanup_paths: list[str] = []
+
+    for index in range(0, len(image_paths), group_size):
+        group = image_paths[index:index + group_size]
+        if len(group) == 1 and total_bytes <= max_total_bytes:
+            packaged_paths.append(group[0])
+            continue
+
+        merged_path = _merge_image_group(group, index=len(packaged_paths) + 1, max_side=2048, target_bytes=target_bytes)
+        packaged_paths.append(merged_path)
+        cleanup_paths.append(merged_path)
+
+    return packaged_paths, cleanup_paths
+
+
+def _merge_image_group(group: list[str], index: int, max_side: int, target_bytes: int) -> str:
+    """将一组图片合并为一个中间文件，作为超限兜底。"""
+    images: list[Image.Image] = []
+    canvas: Image.Image | None = None
+    try:
+        for path in group:
+            with Image.open(path) as img:
+                img = ImageOps.exif_transpose(img).copy()
+                img = _downscale_image_if_needed(img, max_side=max_side)
+                images.append(_flatten_image_to_rgb(img))
+
+        if not images:
+            raise ValueError("空图片组")
+
+        total_height = sum(img.height for img in images) + max(0, len(images) - 1) * 8
+        canvas = Image.new("RGB", (max(img.width for img in images), total_height), (255, 255, 255))
+        y = 0
+        for img in images:
+            canvas.paste(img, (0, y))
+            y += img.height + 8
+
+        for candidate_side in (max_side, int(max_side * 0.8), int(max_side * 0.6), int(max_side * 0.45), int(max_side * 0.35)):
+            candidate = _downscale_image_if_needed(canvas, max(512, candidate_side))
+            try:
+                quality = 85
+                best_data = None
+                while quality >= 25:
+                    buffer = io.BytesIO()
+                    candidate.save(buffer, "JPEG", quality=quality, optimize=True)
+                    data = buffer.getvalue()
+                    best_data = data
+                    if len(data) <= target_bytes:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_pack{index}.jpg") as temp_file:
+                            temp_file.write(data)
+                            return temp_file.name
+                    quality -= 10
+                if best_data and len(best_data) <= target_bytes:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_pack{index}.jpg") as temp_file:
+                        temp_file.write(best_data)
+                        return temp_file.name
+            finally:
+                if canvas is not None and candidate is not canvas:
+                    try:
+                        candidate.close()
+                    except Exception:
+                        pass
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_pack{index}.jpg") as temp_file:
+            canvas.save(temp_file.name, "JPEG", quality=25, optimize=True)
+            return temp_file.name
+    finally:
+        for img in images:
+            try:
+                img.close()
+            except Exception:
+                pass
+        if canvas is not None:
+            try:
+                canvas.close()
+            except Exception:
+                pass
 
 
 async def _download_remote_image(image_url: str) -> str:
@@ -653,7 +764,7 @@ async def _send_chat_message(
     query = prompt or "请批改这份作业"
     if answer_json:
         query += (
-            "\n请先 OCR 识别学生作业图片，再按 sys_da 中的标准答案 JSON 比对批改。"
+            "\n请按 sys_da 中的标准答案 JSON 比对批改。"
             "\nsys_da 的格式是题号键名对象，例如：{\"1\":{\"answer\":\"D\",\"type\":\"option_letter\",\"score\":2}}。"
             "\ntype 取值为 option_letter、true_false、fill_blank。"
         )

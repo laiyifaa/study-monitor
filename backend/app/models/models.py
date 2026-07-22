@@ -529,6 +529,7 @@ class GradingTask(Base):
     批改任务模型
 
     用途：追踪每个提交的智能体批改状态，支持重试和错误记录。
+         同一 submission 只保留一条任务记录，避免并发重复创建。
 
     字段说明：
         id                 — 自增主键
@@ -545,7 +546,7 @@ class GradingTask(Base):
     __tablename__ = "grading_tasks"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    submission_id = Column(BigInteger, ForeignKey("submissions.id"), nullable=False, index=True)
+    submission_id = Column(BigInteger, ForeignKey("submissions.id"), unique=True, nullable=False, index=True)
     stitched_image_url = Column(String(500), default="", comment="拼接后的长图URL")
     agent_task_id = Column(String(100), default="", comment="智能体任务ID")
     status = Column(Enum("pending", "sent", "graded", "failed"), default="pending", nullable=False, comment="任务状态")

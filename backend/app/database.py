@@ -93,6 +93,18 @@ async def init_db():
                 "ADD COLUMN answer_files TEXT NULL COMMENT '答案附件URL数组(JSON)' AFTER question_files"
             ))
 
+        grading_tasks_unique_exists = await conn.scalar(text(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema = DATABASE() "
+            "AND table_name = 'grading_tasks' "
+            "AND index_name = 'uq_grading_tasks_submission_id'"
+        ))
+        if not grading_tasks_unique_exists:
+            await conn.execute(text(
+                "ALTER TABLE grading_tasks "
+                "ADD UNIQUE KEY uq_grading_tasks_submission_id (submission_id)"
+            ))
+
         # v5.0 迁移：将 users 表中已有的 class_name 同步到 class_defs 表
         class_defs_exists = await conn.scalar(text(
             "SELECT COUNT(*) FROM information_schema.tables "

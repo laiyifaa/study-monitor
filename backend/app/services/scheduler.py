@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, select, text, and_, or_
+from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.database import async_session
@@ -99,13 +100,13 @@ async def cleanup_heartbeat_logs():
 
 async def trigger_auto_grading():
     """
-    自动批改到期作业（并发处理 + GradingTask 状态追踪）
+    自动批改到期作业（保守分批 + GradingTask 状态追踪）
 
     执行频率：每分钟
     逻辑：
         1. 查找所有 deadline <= now 且 status=published 且 grading_triggered=False 的作业
         2. 对每个作业，查找所有 pending 的提交
-        3. 并发处理每个提交：
+        3. 分批处理每个提交：
            a. 检查是否已有 GradingTask，跳过已处理的
            b. 创建 GradingTask (status=pending)
            c. 取出图片 URL 列表
@@ -130,28 +131,27 @@ async def trigger_auto_grading():
             )
             assignments = result.scalars().all()
 
-            if not assignments:
-                return
+        if not assignments:
+            return
 
-            total_t0 = time.perf_counter()
+        total_t0 = time.perf_counter()
+        results = []
+        for assignment in assignments:
+            result = await _process_one_assignment(assignment.id, assignment.grading_mode)
+            results.append(result)
 
-            results = await asyncio.gather(
-                *[_process_one_assignment(a.id, a.grading_mode) for a in assignments],
-                return_exceptions=True,
-            )
-
-            total_elapsed = time.perf_counter() - total_t0
-            success_total = sum(
-                r.get("success", 0) for r in results if isinstance(r, dict)
-            )
-            fail_total = sum(
-                r.get("fail", 0) for r in results if isinstance(r, dict)
-            )
-            logger.info(
-                f"本轮自动批改全部完成: 共 {len(assignments)} 份作业, "
-                f"成功 {success_total} 个提交, 失败 {fail_total} 个提交, "
-                f"总耗时 {total_elapsed:.0f}s"
-            )
+        total_elapsed = time.perf_counter() - total_t0
+        success_total = sum(
+            r.get("success", 0) for r in results if isinstance(r, dict)
+        )
+        fail_total = sum(
+            r.get("fail", 0) for r in results if isinstance(r, dict)
+        )
+        logger.info(
+            f"本轮自动批改全部完成: 共 {len(assignments)} 份作业, "
+            f"成功 {success_total} 个提交, 失败 {fail_total} 个提交, "
+            f"总耗时 {total_elapsed:.0f}s"
+        )
 
     except Exception as e:
         logger.error(f"自动批改任务执行失败: {e}")
@@ -200,14 +200,19 @@ async def _process_one_assignment(assignment_id: int, grading_mode: str) -> dict
                 logger.info(f"作业 {assignment_id} 无待批改提交，标记已触发")
                 return {"assignment_id": assignment_id, "success": 0, "fail": 0, "skipped": True}
 
-        # 提交处理在网络 I/O 边界由 call_grading_agent 的信号量限流，
-        # 此处一次性 gather 全部，不设批次屏障
-        tasks = [_process_submission(submission, assignment) for submission in submissions]
-        logger.info(f"作业 {assignment_id} 批改开始: 共 {len(tasks)} 个提交")
-        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+        batch_size = max(1, int(settings.GRADING_CONCURRENCY_LIMIT or 1))
+        success_count = 0
+        fail_count = 0
+        logger.info(f"作业 {assignment_id} 批改开始: 共 {len(submissions)} 个提交, 批大小 {batch_size}")
 
-        success_count = sum(1 for r in all_results if r is True)
-        fail_count = sum(1 for r in all_results if r is False or isinstance(r, Exception))
+        for index in range(0, len(submissions), batch_size):
+            batch = submissions[index:index + batch_size]
+            batch_results = await asyncio.gather(
+                *[_process_submission(submission, assignment) for submission in batch],
+                return_exceptions=True,
+            )
+            success_count += sum(1 for r in batch_results if r is True)
+            fail_count += sum(1 for r in batch_results if r is False or isinstance(r, Exception))
 
         async with async_session() as db:
             a = await db.execute(select(Assignment).where(Assignment.id == assignment_id))
@@ -260,8 +265,13 @@ async def _process_submission(submission: Submission, assignment: Assignment) ->
                 status="pending",
             )
             db.add(task)
-            await db.commit()
-            await db.refresh(task)
+            try:
+                await db.commit()
+                await db.refresh(task)
+            except IntegrityError:
+                await db.rollback()
+                logger.info(f"提交 {submission.id} 的 GradingTask 已被并发创建，跳过")
+                return True
 
         success = await call_grading_agent(
             task_id=task.id,

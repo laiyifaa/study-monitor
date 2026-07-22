@@ -23,9 +23,13 @@ API 列表：
     - 消息发送失败静默处理（不抛异常），避免影响主业务流程
 """
 
+import asyncio
 import hashlib
 import hmac
 import base64
+import json
+import os
+import subprocess
 import time
 import httpx
 from fastapi import APIRouter, Depends, Query
@@ -35,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
-from app.models.models import Course, StudySession, User
+from app.models.models import Course, DingTalkBinding, Section, StudySession, User
 from app.utils.jwt_helper import require_role
 from app.utils.datetime_helper import now_cn_naive
 
@@ -261,6 +265,244 @@ async def send_daily_report(
     )
 
     return {"code": 0, "data": {"sent": True}}
+
+
+# ============================================================
+# v5.1 新增：发送私信进度提醒（以当前登录用户身份，通过 DWS 单聊）
+# ============================================================
+
+
+def _get_dws_env() -> dict:
+    """构建运行 dws 命令所需的环境变量（复用已有的钉钉应用凭证）"""
+    env = os.environ.copy()
+    env["DWS_CLIENT_ID"] = settings.DT_APP_KEY
+    env["DWS_CLIENT_SECRET"] = settings.DT_APP_SECRET
+    return env
+
+
+async def _dws_search_user_by_mobile(mobile: str) -> str | None:
+    """通过手机号搜索钉钉用户 userId，失败返回 None"""
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["dws", "contact", "user", "search-mobile", "--mobile", mobile, "--format", "json"],
+            capture_output=True, text=True, timeout=15, env=_get_dws_env(),
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        body = data.get("body", {})
+        return body.get("userId") or body.get("user_id") or body.get("id")
+    except Exception:
+        return None
+
+
+async def _dws_send_user_msg(user_id: str, student_name: str, class_name: str, effective_minutes: float) -> bool:
+    """以当前登录用户身份给指定用户发送单聊私信，返回是否成功"""
+    # 根据班级确定钉钉群名称
+    group_name = "一年级1班" if "1" in (class_name or "") else "一年级2班"
+    text = (
+        f"家长您好，目前查询到您孩子初高中衔接课学习状态异常，"
+        f"课程观看时长为 {effective_minutes} 分钟。\n\n"
+        f"如遇播放、登录等观看问题，可私信钉钉群"
+        "（钉钉群\"" + group_name + "\"）技术老师蔡苏杭处理；\n\n"
+        f"若因特殊情况暂未开课学习，请及时私信马志宇老师或张碧纯老师完成报备，感谢配合！\n\n"
+        f"（该消息由平台智能体自动发送，请勿回复）"
+    )
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "dws", "chat", "message", "send",
+                "--user", user_id,
+                "--title", "学习进度提醒",
+                text,
+                "--format", "json",
+            ],
+            capture_output=True, text=True, timeout=15, env=_get_dws_env(),
+        )
+        if result.returncode != 0:
+            return False
+        data = json.loads(result.stdout)
+        return data.get("success", False)
+    except Exception:
+        return False
+
+
+class SendSlowReminderRequest(BaseModel):
+    """发送私信进度提醒请求体"""
+    course_id: int
+    class_name: str | None = None  # 可选：班级筛选
+
+
+@router.post("/send-slow-reminder")
+async def send_slow_reminder(
+    req: SendSlowReminderRequest,
+    user: User = Depends(require_role("teacher", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    发送私信进度提醒 — 以当前登录用户身份给进度慢的学生家长发送钉钉单聊消息
+
+    请求参数：
+        body.course_id (int): 课程ID
+
+    返回格式：
+        code=0, data={ results: [...], total, success, fail, skip }
+
+    权限要求：【teacher / admin】
+
+    核心业务逻辑：
+        1. 复用 slow-students 逻辑，获取进度慢的学生列表
+        2. 查询 DingTalkBinding 找到家长钉钉账号
+        3. 通过 dws chat message send --user 逐人发送单聊私信
+        4. 返回详细发送结果（成功/失败/跳过）
+
+    前提条件：
+        - DT_APP_KEY / DT_APP_SECRET 已配置（.env）
+        - dws CLI 已安装
+        - 服务器上已执行 dws auth login（以发送者钉钉账号扫码登录，后续 token 自动刷新）
+    """
+    # ── 前置校验 ──
+    if not settings.DT_APP_KEY or not settings.DT_APP_SECRET:
+        return {"code": 1, "msg": "未配置钉钉应用凭证（DT_APP_KEY / DT_APP_SECRET），无法发送私信提醒"}
+
+    # ── 校验课程存在 ──
+    result = await db.execute(select(Course).where(Course.id == req.course_id))
+    course = result.scalar_one_or_none()
+    if not course:
+        return {"code": 1, "msg": "课程不存在"}
+
+    now = now_cn_naive()
+
+    # ── 1. 获取课程所有小节 ──
+    sec_result = await db.execute(
+        select(Section).where(Section.course_id == req.course_id).order_by(Section.sort_order, Section.id)
+    )
+    sections = sec_result.scalars().all()
+    section_count = len(sections)
+    section_duration_map = {s.id: s.duration_seconds or 0 for s in sections}
+
+    # 已开播小节数
+    open_count = sum(1 for s in sections if s.open_time is None or s.open_time <= now)
+    slow_threshold = max(open_count - 2, 0)
+
+    if section_count == 0 or open_count == 0:
+        return {"code": 0, "data": {"results": [], "total": 0, "success": 0, "fail": 0, "skip": 0}}
+
+    # ── 2. 获取所有学生的学习进度 ──
+    subq_result = await db.execute(
+        select(
+            StudySession.user_id,
+            StudySession.section_id,
+            func.max(StudySession.video_progress).label("max_progress"),
+            func.sum(StudySession.effective_seconds).label("sec_effective"),
+        )
+        .where(StudySession.course_id == req.course_id)
+        .group_by(StudySession.user_id, StudySession.section_id)
+    )
+    sub_rows = subq_result.all()
+
+    user_data = {}
+    for r in sub_rows:
+        uid = r.user_id
+        if uid not in user_data:
+            user_data[uid] = {"completed_sections": 0, "total_effective": 0}
+        prog = float(r.max_progress or 0)
+        dur = section_duration_map.get(r.section_id, 0)
+        if dur and dur > 0:
+            if prog >= dur * 0.9:
+                user_data[uid]["completed_sections"] += 1
+        elif prog > 0:
+            user_data[uid]["completed_sections"] += 1
+        user_data[uid]["total_effective"] += r.sec_effective or 0
+
+    # ── 3. 筛选进度慢的学生 ──
+    all_query = select(User.id, User.name, User.class_name).where(User.role == "student")
+    if req.class_name:
+        all_query = all_query.where(User.class_name == req.class_name)
+    all_result = await db.execute(all_query)
+    all_students = all_result.all()
+
+    slow_list = []
+    for s in all_students:
+        data = user_data.get(s.id, {"completed_sections": 0, "total_effective": 0})
+        if data["completed_sections"] <= slow_threshold:
+            slow_list.append({
+                "user_id": s.id,
+                "name": s.name,
+                "class_name": s.class_name or "",
+                "completed_sections": data["completed_sections"],
+                "total_sections": section_count,
+                "open_sections": open_count,
+                "effective_minutes": round(data["total_effective"] / 60, 1),
+            })
+
+    if not slow_list:
+        return {"code": 0, "data": {"results": [], "total": 0, "success": 0, "fail": 0, "skip": 0}}
+
+    # ── 4. 批量查询家长绑定关系 ──
+    slow_user_ids = [s["user_id"] for s in slow_list]
+    binding_result = await db.execute(
+        select(DingTalkBinding).where(DingTalkBinding.user_id.in_(slow_user_ids))
+    )
+    bindings = binding_result.scalars().all()
+    # user_id → [binding1, binding2, ...]（一个学生可能有多个家长绑定）
+    binding_map: dict[int, list] = {}
+    for b in bindings:
+        binding_map.setdefault(b.user_id, []).append(b)
+
+    # ── 5. 逐人、逐家长发送私信 ──
+    results = []
+    for s in slow_list:
+        student_bindings = binding_map.get(s["user_id"], [])
+        if not student_bindings:
+            results.append({
+                "name": s["name"],
+                "status": "skip",
+                "reason": "未绑定家长钉钉账号",
+            })
+            continue
+
+        for binding in student_bindings:
+            # 优先使用已绑定的 dingtalk_user_id，否则用手机号搜索
+            target_user_id = binding.dingtalk_user_id
+            if not target_user_id and binding.dingtalk_mobile:
+                target_user_id = await _dws_search_user_by_mobile(binding.dingtalk_mobile)
+
+            if not target_user_id:
+                results.append({
+                    "name": s["name"],
+                    "status": "fail",
+                    "reason": f"未找到家长钉钉账号（{binding.dingtalk_mobile or '未知手机号'}）",
+                })
+                continue
+
+            ok = await _dws_send_user_msg(
+                target_user_id,
+                s["name"],
+                s["class_name"],
+                s["effective_minutes"],
+            )
+            if ok:
+                results.append({"name": s["name"], "status": "success"})
+            else:
+                results.append({"name": s["name"], "status": "fail", "reason": "消息发送失败"})
+
+    success_count = sum(1 for r in results if r["status"] == "success")
+    fail_count = sum(1 for r in results if r["status"] == "fail")
+    skip_count = sum(1 for r in results if r["status"] == "skip")
+
+    return {
+        "code": 0,
+        "data": {
+            "results": results,
+            "total": len(results),
+            "success": success_count,
+            "fail": fail_count,
+            "skip": skip_count,
+        },
+    }
 
 
 @router.get("/export")

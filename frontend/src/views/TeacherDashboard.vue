@@ -282,8 +282,97 @@
         <button class="btn" @click="sendDailyReport" :disabled="sending">
           {{ sending ? '发送中...' : '发送每日报告' }}
         </button>
+        <!-- 查看进度慢的学生 -->
+        <button class="btn primary" @click="showSlowStudents" :disabled="slowLoading">
+          {{ slowLoading ? '加载中...' : '查看进度慢的学生' }}
+        </button>
         <!-- 导出Excel：浏览器端 blob 下载 -->
         <button class="btn" @click="exportExcel">导出 Excel</button>
+      </div>
+
+      <!-- ==================== 进度慢的学生弹窗 ==================== -->
+      <div v-if="showSlowModal" class="modal-overlay" @click.self="showSlowModal = false">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>进度慢的学生</h3>
+            <button class="modal-close" @click="showSlowModal = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="slow-summary">
+              已开播 <strong>{{ slowData.open_sections }}</strong> / {{ slowData.total_sections }} 个小节，
+              进度慢阈值：已完成 ≤ <strong>{{ slowData.slow_threshold }}</strong> 小节
+            </div>
+            <div v-if="slowStudents.length === 0" class="empty">暂无进度慢的学生</div>
+            <div v-else class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>姓名</th>
+                    <th>班级</th>
+                    <th>已完成</th>
+                    <th>总小节</th>
+                    <th>已开播</th>
+                    <th>有效时长(分)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="s in slowStudents" :key="s.user_id">
+                    <td>{{ s.name }}</td>
+                    <td>{{ s.class_name || '-' }}</td>
+                    <td>{{ s.completed_sections }}</td>
+                    <td>{{ s.total_sections }}</td>
+                    <td>{{ s.open_sections }}</td>
+                    <td>{{ s.effective_minutes }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer" v-if="slowStudents.length > 0">
+            <button class="btn primary" @click="sendSlowReminder" :disabled="sendingSlowReminder">
+              {{ sendingSlowReminder ? '发送中...' : '发送私信提醒' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== 发送结果弹窗 ==================== -->
+      <div v-if="showSendResultModal" class="modal-overlay" @click.self="showSendResultModal = false">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>发送结果</h3>
+            <button class="modal-close" @click="showSendResultModal = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="send-result-summary">
+              <span class="result-item success">成功 <strong>{{ sendResults.success }}</strong> 人</span>
+              <span class="result-item fail">失败 <strong>{{ sendResults.fail }}</strong> 人</span>
+              <span class="result-item skip">跳过 <strong>{{ sendResults.skip }}</strong> 人</span>
+            </div>
+            <div class="table-wrapper" v-if="sendResults.results && sendResults.results.length > 0" style="margin-top:12px">
+              <table>
+                <thead>
+                  <tr>
+                    <th>姓名</th>
+                    <th>状态</th>
+                    <th>原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="r in sendResults.results" :key="r.name">
+                    <td>{{ r.name }}</td>
+                    <td>
+                      <span class="tag" :class="r.status === 'success' ? 'done' : r.status === 'fail' ? 'warn' : ''">
+                        {{ r.status === 'success' ? '成功' : r.status === 'fail' ? '失败' : '跳过' }}
+                      </span>
+                    </td>
+                    <td>{{ r.reason || '-' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
     </template>
   </div>
@@ -332,6 +421,17 @@ const selectedCourseId = ref('')
 const overview = ref({ total_students: 0, completed_students: 0, completion_rate: 0, require_minutes: 60, section_count: 0 })
 const students = ref([])
 const sending = ref(false)
+
+/** 进度慢的学生弹窗 */
+const showSlowModal = ref(false)
+const slowStudents = ref([])
+const slowLoading = ref(false)
+const slowData = ref({ open_sections: 0, total_sections: 0, slow_threshold: 0 })
+
+/** 发送私信提醒 */
+const sendingSlowReminder = ref(false)
+const showSendResultModal = ref(false)
+const sendResults = ref({ results: [], total: 0, success: 0, fail: 0, skip: 0 })
 
 /** 今日学习数据 */
 const todayData = ref(null)
@@ -620,6 +720,45 @@ async function sendReminder() {
     alert('发送失败')
   } finally {
     sending.value = false
+  }
+}
+
+async function showSlowStudents() {
+  if (!selectedCourseId.value) return
+  slowLoading.value = true
+  try {
+    const params = { course_id: selectedCourseId.value }
+    if (selectedClass.value) params.class_name = selectedClass.value
+    const res = await api.get('/stats/slow-students', { params })
+    if (res.data.code === 0) {
+      slowData.value = res.data.data
+      slowStudents.value = res.data.data.students || []
+      showSlowModal.value = true
+    }
+  } catch (e) {
+    alert('加载失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    slowLoading.value = false
+  }
+}
+
+async function sendSlowReminder() {
+  if (!selectedCourseId.value || slowStudents.value.length === 0) return
+  sendingSlowReminder.value = true
+  try {
+    const body = { course_id: selectedCourseId.value }
+    if (selectedClass.value) body.class_name = selectedClass.value
+    const res = await api.post('/notify/send-slow-reminder', body)
+    if (res.data.code === 0) {
+      sendResults.value = res.data.data
+      showSendResultModal.value = true
+    } else {
+      alert(res.data.msg || '发送失败')
+    }
+  } catch (e) {
+    alert('发送失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    sendingSlowReminder.value = false
   }
 }
 
@@ -1037,4 +1176,50 @@ tr.clickable:hover { background: #f0f7ff; }
   padding: 6px 10px; border: 1px solid #d9d9d9; border-radius: 4px;
   font-size: 13px; cursor: pointer;
 }
+
+/* 进度慢的学生弹窗 */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.45); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-content {
+  background: #fff; border-radius: 12px; width: 90%; max-width: 700px;
+  max-height: 80vh; display: flex; flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+.modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid #f0f0f0;
+}
+.modal-header h3 { font-size: 17px; margin: 0; }
+.modal-close {
+  background: none; border: none; font-size: 20px; color: #999;
+  cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.modal-close:hover { color: #333; }
+.modal-body { padding: 16px 20px; overflow-y: auto; }
+.slow-summary {
+  font-size: 13px; color: #666; margin-bottom: 16px;
+  padding: 10px 14px; background: #fffbe6; border-radius: 6px;
+  border: 1px solid #ffe58f;
+}
+.slow-summary strong { color: #cf1322; }
+
+/* 弹窗底部按钮 */
+.modal-footer {
+  padding: 12px 20px; border-top: 1px solid #f0f0f0;
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+
+/* 发送结果汇总 */
+.send-result-summary {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 12px 16px; background: #fafafa; border-radius: 6px;
+}
+.result-item { font-size: 14px; }
+.result-item strong { font-size: 18px; margin: 0 2px; }
+.result-item.success { color: #52c41a; }
+.result-item.fail { color: #ff4d4f; }
+.result-item.skip { color: #999; }
 </style>
